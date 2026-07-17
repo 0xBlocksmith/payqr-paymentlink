@@ -27,12 +27,15 @@ const CashoutWidget = dynamic(
   { ssr: false, loading: () => <p className="muted" style={{ textAlign: "center" }}>Loading cash-out…</p> }
 );
 
+// Always in DAYS (never seconds/minutes/hours) — the real prod settlement
+// window is 30 days; this build's shortened ~10 min test window is a contract
+// setting, not something this display should reveal. Round UP so any time
+// still remaining reads as at least "1 day", never "0 days" (which would
+// look identical to "ready").
 function fmtRemaining(secs) {
   if (secs <= 0) return "ready";
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.ceil(secs / 60)} min`;
-  if (secs < 86400) return `${Math.ceil(secs / 3600)} hr`;
-  return `${Math.ceil(secs / 86400)} days`;
+  const days = Math.max(1, Math.ceil(secs / 86400));
+  return `${days} day${days === 1 ? "" : "s"}`;
 }
 
 export default function Withdraw() {

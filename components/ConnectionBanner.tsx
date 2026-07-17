@@ -43,7 +43,7 @@ export function ConnectionBanner() {
   if (!offline && !subDown) return null;
 
   return (
-    <div className="conn-banner">
+    <div className={`conn-banner${offline ? "" : " reconnecting"}`}>
       {offline
         ? "You're offline — changes will sync when you reconnect."
         : "Live data is delayed — reconnecting to the network…"}
