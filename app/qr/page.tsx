@@ -9,7 +9,7 @@ import { Splash } from "../../components/Splash";
 import { Icon } from "../../components/Icons";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, perTxCapUsdc, currencyFromBytes32 } from "../../lib/contract";
 import { fetchUsdcRate } from "../../lib/rates";
-import { fetchPriceConfig, usdcForFiat } from "../../lib/pricing";
+import { fetchPriceConfig, usdcForFiat, usdcForUsdcTarget } from "../../lib/pricing";
 import { STATIC_STALE_MS, loadMerchantProfile, saveMerchantProfile } from "../../lib/cache";
 import { loadCountry, fmtFiat, COUNTRIES, getCountry } from "../../lib/countries";
 import { loadPendingOrder, savePendingOrder, clearPendingOrder } from "../../lib/p2p";
@@ -325,10 +325,19 @@ export default function PosQr() {
     setBusy(true);
     let usdcTarget: bigint;
     if (inputMode === "usdc") {
-      // The merchant typed the USDC amount directly — charge exactly that, no
-      // fiat-quote inversion needed.
-      usdcTarget = BigInt(Math.round(amtNum * 1e6));
-      setBusy(false);
+      // SIZE THE PRINCIPAL SO THE CUSTOMER'S TOTAL LANDS ON THE USDC AMOUNT THE
+      // MERCHANT TYPED — same inversion as the fiat branch below, just without a
+      // fiat leg. Passing amtNum straight through as the principal (the old
+      // behavior) let the widget add the small-order fee ON TOP, so "1 USDC"
+      // charged the customer 1 USDC + fee instead of exactly 1 USDC.
+      try {
+        const cfg = await fetchPriceConfig(chargeCountry.code);
+        usdcTarget = cfg ? usdcForUsdcTarget(amtNum, cfg) : BigInt(Math.round(amtNum * 1e6));
+      } catch {
+        usdcTarget = BigInt(Math.round(amtNum * 1e6));
+      } finally {
+        setBusy(false);
+      }
     } else {
       // SIZE THE USDC SO THE CUSTOMER PAYS EXACTLY WHAT THE MERCHANT QUOTED,
       // against the SAME on-chain buyPrice both the estimate above (estRate) and
