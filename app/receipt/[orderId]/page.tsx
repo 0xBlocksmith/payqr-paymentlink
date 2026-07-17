@@ -5,6 +5,7 @@ import { useParams, useSearchParams } from "next/navigation";
 import { createPublicClient, http } from "viem";
 import { fetchOrder, fetchWithdrawalOrder, receiptToken } from "../../../lib/history";
 import { fmtUsdc, CONTRACT_ADDRESS, INTEGRATOR_ABI } from "../../../lib/contract";
+import { fetchPriceConfig } from "../../../lib/pricing";
 import { ACTIVE_CHAIN, RPC_URL } from "../../../lib/chain";
 import { Icon, Logo } from "../../../components/Icons";
 
@@ -202,6 +203,12 @@ export default function Receipt() {
   // (the "Refresh" button on the unverified state). Keeps the PWA feel — no
   // white flash, no wallet/provider re-boot.
   const [retry, setRetry] = useState(0);
+  // Small-order fee (raw 6-dec USDC), read on-chain for the order's currency —
+  // so a BUY receipt can show the fee as its own line instead of leaving it
+  // silently folded into the gap between "ordered" and "received". null while
+  // loading/unavailable (a currency-less or off-chain-unreadable order just
+  // omits the fee row rather than guessing).
+  const [feeUsdcRaw, setFeeUsdcRaw] = useState<bigint | null>(null);
 
   useEffect(() => {
     let on = true;
@@ -243,6 +250,23 @@ export default function Receipt() {
     });
     return () => { on = false; };
   }, [safeId, accessToken, retry, isWithdraw]);
+
+  // Fee: a BUY order under the small-order threshold pays a flat fixed fee ON
+  // TOP of the principal — the gap between what the customer ordered and what
+  // the merchant received. The fee itself is a flat on-chain constant per
+  // currency (not derived from the order), so read it directly rather than
+  // reverse-engineering it from fiatAmount/amount (which would need the
+  // exact historical buyPrice to invert correctly).
+  useEffect(() => {
+    if (isWithdraw || !order?.amount || !curRaw) { setFeeUsdcRaw(null); return; }
+    let alive = true;
+    fetchPriceConfig(curRaw).then((cfg) => {
+      if (!alive || !cfg) return;
+      const principal = BigInt(order.amount);
+      setFeeUsdcRaw(principal <= cfg.smallOrderThreshold ? cfg.smallOrderFixedFee : 0n);
+    }).catch(() => { if (alive) setFeeUsdcRaw(null); });
+    return () => { alive = false; };
+  }, [isWithdraw, order?.amount, curRaw]);
 
   // The trustworthy shop name comes ONLY from the chain (verifiedShop). The URL
   // ?shop= hint is attacker-controllable in a crafted link, so we NEVER render it
@@ -360,13 +384,30 @@ export default function Receipt() {
               </div>
             )}
 
-            {/* The on-chain USDC amount is the trustworthy figure (read from the
-                subgraph). The fiat is a display hint from the link and shown as
-                secondary — a receipt can't be forged into a different USDC amount. */}
-            <div className="rcpt-amount">
-              {fmtUsdc(order.amount)} USDC
-            </div>
-            {fiat && <div className="rcpt-amount-fiat">{fiat}</div>}
+            {/* HEADLINE: for a BUY, the customer's ORDERED total — not the merchant's
+                net USDC. Vendors reported the old headline (order.amount, the
+                merchant's post-fee principal) reading as "what the customer paid",
+                which silently hid the fee and could disagree with what was actually
+                charged. Prefer the on-chain fiatAmount (trustworthy, subgraph-read,
+                includes any small-order fee); fall back to the ?fiat= link hint only
+                if the chain field isn't indexed yet. Withdrawals are unaffected —
+                there the USDC amount IS what the merchant receives, so it stays the
+                headline. */}
+            {!isWithdraw && (order.fiatAmount || fiat) ? (
+              <>
+                <div className="rcpt-amount">
+                  {order.fiatAmount ? fiat || `${(Number(order.fiatAmount) / 1e6).toFixed(2)}` : fiat}
+                </div>
+                <div className="rcpt-amount-fiat">{fmtUsdc(order.amount)} USDC to merchant</div>
+              </>
+            ) : (
+              <>
+                <div className="rcpt-amount">
+                  {fmtUsdc(order.amount)} USDC
+                </div>
+                {fiat && <div className="rcpt-amount-fiat">{fiat}</div>}
+              </>
+            )}
             <div className="rcpt-amount-sub">
               {isWithdraw
                 ? (cancelled
@@ -399,18 +440,43 @@ export default function Receipt() {
                     </div>
                   )}
                 </>
-              ) : payer ? (
-                <div className="rcpt-row">
-                  <span>Paid by</span>
-                  <b className="mono">{payer}</b>
-                </div>
-              ) : null}
+              ) : (
+                <>
+                  {/* The merchant's own payout handle (masked) — so the customer
+                      can confirm WHICH UPI/PIX account they actually paid, the
+                      same way a withdrawal receipt shows the merchant's own
+                      cash-out account. Only present when the merchant's device
+                      had its relay key to decrypt + mask it (see qr/page.tsx). */}
+                  {upiMasked && (
+                    <div className="rcpt-row">
+                      <span>Paid to {rail ? rail.rail : "account"}</span>
+                      <b className="mono">{upiMasked}</b>
+                    </div>
+                  )}
+                  {payer && (
+                    <div className="rcpt-row">
+                      <span>Paid by (wallet)</span>
+                      <b className="mono">{payer}</b>
+                    </div>
+                  )}
+                </>
+              )}
 
               {/* HOW — the off-chain rail (UPI/PIX/…). Skipped for a crypto-out. */}
               {rail && !isCryptoOut && (
                 <div className="rcpt-row">
                   <span>Via</span>
                   <b>{rail.flag} {rail.rail} · {rail.country}</b>
+                </div>
+              )}
+
+              {/* FEE — the small-order fixed fee, shown as its own line instead of
+                  silently folded into the gap between the ordered total and what
+                  the merchant received. Only for a BUY, and only when > 0. */}
+              {!isWithdraw && feeUsdcRaw != null && feeUsdcRaw > 0n && (
+                <div className="rcpt-row">
+                  <span>Transaction fee</span>
+                  <b>{fmtUsdc(feeUsdcRaw.toString())} USDC</b>
                 </div>
               )}
 

@@ -178,3 +178,26 @@ export function usdcForFiat(quoteFiat: number, cfg: PriceConfig): bigint {
   if (usdc <= 0n) return 0n;
   return usdc;
 }
+
+/**
+ * Size the principal so the customer's on-chain total lands on the USDC
+ * amount the MERCHANT typed directly (terminal's USDC input mode), same
+ * guarantee as usdcForFiat but without a fiat leg.
+ *
+ * The widget computes totalUsdc = principal + (principal <= threshold ?
+ * smallOrderFixedFee : 0). Passing `targetUsdc` straight through as the
+ * principal (the old behavior) lets the widget add the fee ON TOP, so typing
+ * "1 USDC" charged the customer 1 USDC + fee — never what the merchant
+ * quoted. Subtract the fee first so principal + fee == targetUsdc, matching
+ * usdcForFiat's inversion; if that pushes the principal above the threshold
+ * (fee no longer applies at that size), fall back to the un-inverted amount.
+ */
+export function usdcForUsdcTarget(targetUsdc: number, cfg: PriceConfig): bigint {
+  const target6 = BigInt(Math.round(targetUsdc * 1e6));
+  const { smallOrderThreshold, smallOrderFixedFee } = cfg;
+
+  let usdc = target6 >= smallOrderFixedFee ? target6 - smallOrderFixedFee : target6;
+  if (usdc > smallOrderThreshold) usdc = target6;
+  if (usdc <= 0n) return 0n;
+  return usdc;
+}

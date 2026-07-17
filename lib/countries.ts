@@ -120,13 +120,20 @@ export function clearLocalUserData(): void {
 /** Format a fiat amount with the country's symbol + locale grouping.
  *  `decimals` = MAXIMUM fraction digits: whole amounts stay clean ("₹500"),
  *  amounts that carry cents show them in full ("₹10.50") instead of being
- *  rounded to a different number than the customer actually paid ("₹11"). */
+ *  rounded to a different number than the customer actually paid ("₹11").
+ *  Defaults to 2 — every fiat figure here is money (an estimate, a cap, a
+ *  charge), and rounding to whole units silently drops real value for
+ *  currencies with a low USDC rate (ARS, BRL): "50 USDC ≈ $78,697.42 ARS"
+ *  rounded to "$78,697" looked "fine" only because the missing 42 centavos
+ *  are imperceptible at that scale, while in es-AR/pt-BR locales the
+ *  thousands separator is "." — so a rounded whole number like 78697 renders
+ *  as "78.697", which reads as a fractional amount instead of a whole one. */
 export function fmtFiat(
   country: Country,
   amount: number | string,
   opts: { decimals?: number } = {}
 ): string {
-  const { decimals = 0 } = opts;
+  const { decimals = 2 } = opts;
   const n = Number(amount) || 0;
   const min =
     decimals > 0 && !Number.isInteger(Number(n.toFixed(decimals))) ? decimals : 0;
