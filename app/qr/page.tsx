@@ -16,7 +16,26 @@ import { loadPendingOrder, savePendingOrder, clearPendingOrder } from "../../lib
 import { fetchOrder, receiptToken } from "../../lib/history";
 import type { PendingOrder } from "../../lib/p2p";
 import { useT } from "../../lib/i18n";
+import { decryptPayout } from "../../lib/payoutCrypto";
+import { useRelayIdentity } from "../../components/useRelayIdentity";
 import dynamic from "next/dynamic";
+
+// Partially hide a payout handle for a SHAREABLE receipt: keep the first 2 chars
+// and everything from "@"/domain, mask the middle. e.g. "sheldon@upi" → "sh•••@upi",
+// "9876543210" → "98•••3210". Never exposes the full identifier on a public link.
+// Mirrors transactions/page.tsx's maskHandle exactly.
+function maskHandle(h: string): string {
+  const s = (h || "").trim();
+  if (!s) return "";
+  const at = s.indexOf("@");
+  if (at > 0) {
+    const user = s.slice(0, at);
+    const head = user.slice(0, 2);
+    return `${head}${"•".repeat(Math.max(1, Math.min(3, user.length - 2)))}${s.slice(at)}`;
+  }
+  if (s.length <= 4) return s[0] + "•••";
+  return `${s.slice(0, 2)}•••${s.slice(-4)}`;
+}
 
 const INTEGRATOR = CONTRACT_ADDRESS;
 const SCAN = "https://sepolia.basescan.org";
@@ -73,6 +92,7 @@ export default function PosQr() {
   const router = useRouter();
   const { ready, authenticated, address, isRegistered } = useMerchant();
   const { t } = useT();
+  const { getIdentity } = useRelayIdentity();
 
   const [country, setCountry] = useState(null);   // the currency THIS sale charges in
   const [payOpts, setPayOpts] = useState([]);     // countries the protocol can settle
@@ -177,6 +197,26 @@ export default function PosQr() {
   useEffect(() => { setCachedProfile(loadMerchantProfile(address)); }, [address]);
   useEffect(() => { if (address && info) saveMerchantProfile(address, info); }, [address, info]);
   const shopLabel = info?.[1] || cachedProfile?.shopName || "";
+
+  // Decrypt the merchant's own saved payout handle (getMerchantInfo[0]) once, so
+  // a BUY receipt link can carry a MASKED version — "which account did I actually
+  // pay?" for the customer, same mechanism the withdraw receipt already uses for
+  // cash-outs. Best-effort: on a device without the relay key it stays "" and the
+  // receipt simply omits the row (falls back to the wallet address only).
+  const [upiMasked, setUpiMasked] = useState("");
+  useEffect(() => {
+    const enc = (info?.[0] as string) || "";
+    if (!enc || enc === "0x") { setUpiMasked(""); return; }
+    let alive = true;
+    (async () => {
+      try {
+        const id = await getIdentity();
+        const plain = await decryptPayout(enc, id);
+        if (alive) setUpiMasked(plain ? maskHandle(plain) : "");
+      } catch { if (alive) setUpiMasked(""); }
+    })();
+    return () => { alive = false; };
+  }, [info, getIdentity]);
 
   const { data: daily, refetch: refetchDaily } = useReadContract({
     address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "getDailyTxInfo",
@@ -451,6 +491,10 @@ export default function PosQr() {
       token: done.token,
       kind: "buy",                              // customer paid the merchant
       ...(rcCountry?.code ? { cur: rcCountry.code } : {}),
+      // Masked payout handle — "which account did I pay?" on the customer's
+      // receipt. Already masked before it leaves this device (see upiMasked
+      // above); omitted entirely if this device couldn't decrypt it.
+      ...(upiMasked ? { upi: upiMasked } : {}),
     });
     return `${window.location.origin}/receipt/${done.orderId}?${q.toString()}`;
   }

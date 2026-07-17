@@ -143,7 +143,9 @@ export async function fetchWithdrawals(proxyAddress) {
  * no-auth customer receipt page (/receipt/[orderId]). The customer who
  * just paid can open the link and verify the sale on-chain.
  * Returns null if not found.
- *   { orderId, amount(raw 6-dec), status, txHash, placedAt, completedAt }
+ *   { orderId, amount(raw 6-dec, principal the merchant nets), fiatAmount
+ *     (raw 6-dec, the customer's TOTAL paid incl. any small-order fee),
+ *     status, txHash, placedAt, completedAt }
  */
 export async function fetchOrder(orderId) {
   // On-chain order ids are integers — reject anything else so a crafted id can't
@@ -155,6 +157,9 @@ export async function fetchOrder(orderId) {
       orderId
       status
       usdcAmount
+      fiatAmount
+      actualUsdcAmount
+      actualFiatAmount
       userAddress
       placedAt
       completedAt
@@ -180,9 +185,15 @@ export async function fetchOrder(orderId) {
   if (data?.errors) console.error("subgraph error (fetchOrder):", data.errors);
   const o = data?.data?.orders_collection?.[0];
   if (!o) return null;
+  // Prefer the ACTUAL settled amounts when present (post-match, e.g. a partial
+  // fill) — same precedence rates.ts already uses — falling back to the
+  // as-placed amounts otherwise.
+  const usdcAmount = o.actualUsdcAmount && o.actualUsdcAmount !== "0" ? o.actualUsdcAmount : o.usdcAmount;
+  const fiatAmount = o.actualFiatAmount && o.actualFiatAmount !== "0" ? o.actualFiatAmount : o.fiatAmount;
   return {
     orderId: String(o.orderId),
-    amount: String(o.usdcAmount),
+    amount: String(usdcAmount),          // principal — what the MERCHANT receives
+    fiatAmount: fiatAmount != null ? String(fiatAmount) : null, // gross — what the CUSTOMER paid (incl. fee)
     status: ST[Number(o.status)] || "matching",
     userAddress: o.userAddress || null,   // the placer proxy (resolves to the merchant)
     txHash: o.transactionHash || null,
