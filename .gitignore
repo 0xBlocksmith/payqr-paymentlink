@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# build output
+.next/
+out/
+dist/
+tsconfig.tsbuildinfo
+
+# env + secrets
+.env
+.env.*
+!.env.example
+
+# throwaway on-chain probe / snapshot scripts (never committed)
+_*.mjs
+
+# editor / os
+.vscode/
+.DS_Store
+*.log
+.claude/
