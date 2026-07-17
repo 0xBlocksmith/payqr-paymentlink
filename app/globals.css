@@ -775,6 +775,12 @@ p.muted { color: var(--muted); font-size: 14px; }
   background: var(--warn-soft); color: #92600a; font-size: 12.5px; font-weight: 600;
   text-align: center; padding: 9px 14px; border-bottom: 1px solid #f5d99a;
 }
+/* Reconnecting (subgraph delayed but the device itself is online) reads as a
+   recoverable, in-progress state rather than a problem — green instead of the
+   offline banner's amber warning. */
+.conn-banner.reconnecting {
+  background: var(--success-soft); color: #0a7a5c; border-bottom: 1px solid #a8e8d4;
+}
 
 /* ── Account menu settings link ───────────────────────── */
 .acct-menu-link {
@@ -840,6 +846,7 @@ p.muted { color: var(--muted); font-size: 14px; }
 
 
 [data-theme="dark"] .frozen-banner { background: #3a1414; }
+[data-theme="dark"] .conn-banner.reconnecting { background: #123a2e; color: #6be0b8; border-bottom-color: #1f5a46; }
 [data-theme="dark"] .acct-menu-link,
 [data-theme="dark"] .set-addr { background: var(--bg-soft); }
 

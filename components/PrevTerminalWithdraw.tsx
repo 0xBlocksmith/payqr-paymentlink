@@ -34,12 +34,13 @@ import {
   friendlyError,
 } from "../lib/contract";
 
+// Always in DAYS — see withdraw/page.tsx's fmtRemaining for why (prod's real
+// settlement window is 30 days; a shortened test-build window shouldn't leak
+// its actual sub-day duration into the display).
 function fmtRemaining(secs: number): string {
   if (secs <= 0) return "ready";
-  if (secs < 60) return `${secs}s`;
-  if (secs < 3600) return `${Math.ceil(secs / 60)} min`;
-  if (secs < 86400) return `${Math.ceil(secs / 3600)} hr`;
-  return `${Math.ceil(secs / 86400)} days`;
+  const days = Math.max(1, Math.ceil(secs / 86400));
+  return `${days} day${days === 1 ? "" : "s"}`;
 }
 
 export function PrevTerminalWithdraw() {
