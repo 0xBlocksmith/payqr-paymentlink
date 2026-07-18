@@ -5,6 +5,7 @@
 
 import { keccak256, stringToBytes, isAddress } from "viem";
 import { SUBGRAPH_URL } from "./p2p";
+import { CONTRACT_ADDRESS } from "./contract";
 
 const ST = { 0: "matching", 1: "matching", 2: "matching", 3: "settled", 4: "cancelled" };
 
@@ -86,16 +87,25 @@ export async function fetchHistory(address) {
  * address (read on-chain via `proxyAddress(merchant)`) and we return its SELL
  * orders. No contract change, no event-log scraping needed.
  *
+ * SUBGRAPH IS PROTOCOL-WIDE, NOT PER-APP: `b2Borders` indexes every integrator
+ * on the protocol, and each row carries its own `integrator` id. Filtering by
+ * `user` alone isn't enough to guarantee only THIS app's transactions show —
+ * a proxy address collision (or a future protocol change reusing addresses
+ * across integrators) would leak another integrator's orders into this
+ * merchant's history. Scope explicitly to CONTRACT_ADDRESS so only orders
+ * actually placed through PayQR's own integrator contract are ever returned.
+ *
  * Returns rows shaped like fetchHistory but tagged kind:"withdraw":
  *   { orderId, amount(raw 6-dec USDC), kind:"withdraw", txHash, createdAt, placedAt }
  */
 export async function fetchWithdrawals(proxyAddress) {
   // Same address validation as fetchHistory before interpolation into GraphQL.
   if (!proxyAddress || !isAddress(proxyAddress)) return [];
-  const query = `query($user: String!) {
+  if (!CONTRACT_ADDRESS) return [];
+  const query = `query($user: String!, $integrator: String!) {
     b2Borders(
       first: 50,
-      where: { user: $user, orderType: 1 },
+      where: { user: $user, orderType: 1, integrator: $integrator },
       orderBy: blockTimestamp,
       orderDirection: desc
     ) {
@@ -110,7 +120,10 @@ export async function fetchWithdrawals(proxyAddress) {
     const res = await fetch(SUBGRAPH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables: { user: proxyAddress.toLowerCase() } }),
+      body: JSON.stringify({
+        query,
+        variables: { user: proxyAddress.toLowerCase(), integrator: CONTRACT_ADDRESS.toLowerCase() },
+      }),
       cache: "no-store",
     });
     data = await res.json();
@@ -210,12 +223,20 @@ export async function fetchOrder(orderId) {
  * on-chain WithdrawalFiat, so we treat it as completed. Returns the SAME shape as
  * fetchOrder so the receipt page can consume either uniformly (userAddress = the
  * proxy, so verifyOrderOwner resolves it via proxyMerchant). null if not found.
+ *
+ * Scoped to CONTRACT_ADDRESS — see fetchWithdrawals for why: b2Borders is
+ * protocol-wide, and an orderId a customer/merchant pastes into a receipt link
+ * should never resolve to a DIFFERENT integrator's withdrawal just because the
+ * id happens to match. (verifyOrderOwner in the receipt page independently
+ * re-checks on-chain registration too — this is defense-in-depth, not the only
+ * guard.)
  */
 export async function fetchWithdrawalOrder(orderId) {
   const id = String(orderId ?? "").trim();
   if (!/^\d+$/.test(id)) return null;
-  const query = `query($id: String!) {
-    b2Borders(first: 1, where: { orderId: $id, orderType: 1 }) {
+  if (!CONTRACT_ADDRESS) return null;
+  const query = `query($id: String!, $integrator: String!) {
+    b2Borders(first: 1, where: { orderId: $id, orderType: 1, integrator: $integrator }) {
       orderId
       amount
       user
@@ -228,7 +249,7 @@ export async function fetchWithdrawalOrder(orderId) {
     const res = await fetch(SUBGRAPH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables: { id } }),
+      body: JSON.stringify({ query, variables: { id, integrator: CONTRACT_ADDRESS.toLowerCase() } }),
       cache: "no-store",
     });
     data = await res.json();

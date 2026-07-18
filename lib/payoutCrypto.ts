@@ -33,6 +33,16 @@ import { stringToHex, hexToString, type Hex } from "viem";
 
 type RelayIdentity = { address: `0x${string}`; publicKey: string; privateKey: `0x${string}` };
 
+/**
+ * Sentinel plaintext used ONLY to satisfy registerMerchant's on-chain requirement
+ * for non-empty encPayoutId bytes when a merchant completes onboarding with just
+ * a shop name (payout handle added later via Settings → updateProfile). It is a
+ * real ciphertext (so it round-trips through decryptPayout like any other value)
+ * but callers MUST check for it and treat it as "no payout set yet" — never show
+ * it or prefill it into a withdrawal form as if it were a real UPI/PIX/CBU handle.
+ */
+export const PAYOUT_PLACEHOLDER = "__unset__";
+
 /** Encrypt a plaintext payout handle to the merchant's own relay key → on-chain
  *  `bytes` (0x-hex). Throws only on a genuine crypto failure (caller handles). */
 export async function encryptPayout(plain: string, identity: RelayIdentity): Promise<Hex> {

@@ -10,6 +10,7 @@ import { Splash } from "../../components/Splash";
 import { Icon } from "../../components/Icons";
 import { AppTour } from "../../components/AppTour";
 import { ConnectionBanner } from "../../components/ConnectionBanner";
+import { SettlementBanner } from "../../components/SettlementBanner";
 import { WalletSheet } from "../../components/WalletSheet";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc } from "../../lib/contract";
 import { STATIC_STALE_MS } from "../../lib/cache";
@@ -74,9 +75,10 @@ export default function Dashboard() {
     query: { enabled: !!address, refetchInterval: 20000 },
   });
 
-  // Settlement buckets — each received sale is locked ~10 min before it's
-  // withdrawable. We surface a LIVE countdown to the next unlock so the
-  // merchant knows exactly when their money frees up (not just "settling").
+  // Settlement buckets — each received sale is locked for the settlement
+  // window (prod: 30 days) before it's withdrawable. We surface a LIVE
+  // countdown to the next unlock so the merchant knows exactly when their
+  // money frees up (not just "settling").
   const { data: buckets } = useReadContract({
     address: CONTRACT_ADDRESS,
     abi: INTEGRATOR_ABI,
@@ -142,7 +144,12 @@ export default function Dashboard() {
     ? Math.min(...lockedBuckets.map((b) => Number(b.unlockTimestamp)))
     : null;
   const secsLeft = nextUnlock != null ? nextUnlock - now : 0;
-  const mmss = `${Math.floor(secsLeft / 60)}:${String(secsLeft % 60).padStart(2, "0")}`;
+  // Always in DAYS — the real settlement window is ~30 days, so a raw mm:ss
+  // countdown wrapped into absurd numbers ("43199:13"). Same fix as
+  // withdraw/page.tsx's fmtRemaining; round up so any remaining time reads as
+  // at least "1 day" (never "0 days", which would look identical to unlocked).
+  const daysLeft = Math.max(1, Math.ceil(secsLeft / 86400));
+  const unlockIn = `${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
 
   // Today's earnings = only COMPLETED sales (status "settled"). A sale that's
   // still waiting for a payment partner (status "matching") hasn't been received
@@ -268,10 +275,14 @@ export default function Dashboard() {
           <div className="promo-tag">BUILT FOR LOCAL BUSINESS</div>
           <div className="promo-h">Get paid in USDC, instantly.</div>
           <div className="promo-sub">
-            Take any local payment — it settles to USDC on-chain. Cash out to your bank anytime.
+            Take any local payment — it settles to USDC on-chain. Cash out to your bank once it clears.
           </div>
           <span className="promo-qr"><Icon.Qr /></span>
         </div>
+
+        {/* Settlement-window notice — shown UPFRONT, before the merchant's
+            first order, not only discovered after money is already locked. */}
+        <SettlementBanner country={country} />
 
 
         {/* stuck sale — waiting too long for a payment partner. Offer a new sale
@@ -299,7 +310,7 @@ export default function Dashboard() {
               <div className="settle-amt">{fmtUsdc(pending)} USDC {t("dash.onTheWay")}</div>
               <div className="settle-sub">
                 {nextUnlock != null
-                  ? <>{t("dash.nextUnlock")} <b>{mmss}</b> {t("dash.thenYours")}</>
+                  ? <>{t("dash.nextUnlock")} <b>{unlockIn}</b> {t("dash.thenYours")}</>
                   : "Almost ready — refreshing…"}
               </div>
             </div>

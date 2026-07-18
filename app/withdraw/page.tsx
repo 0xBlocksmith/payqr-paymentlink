@@ -12,7 +12,7 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc, currencyFromBytes32, friendl
 import { USDC_ADDRESS } from "../../lib/p2p";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
-import { loadCountry, fmtFiat, COUNTRIES } from "../../lib/countries";
+import { loadCountry, fmtFiat, fmtSymbolCode, COUNTRIES } from "../../lib/countries";
 import { buildUsdcWithdraw, buildUsdcTransfer } from "../../lib/withdraw";
 import { fetchCashoutFee } from "../../lib/pricing";
 import { fetchWithdrawals } from "../../lib/history";
@@ -665,7 +665,7 @@ export default function Withdraw() {
             <div className="picker wd-cur">
               <button className={`picker-btn ${otherOpen ? "on" : ""}`} onClick={() => setOtherOpen((o) => !o)}>
                 <img className="pk-flag-img" src={flagOf(wdCode)} alt="" />
-                <span className="pk-text">{wdCountry?.name} · {wdCountry?.symbol} {wdCode}</span>
+                <span className="pk-text">{wdCountry?.name} · {wdCountry ? fmtSymbolCode(wdCountry) : wdCode}</span>
                 <span className="pk-car">▾</span>
               </button>
               {otherOpen && (
@@ -674,7 +674,7 @@ export default function Withdraw() {
                     <button key={c.id} className={`picker-item ${wdCode === c.code ? "sel" : ""}`}
                       onClick={() => { setWdCode(c.code); setOtherOpen(false); }}>
                       <img className="pk-flag-img" src={flagOf(c.code)} alt="" />
-                      <span className="pk-item-txt">{c.name}<small>{c.fiat} · {c.symbol} {c.code}</small></span>
+                      <span className="pk-item-txt">{c.name}<small>{c.fiat} · {fmtSymbolCode(c)}</small></span>
                       {wdCode === c.code && <span className="pk-chk">✓</span>}
                     </button>
                   ))}

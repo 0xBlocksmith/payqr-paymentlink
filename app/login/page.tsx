@@ -12,7 +12,7 @@ import { useT } from "../../lib/i18n";
 import { isUserCancel } from "../../lib/contract";
 import {
   COUNTRIES, LANGUAGES, loadCountry,
-  saveCountry, markPrefsSet, prefsSet,
+  saveCountry, markPrefsSet, prefsSet, fmtSymbolCode,
 } from "../../lib/countries";
 
 export default function Login() {
@@ -129,7 +129,7 @@ export default function Login() {
             <button className={`picker-btn ${openMenu === "country" ? "on" : ""}`}
               onClick={() => setOpenMenu(openMenu === "country" ? null : "country")}>
               <img className="pk-flag-img" src={flagUrl(country.id)} alt="" />
-              <span className="pk-text">{country.symbol} {country.code}</span>
+              <span className="pk-text">{fmtSymbolCode(country)}</span>
               <span className="pk-car">▾</span>
             </button>
             {openMenu === "country" && (
@@ -138,7 +138,7 @@ export default function Login() {
                   <button key={c.id} className={`picker-item ${c.id === country.id ? "sel" : ""}`}
                     onClick={() => { setCountry(c); saveCountry(c.id); setOpenMenu(null); }}>
                     <img className="pk-flag-img" src={flagUrl(c.id)} alt="" />
-                    <span className="pk-item-txt">{c.name}<small>{c.fiat} · {c.symbol} {c.code}</small></span>
+                    <span className="pk-item-txt">{c.name}<small>{c.fiat} · {fmtSymbolCode(c)}</small></span>
                     {c.id === country.id && <span className="pk-chk">✓</span>}
                   </button>
                 ))}

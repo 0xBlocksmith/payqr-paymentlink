@@ -1195,6 +1195,34 @@ h1 { font-size: 22px; }
   box-shadow: none;
 }
 
+/* settlement/unlock-window notice — an auto-scrolling ticker so a new
+   merchant sees the settlement window BEFORE placing their first order,
+   not only after (when the money is already locked). Right-to-left loop. */
+.settle-banner {
+  position: relative; overflow: hidden; margin-top: 12px;
+  background: linear-gradient(135deg, #2a2550, #1c1838);
+  border-radius: 14px; padding: 10px 0;
+  /* fade the ticker text at both edges instead of a hard clip */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.settle-banner-track {
+  display: flex; width: max-content;
+  animation: settle-scroll 22s linear infinite;
+}
+.settle-banner-item {
+  flex-shrink: 0; padding: 0 28px;
+  font-size: 12.5px; font-weight: 600; color: #fff;
+  white-space: nowrap;
+}
+@keyframes settle-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); } /* the track is 2x the message width */
+}
+@media (prefers-reduced-motion: reduce) {
+  .settle-banner-track { animation: none; }
+}
+
 /* ── P2P.ME page styling — applies to ALL pages ──────────
    Shared component polish so every screen matches the app's
    card/row/button language. White surfaces, indigo accent,
