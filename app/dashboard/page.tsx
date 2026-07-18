@@ -10,6 +10,7 @@ import { Splash } from "../../components/Splash";
 import { Icon } from "../../components/Icons";
 import { AppTour } from "../../components/AppTour";
 import { ConnectionBanner } from "../../components/ConnectionBanner";
+import { SettlementBanner } from "../../components/SettlementBanner";
 import { WalletSheet } from "../../components/WalletSheet";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc } from "../../lib/contract";
 import { STATIC_STALE_MS } from "../../lib/cache";
@@ -274,10 +275,14 @@ export default function Dashboard() {
           <div className="promo-tag">BUILT FOR LOCAL BUSINESS</div>
           <div className="promo-h">Get paid in USDC, instantly.</div>
           <div className="promo-sub">
-            Take any local payment — it settles to USDC on-chain. Cash out to your bank anytime.
+            Take any local payment — it settles to USDC on-chain. Cash out to your bank once it clears.
           </div>
           <span className="promo-qr"><Icon.Qr /></span>
         </div>
+
+        {/* Settlement-window notice — shown UPFRONT, before the merchant's
+            first order, not only discovered after money is already locked. */}
+        <SettlementBanner country={country} />
 
 
         {/* stuck sale — waiting too long for a payment partner. Offer a new sale

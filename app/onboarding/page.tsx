@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import { usePublicClient } from "wagmi";
+import { usePublicClient, useReadContract } from "wagmi";
 import { encodeFunctionData } from "viem";
 import { useMerchant } from "../../components/useMerchant";
 import { Logo } from "../../components/Icons";
@@ -11,6 +11,8 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError } from "../../lib/contr
 import { useRelayIdentity } from "../../components/useRelayIdentity";
 import { encryptPayout, PAYOUT_PLACEHOLDER } from "../../lib/payoutCrypto";
 import { loadCountry, prefsSet } from "../../lib/countries";
+import { codeToHex } from "../../lib/p2p";
+import { STATIC_STALE_MS } from "../../lib/cache";
 
 /**
  * Registration only (country + language already chosen on /select). Shop name
@@ -34,6 +36,19 @@ export default function Onboarding() {
   const [shopName, setShopName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  // Settlement/unlock window for the chosen country — surfaced HERE, before
+  // the merchant can accept their first payment, not just after (when the
+  // dashboard's live countdown is the only place this shows up and the money
+  // is already locked). Reads on-chain lockPeriod directly so it's accurate
+  // even before this merchant has any orders/buckets of their own.
+  const currencyHex = country ? (codeToHex(country.code) as `0x${string}`) : undefined;
+  const { data: lockSecs } = useReadContract({
+    address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "lockPeriod",
+    args: [currencyHex as `0x${string}`],
+    query: { enabled: !!currencyHex, staleTime: STATIC_STALE_MS },
+  });
+  const settlementDays = lockSecs != null ? Math.max(1, Math.ceil(Number(lockSecs) / 86400)) : null;
 
   // Keep the latest sendTransaction in a ref so the submit poll loop sees the
   // smart wallet becoming ready (the value changes after first render).
@@ -161,9 +176,14 @@ export default function Onboarding() {
               placeholder="My Shop"
             />
           </div>
-          <p className="muted" style={{ fontSize: 12, marginBottom: 14 }}>
+          <p className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
             Gas-free — we cover all network fees. Add your {country.payoutLabel} later in Settings before you withdraw.
           </p>
+          {settlementDays != null && (
+            <p className="muted" style={{ fontSize: 12, marginBottom: 14 }}>
+              Heads up: sales settle after {settlementDays} day{settlementDays === 1 ? "" : "s"} — funds are locked that long before you can withdraw.
+            </p>
+          )}
           <button className="btn" disabled={busy} type="submit" style={{ width: "100%" }}>
             {busy ? "Setting up…" : "Open my terminal"}
           </button>
