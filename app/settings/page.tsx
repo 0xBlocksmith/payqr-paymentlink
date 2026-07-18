@@ -14,7 +14,7 @@ import { APP_VERSION } from "../../lib/version";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
 import { Icon } from "../../components/Icons";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError, currencyFromBytes32 } from "../../lib/contract";
-import { encryptPayout, decryptPayout } from "../../lib/payoutCrypto";
+import { encryptPayout, decryptPayout, PAYOUT_PLACEHOLDER } from "../../lib/payoutCrypto";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import {
   COUNTRIES, LANGUAGES, loadCountry, saveCountry, clearLocalUserData, fmtSymbolCode,
@@ -82,7 +82,9 @@ export default function Settings() {
       try {
         const id = await getIdentity();
         const plain = await decryptPayout(encPayout, id);
-        if (alive) setPayoutId(plain);
+        // The onboarding sentinel round-trips like a real handle — treat it as
+        // "not set yet", never display it as the merchant's saved payout ID.
+        if (alive) setPayoutId(plain === PAYOUT_PLACEHOLDER ? null : plain);
       } catch { if (alive) setPayoutId(null); }
     })();
     return () => { alive = false; };

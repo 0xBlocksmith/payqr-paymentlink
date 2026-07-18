@@ -5,31 +5,32 @@ import { useRouter } from "next/navigation";
 import { usePublicClient } from "wagmi";
 import { encodeFunctionData } from "viem";
 import { useMerchant } from "../../components/useMerchant";
-import { useRelayIdentity } from "../../components/useRelayIdentity";
 import { Logo } from "../../components/Icons";
 import { Splash } from "../../components/Splash";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError } from "../../lib/contract";
-import { encryptPayout } from "../../lib/payoutCrypto";
+import { useRelayIdentity } from "../../components/useRelayIdentity";
+import { encryptPayout, PAYOUT_PLACEHOLDER } from "../../lib/payoutCrypto";
 import { loadCountry, prefsSet } from "../../lib/countries";
 
 /**
- * Registration only (country + language already chosen on /select). Shop name +
- * the country's payout field → registered ON-CHAIN via registerMerchant
- * (encPayoutId, shopName). The payout handle is CLIENT-SIDE ENCRYPTED to the
- * merchant's own relay key (encryptPayout) before it ever touches the chain — the
- * contract only ever stores opaque `bytes`, never the plaintext UPI/PIX/CBU.
- * Gas sponsored — no wallet popups.
+ * Registration only (country + language already chosen on /select). Shop name
+ * alone → registered ON-CHAIN via registerMerchant (encPayoutId, shopName).
+ * The payout handle (UPI/PIX/CBU) is added later from Settings, where it's
+ * CLIENT-SIDE ENCRYPTED (encryptPayout) before it touches the chain — the
+ * contract only ever stores opaque `bytes`. registerMerchant reverts on empty
+ * encPayoutId bytes, so we register with an encrypted PAYOUT_PLACEHOLDER
+ * sentinel instead — Settings and the cash-out widget both know to treat it as
+ * "no payout set yet" rather than a real handle.
  */
 export default function Onboarding() {
   const router = useRouter();
   const { ready, authenticated, isRegistered, sendTransaction, refetchRegistered } = useMerchant({
     requireRegistered: false,
   });
-  const { getIdentity } = useRelayIdentity();
   const publicClient = usePublicClient();
+  const { getIdentity } = useRelayIdentity();
 
   const [country, setCountry] = useState(null);
-  const [payoutId, setPayoutId] = useState("");
   const [shopName, setShopName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -68,9 +69,6 @@ export default function Onboarding() {
     // submit / corrupted prefs shouldn't crash it.
     if (!country) return setError("Still loading your settings — try again in a second.");
     if (!shopName.trim()) return setError("Enter your shop name.");
-    if (!country.validatePayout(payoutId.trim())) {
-      return setError(`Enter a valid ${country.payoutLabel} (like ${country.payoutPlaceholder}).`);
-    }
     setBusy(true);
     try {
       // Wait for the smart wallet to initialise (it can take a few seconds on
@@ -86,11 +84,12 @@ export default function Onboarding() {
         return setError("Your gas-free wallet is still connecting. Wait a moment and try again.");
       }
 
-      // Encrypt the payout handle to the merchant's OWN relay key before it ever
-      // goes on-chain — the contract stores only opaque `bytes` (never the raw
-      // UPI/PIX handle). Self-recipient: only this merchant can decrypt it back.
+      // No real payout handle yet — added later from Settings (updateProfile
+      // encrypts it then). registerMerchant reverts on empty encPayoutId bytes,
+      // so encrypt the PAYOUT_PLACEHOLDER sentinel to the merchant's own relay
+      // key to satisfy the contract without storing a real handle.
       const identity = await getIdentity();
-      const encPayout = await encryptPayout(payoutId.trim(), identity);
+      const encPayout = await encryptPayout(PAYOUT_PLACEHOLDER, identity);
 
       // The new contract locks the offramp currency at registration, so we pass
       // the chosen country's ISO code (e.g. "INR"/"BRL"/"ARS") as the 3rd arg.
@@ -162,17 +161,8 @@ export default function Onboarding() {
               placeholder="My Shop"
             />
           </div>
-          <div className="field">
-            <label>{country.payoutLabel.toUpperCase()} (WHERE PAYOUTS LAND)</label>
-            <input
-              className="input"
-              value={payoutId}
-              onChange={(e) => setPayoutId(e.target.value)}
-              placeholder={country.payoutPlaceholder}
-            />
-          </div>
           <p className="muted" style={{ fontSize: 12, marginBottom: 14 }}>
-            Gas-free — we cover all network fees.
+            Gas-free — we cover all network fees. Add your {country.payoutLabel} later in Settings before you withdraw.
           </p>
           <button className="btn" disabled={busy} type="submit" style={{ width: "100%" }}>
             {busy ? "Setting up…" : "Open my terminal"}

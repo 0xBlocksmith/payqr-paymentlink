@@ -5,7 +5,7 @@ import { Cashout } from "@p2pdotme/widgets/cashout";
 import { encodeFunctionData, decodeEventLog } from "viem";
 import { useCheckoutSigner } from "./useCheckoutSigner";
 import { useRelayIdentity } from "./useRelayIdentity";
-import { decryptPayout } from "../lib/payoutCrypto";
+import { decryptPayout, PAYOUT_PLACEHOLDER } from "../lib/payoutCrypto";
 import { SUBGRAPH_URL, USDC_ADDRESS, DIAMOND_ADDRESS, resolveCircleId, codeToHex } from "../lib/p2p";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError } from "../lib/contract";
 import { ACTIVE_CHAIN } from "../lib/chain";
@@ -79,6 +79,9 @@ export function CashoutWidget({
         const identity = await getIdentity();
         plain = await decryptPayout(encPayout, identity);
       } catch { plain = null; }
+      // The onboarding sentinel round-trips like a real handle — never seed it
+      // into the withdrawal form as if it were the merchant's real payout ID.
+      if (plain === PAYOUT_PLACEHOLDER) plain = null;
       if (!plain || cancelled) return;
 
       // The widget mounts its input a beat after render — poll briefly for it.
