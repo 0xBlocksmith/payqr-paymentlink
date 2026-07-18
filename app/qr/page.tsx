@@ -11,7 +11,7 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, perTxCapUsdc, currencyFromBytes32 } f
 import { fetchUsdcRate } from "../../lib/rates";
 import { fetchPriceConfig, usdcForFiat, usdcForUsdcTarget } from "../../lib/pricing";
 import { STATIC_STALE_MS, loadMerchantProfile, saveMerchantProfile } from "../../lib/cache";
-import { loadCountry, fmtFiat, COUNTRIES, getCountry } from "../../lib/countries";
+import { loadCountry, fmtFiat, fmtSymbolCode, COUNTRIES, getCountry } from "../../lib/countries";
 import { loadPendingOrder, savePendingOrder, clearPendingOrder } from "../../lib/p2p";
 import { fetchOrder, receiptToken } from "../../lib/history";
 import type { PendingOrder } from "../../lib/p2p";
@@ -741,7 +741,7 @@ export default function PosQr() {
                         <button key={c.id} className={`cur-pick-item ${c.id === country.id ? "sel" : ""}`}
                           onClick={() => { setCountry(c); setAmt(""); setError(""); setPickOpen(false); }}>
                           <img className="cur-flag" src={`https://flagcdn.com/w40/${({india:"in",brazil:"br",argentina:"ar"})[c.id] || "un"}.png`} alt="" />
-                          <span className="cur-pick-txt">{c.name}<small>{c.fiat} · {c.symbol} {c.code}</small></span>
+                          <span className="cur-pick-txt">{c.name}<small>{c.fiat} · {fmtSymbolCode(c)}</small></span>
                           {c.id === country.id && <span className="cur-chk">✓</span>}
                         </button>
                       ))}

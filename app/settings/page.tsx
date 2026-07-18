@@ -17,7 +17,7 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError, currencyFromBytes32 } 
 import { encryptPayout, decryptPayout } from "../../lib/payoutCrypto";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import {
-  COUNTRIES, LANGUAGES, loadCountry, saveCountry, clearLocalUserData,
+  COUNTRIES, LANGUAGES, loadCountry, saveCountry, clearLocalUserData, fmtSymbolCode,
 } from "../../lib/countries";
 import { useTheme } from "../../components/theme";
 import { useAppUpdate } from "../../components/AppUpdate";
@@ -224,7 +224,7 @@ export default function Settings() {
           {COUNTRIES.map((c) => (
             <button key={c.id} className={`set-row ${country.id === c.id ? "sel" : ""}`} onClick={() => pickCountry(c)}>
               <span className="set-flag">{c.flag}</span>
-              <span className="set-rt">{c.name}<small>{c.fiat} · {c.symbol} {c.code}</small></span>
+              <span className="set-rt">{c.name}<small>{c.fiat} · {fmtSymbolCode(c)}</small></span>
               {country.id === c.id && <span className="set-chk">✓</span>}
             </button>
           ))}

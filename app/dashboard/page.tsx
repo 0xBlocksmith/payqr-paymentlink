@@ -74,9 +74,10 @@ export default function Dashboard() {
     query: { enabled: !!address, refetchInterval: 20000 },
   });
 
-  // Settlement buckets — each received sale is locked ~10 min before it's
-  // withdrawable. We surface a LIVE countdown to the next unlock so the
-  // merchant knows exactly when their money frees up (not just "settling").
+  // Settlement buckets — each received sale is locked for the settlement
+  // window (prod: 30 days) before it's withdrawable. We surface a LIVE
+  // countdown to the next unlock so the merchant knows exactly when their
+  // money frees up (not just "settling").
   const { data: buckets } = useReadContract({
     address: CONTRACT_ADDRESS,
     abi: INTEGRATOR_ABI,
@@ -142,7 +143,12 @@ export default function Dashboard() {
     ? Math.min(...lockedBuckets.map((b) => Number(b.unlockTimestamp)))
     : null;
   const secsLeft = nextUnlock != null ? nextUnlock - now : 0;
-  const mmss = `${Math.floor(secsLeft / 60)}:${String(secsLeft % 60).padStart(2, "0")}`;
+  // Always in DAYS — the real settlement window is ~30 days, so a raw mm:ss
+  // countdown wrapped into absurd numbers ("43199:13"). Same fix as
+  // withdraw/page.tsx's fmtRemaining; round up so any remaining time reads as
+  // at least "1 day" (never "0 days", which would look identical to unlocked).
+  const daysLeft = Math.max(1, Math.ceil(secsLeft / 86400));
+  const unlockIn = `${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
 
   // Today's earnings = only COMPLETED sales (status "settled"). A sale that's
   // still waiting for a payment partner (status "matching") hasn't been received
@@ -299,7 +305,7 @@ export default function Dashboard() {
               <div className="settle-amt">{fmtUsdc(pending)} USDC {t("dash.onTheWay")}</div>
               <div className="settle-sub">
                 {nextUnlock != null
-                  ? <>{t("dash.nextUnlock")} <b>{mmss}</b> {t("dash.thenYours")}</>
+                  ? <>{t("dash.nextUnlock")} <b>{unlockIn}</b> {t("dash.thenYours")}</>
                   : "Almost ready — refreshing…"}
               </div>
             </div>

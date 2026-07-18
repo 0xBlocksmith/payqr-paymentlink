@@ -37,7 +37,12 @@ export const COUNTRIES: Country[] = [
     flag: "🇦🇷",
     name: "Argentina",
     code: "ARS",
-    symbol: "$",
+    // Bare "$" reads as USD outside Argentina (where it's the normal peso
+    // sign) — every amount in this app is shown next to other currencies
+    // (INR/BRL), so use the unambiguous ISO code instead. Trailing space so
+    // bare `${symbol}${amount}` concatenation sites read "ARS 500", not the
+    // squished "ARS500".
+    symbol: "ARS ",
     fiat: "Transfers 3.0",
     payoutLabel: "CBU / alias",
     payoutPlaceholder: "alias.mp / CBU",
@@ -142,4 +147,12 @@ export function fmtFiat(
     maximumFractionDigits: decimals,
   });
   return `${country.symbol}${grouped}`;
+}
+
+/** "<symbol> <code>" for a currency picker row (e.g. "₹ INR", "R$ BRL") — but
+ *  when the symbol IS the code (ARS's symbol is the ISO code itself, trimmed
+ *  of its trailing space), skip the symbol so it doesn't read "ARS  ARS". */
+export function fmtSymbolCode(country: Country): string {
+  const sym = country.symbol.trim();
+  return sym === country.code ? country.code : `${sym} ${country.code}`;
 }
