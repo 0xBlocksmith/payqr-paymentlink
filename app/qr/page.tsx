@@ -16,6 +16,7 @@ import { loadPendingOrder, savePendingOrder, clearPendingOrder } from "../../lib
 import { fetchOrder, receiptToken } from "../../lib/history";
 import type { PendingOrder } from "../../lib/p2p";
 import { useT } from "../../lib/i18n";
+import { ACTIVE_CHAIN } from "../../lib/chain";
 import { decryptPayout } from "../../lib/payoutCrypto";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
 import dynamic from "next/dynamic";
@@ -38,7 +39,7 @@ function maskHandle(h: string): string {
 }
 
 const INTEGRATOR = CONTRACT_ADDRESS;
-const SCAN = "https://sepolia.basescan.org";
+const SCAN = ACTIVE_CHAIN.blockExplorers?.default.url ?? "https://basescan.org";
 
 const CheckoutWidget = dynamic(
   () => import("../../components/CheckoutWidget").then((m) => m.CheckoutWidget),
@@ -719,6 +720,14 @@ export default function PosQr() {
         {/* Number-pad terminal */}
         {!limitReached && !liveWidget && !done && !payError && !pendingSession && !pending && (
           <div className="terminal">
+            {/* Live exchange rate — shown up front so the merchant sees what
+                1 USDC is worth in their charge currency before typing an
+                amount, not just as a derived total after. */}
+            {estRate && (
+              <div className="rate-pill">
+                1 USDC ≈ {fmtFiat(country, estRate)} {country.code}
+              </div>
+            )}
             {/* charge-currency picker — only shows currencies the protocol can
                 settle (live circles). Lets a merchant accept in any supported
                 currency, e.g. when travelling. Default = registered country. */}

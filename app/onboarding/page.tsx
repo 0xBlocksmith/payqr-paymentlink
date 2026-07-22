@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { usePublicClient, useReadContract } from "wagmi";
 import { encodeFunctionData } from "viem";
 import { useMerchant } from "../../components/useMerchant";
-import { Logo } from "../../components/Icons";
+import { Icon, Logo } from "../../components/Icons";
 import { Splash } from "../../components/Splash";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError } from "../../lib/contract";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
@@ -179,11 +179,21 @@ export default function Onboarding() {
           <p className="muted" style={{ fontSize: 12, marginBottom: 6 }}>
             Gas-free — we cover all network fees. Add your {country.payoutLabel} later in Settings before you withdraw.
           </p>
-          {settlementDays != null && (
-            <p className="muted" style={{ fontSize: 12, marginBottom: 14 }}>
-              Heads up: sales settle after {settlementDays} day{settlementDays === 1 ? "" : "s"} — funds are locked that long before you can withdraw.
-            </p>
-          )}
+
+          {/* Settlement-window explainer — a standalone section (not just a small
+              muted line) so a new merchant can't miss that funds lock for a
+              period before they're withdrawable, before they ever take a sale. */}
+          <div className="onb-settle">
+            <span className="onb-settle-ico"><Icon.Clock width="18" height="18" /></span>
+            <div>
+              <div className="onb-settle-h">How settlement works</div>
+              <div className="onb-settle-sub">
+                {settlementDays != null
+                  ? <>Every sale settles to USDC on-chain, then unlocks for withdrawal after <b>{settlementDays} day{settlementDays === 1 ? "" : "s"}</b>. You can track the countdown any time from your dashboard.</>
+                  : "Every sale settles to USDC on-chain, then unlocks for withdrawal after a short lock period. You can track the countdown any time from your dashboard."}
+              </div>
+            </div>
+          </div>
           <button className="btn" disabled={busy} type="submit" style={{ width: "100%" }}>
             {busy ? "Setting up…" : "Open my terminal"}
           </button>

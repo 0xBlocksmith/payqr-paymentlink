@@ -15,8 +15,12 @@ import type { Country } from "../lib/types";
  * already locked. Reads lockPeriod directly (on-chain, admin-tunable per
  * currency, no redeploy) so it's accurate BEFORE the merchant has any orders
  * or buckets to derive a countdown from.
+ *
+ * Rendered as a white clone of the dashboard's dark promo card (rather than
+ * the scrolling ticker this used to be) so the lock duration is readable at
+ * a glance instead of having to wait for it to scroll into view.
  */
-export function SettlementBanner({ country }: { country: Country | null }) {
+export function SettlementPromo({ country }: { country: Country | null }) {
   const { t } = useT();
   const currencyHex = country ? (codeToHex(country.code) as `0x${string}`) : undefined;
   const { data: lockSecs } = useReadContract({
@@ -29,17 +33,18 @@ export function SettlementBanner({ country }: { country: Country | null }) {
   // Same day-rounding as the live unlock countdown elsewhere (dashboard/
   // withdraw) — round up so a sub-day window never reads as "0 days".
   const days = Math.max(1, Math.ceil(Number(lockSecs) / 86400));
-  const message = t("dash.settlementNotice")
-    .replace("{days}", String(days))
-    .replace("{country}", country?.name ?? "");
+  const template = t("dash.settlementNotice");
+  const [before, after] = template.split("{days}");
+  const afterText = (after ?? "").replace("{country}", country?.name ?? "");
+  const beforeText = before.replace("{country}", country?.name ?? "");
 
-  // Duplicate the text so the marquee has a second copy to scroll into view
-  // right behind the first — an unbroken loop instead of a gap-then-repeat.
   return (
-    <div className="settle-banner" role="status">
-      <div className="settle-banner-track">
-        <span className="settle-banner-item">{message}</span>
-        <span className="settle-banner-item" aria-hidden="true">{message}</span>
+    <div className="promo promo-white">
+      <div className="promo-tag">SETTLEMENT WINDOW</div>
+      <div className="promo-sub promo-sub-dark">
+        {beforeText}
+        <span className="promo-highlight">{days} {days === 1 ? "day" : "days"}</span>
+        {afterText}
       </div>
     </div>
   );

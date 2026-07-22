@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useReadContract } from "wagmi";
 import { useAuth } from "../../components/useAuth";
 import { flagNewUser, tourSeen, AppTour } from "../../components/AppTour";
 import { Logo, Icon } from "../../components/Icons";
@@ -10,6 +11,9 @@ import { InstallButton } from "../../components/InstallButton";
 import { ThemeButton } from "../../components/ThemeButton";
 import { useT } from "../../lib/i18n";
 import { isUserCancel } from "../../lib/contract";
+import { CONTRACT_ADDRESS, INTEGRATOR_ABI } from "../../lib/contract";
+import { codeToHex } from "../../lib/p2p";
+import { STATIC_STALE_MS } from "../../lib/cache";
 import {
   COUNTRIES, LANGUAGES, loadCountry,
   saveCountry, markPrefsSet, prefsSet, fmtSymbolCode,
@@ -28,6 +32,19 @@ export default function Login() {
   // ISO-2 code per country for real flag images (emoji flags don't render on Windows).
   const CC: Record<string, string> = { india: "in", brazil: "br", argentina: "ar" };
   const flagUrl = (id: string) => `https://flagcdn.com/w40/${CC[id] || "un"}.png`;
+
+  // Settlement/unlock window for the currently-picked country — surfaced HERE,
+  // before sign-up even starts, so a merchant knows sales lock for a period
+  // before they're withdrawable BEFORE they ever create an account (previously
+  // this only appeared post-registration, on /onboarding and the dashboard).
+  // Read is public (no auth needed) — same on-chain call as SettlementBanner.
+  const currencyHex = country ? (codeToHex(country.code) as `0x${string}`) : undefined;
+  const { data: lockSecs } = useReadContract({
+    address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "lockPeriod",
+    args: [currencyHex as `0x${string}`],
+    query: { enabled: !!currencyHex, staleTime: STATIC_STALE_MS },
+  });
+  const settlementDays = lockSecs != null ? Math.max(1, Math.ceil(Number(lockSecs) / 86400)) : null;
 
   // Only bounce an authenticated user off the login page once their prefs are
   // set — otherwise they're here precisely to pick currency/language. Without
@@ -165,6 +182,20 @@ export default function Login() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+
+        {/* Settlement-window explainer — reacts to the currently-picked country,
+            so a visitor sees exactly what they'd get before signing up at all. */}
+        <div className="login-settle">
+          <span className="login-settle-ico"><Icon.Clock width="18" height="18" /></span>
+          <div>
+            <div className="login-settle-h">How settlement works</div>
+            <div className="login-settle-sub">
+              {settlementDays != null
+                ? <>Sales in {country.name} settle to USDC on-chain instantly, then unlock for withdrawal after <b>{settlementDays} day{settlementDays === 1 ? "" : "s"}</b>.</>
+                : "Sales settle to USDC on-chain instantly, then unlock for withdrawal after a short lock period."}
+            </div>
           </div>
         </div>
 

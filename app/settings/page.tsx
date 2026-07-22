@@ -22,6 +22,7 @@ import {
 import { useTheme } from "../../components/theme";
 import { useAppUpdate } from "../../components/AppUpdate";
 import { useT } from "../../lib/i18n";
+import { ACTIVE_CHAIN } from "../../lib/chain";
 
 const THEMES = [
   { id: "light", labelKey: "set.light", Ico: Icon.Sun },
@@ -29,7 +30,7 @@ const THEMES = [
   { id: "system", labelKey: "set.system", Ico: Icon.Help },
 ];
 
-const SCAN = "https://sepolia.basescan.org";
+const SCAN = ACTIVE_CHAIN.blockExplorers?.default.url ?? "https://basescan.org";
 
 export default function Settings() {
   const router = useRouter();
