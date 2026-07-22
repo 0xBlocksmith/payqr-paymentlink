@@ -139,7 +139,7 @@ async function verifyOrderOwner(placer: string): Promise<OwnerCheck> {
   return { state: viaProxy.registered ? "verified" : "notOurs", shopName: viaProxy.shopName };
 }
 
-const SCAN = "https://sepolia.basescan.org";
+const SCAN = ACTIVE_CHAIN.blockExplorers?.default.url ?? "https://basescan.org";
 
 /**
  * PUBLIC customer receipt — no login. The merchant shares this link (or shows
