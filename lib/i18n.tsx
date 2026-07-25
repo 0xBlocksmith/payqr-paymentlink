@@ -35,6 +35,7 @@ const en: Dict = {
   "nav.activity": "Transactions",
   "nav.transactions": "Transactions",
   "nav.help": "Help & Support",
+  "nav.disputes": "Disputes & Support",
   "nav.settings": "Settings",
   "nav.logout": "Log out",
   "nav.loggedInAs": "Logged in as",

@@ -4,6 +4,7 @@ import { useMemo } from "react";
 import { usePublicClient } from "wagmi";
 import { useActiveWallet } from "thirdweb/react";
 import { useSmartAccount } from "./useSmartAccount";
+import { ACTIVE_CHAIN } from "../lib/chain";
 
 /**
  * Adapts the merchant's thirdweb SMART ACCOUNT to the @p2pdotme/widgets
@@ -45,6 +46,11 @@ export function useCheckoutSigner() {
         const hash = await sendTransaction({ to, data });
         return { hash };
       },
+      // The merchant's smart account only ever lives on ACTIVE_CHAIN (no
+      // in-app chain switcher), so this is a static read rather than a live
+      // wallet query — required by the support widget's SupportSigner shape
+      // to bind the bridge sign-in to a chain (D-027-v3 §4).
+      getChainId: () => ACTIVE_CHAIN.id,
       // EIP-191 signature from the admin EOA (resolves to a hex string, which
       // satisfies the widget's `(message: string) => Promise<string>` shape).
       // Omitted when there's no EOA that can sign — the widget then places the

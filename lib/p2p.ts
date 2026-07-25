@@ -38,6 +38,15 @@ export const SCREENING_CONFIG =
       }
     : undefined;
 
+// Per-order dispute support (see @p2pdotme/widgets/support). The bridge URL is
+// p2p.me-hosted infra provisioned per integrator — unset in steady state until
+// p2p.me hands it over, so the Dispute Manager UI stays dormant (no bridge
+// calls) rather than pointing at nothing.
+export const SUPPORT_BRIDGE_URL = process.env.NEXT_PUBLIC_SUPPORT_BRIDGE_URL || "";
+// Display label only (shown in the support modal's privacy notice) — NOT a
+// routing key. Routing is derived from the on-chain order's circle/integrator.
+export const SUPPORT_ORIGIN_APP = "PayQR";
+
 // ── Generic currency ⇄ bytes32 (no per-country hardcoding) ──────────
 // The subgraph stores a currency as a left-aligned bytes32 of the ASCII code.
 // e.g. "INR" → 0x494e52…00 , "BRL" → 0x42524c…00.
