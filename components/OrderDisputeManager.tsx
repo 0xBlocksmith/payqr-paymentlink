@@ -1,12 +1,13 @@
 "use client";
 
 import { useMemo } from "react";
-import { Support, computeOrderAction, useOrderStates } from "@p2pdotme/widgets/support";
+import { ContactSupport, computeOrderAction, useOrderStates } from "@p2pdotme/widgets/support";
 import type { SupportSigner } from "@p2pdotme/widgets/support";
 import type { Order } from "@p2pdotme/sdk/orders";
 import { DIAMOND_ADDRESS, SUPPORT_BRIDGE_URL, SUPPORT_ORIGIN_APP } from "../lib/p2p";
 import { ACTIVE_CHAIN, RPC_URL } from "../lib/chain";
 import { useSmartAccount } from "./useSmartAccount";
+import { useCheckoutSigner } from "./useCheckoutSigner";
 
 /**
  * `address` MUST be the merchant's ERC-4337 SMART ACCOUNT, because the bridge
@@ -85,19 +86,38 @@ export function useDisputeOrderStates(orderIds: string[]) {
  * merchant-only. The merchant is the one who reports it here on their
  * behalf).
  *
- * Uses the base `Support` component (not `ContactSupport`) deliberately:
- * `ContactSupport` only renders while a report-problem window is open or a
- * dispute already exists (`shouldRender` gate in the widget internals) — it
- * would render NOTHING for a cancelled order. `Support` always renders its
- * "Get help" / dispute-status launcher regardless of order state.
+ * Uses `ContactSupport`, NOT the base `Support` component. `Support` opens the
+ * chat by booting Chatwoot's BROWSER WEBSITE SDK, which needs the inbox's
+ * `website_token` + `hmac_token`. Every live p2p.me inbox has since been
+ * migrated to `Channel::Api`, which has neither, so the bridge's sign-in
+ * response carries `chatwoot: null` and `Support` dead-ends:
  *
- * CHAT-ONLY SCOPE: no `txSigner` is passed, so this surface never sends an
- * on-chain `raiseDispute` — it opens the Chatwoot thread and nothing else.
- * Note this is a deliberate scope choice, NOT a permissions limit: the rows
- * here are orders where the merchant's own smart account is `Order.user` (see
- * `fetchHistory`), so the merchant IS the party the contract lets file a
- * dispute. Wiring `txSigner` is a viable follow-up; it is left out of this
- * change so the chat path can be fixed and verified on its own.
+ *   if (!session.chatwoot) { setPhase({ kind: "unavailable" }); return; }
+ *
+ * That is the misleading "Support not available yet — your order needs to be
+ * accepted" screen; it has nothing to do with the order's state, and no order
+ * on any circle can get past it. `ContactSupport` instead renders
+ * `UserSupportPanel`, which proxies the SAME per-order conversation through
+ * the bridge's `/me/orders/:id/thread` + `/messages` routes under its shared
+ * admin token — no website token involved. That is the path goat.cash,
+ * coins.me and lotpot already run in production.
+ *
+ * `txSigner` IS wired (see below), because the two halves are load-bearing
+ * together: the bridge only ever creates a Chatwoot conversation from its
+ * on-chain `OrderDispute` listener (`chatwoot.createConversation` has exactly
+ * one caller). With no dispute there is no thread to open — the panel would
+ * render empty and `POST /messages` would 409 `conversation_not_ready`. So the
+ * report-problem flow that raises the dispute is what makes the chat reachable
+ * at all.
+ *
+ * CONSEQUENCE — this surface is no longer always-visible. `ContactSupport`
+ * renders only while a report-problem window is open or a dispute already
+ * exists. That is deliberate: those are exactly the states where a thread can
+ * exist, so an always-on launcher could only have offered a dead end.
+ * Concretely, for a cancelled BUY the widget opens a 15min–24h window (the
+ * merchant's own smart account is `Order.user` — see `fetchHistory` — so the
+ * merchant is the party the contract lets file), and past that window neither
+ * the widget nor the contract has a dispute path.
  * (Withdrawal/fiat-cashout rows aren't payment orders and never reach this
  * component — see the `kind !== "withdraw"` filter at the call site.)
  */
@@ -110,20 +130,27 @@ export function OrderDisputeManager({
   order: Order;
   signer: SupportSigner;
 }) {
+  // Doubles as the raiseDispute sender: `CheckoutSigner` already satisfies
+  // `RaiseDisputeSigner` ({ address, sendTransaction }), and it sends as a
+  // sponsored UserOperation so the merchant needs no ETH.
+  const { signer: txSigner } = useCheckoutSigner();
+
   // Support isn't wired for this deployment yet (see lib/p2p.ts) — render
   // nothing rather than a launcher that can't reach a bridge.
   if (!SUPPORT_BRIDGE_URL) return null;
 
-  // layout is ops-mode-only in this widget (customer mode always renders a
-  // small launcher button + its own modal, regardless of `layout`) — omitted.
-  const { disputeState } = computeOrderAction(order, Date.now());
+  const state = computeOrderAction(order, Date.now());
   return (
-    <Support
+    <ContactSupport
       orderId={orderId}
+      state={state}
       signer={signer}
       bridgeUrl={SUPPORT_BRIDGE_URL}
       originApp={SUPPORT_ORIGIN_APP}
-      disputeStatus={disputeState}
+      txSigner={txSigner ?? undefined}
+      diamondAddress={(DIAMOND_ADDRESS || undefined) as `0x${string}` | undefined}
+      rpcUrl={RPC_URL || undefined}
+      chainId={ACTIVE_CHAIN.id}
       chatEnabled={true}
     />
   );
