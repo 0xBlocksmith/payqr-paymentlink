@@ -7,17 +7,26 @@ import type { SupportSigner } from "@p2pdotme/widgets/support";
 import type { Order } from "@p2pdotme/sdk/orders";
 import { DIAMOND_ADDRESS, SUPPORT_BRIDGE_URL, SUPPORT_ORIGIN_APP } from "../lib/p2p";
 import { ACTIVE_CHAIN, RPC_URL } from "../lib/chain";
+import { useSmartAccount } from "./useSmartAccount";
 
 /**
- * Per the integrator guide (INTEGRATOR_SUPPORT_GUIDE.md § "The signer"):
- * `address` and `signMessage` must come from the SAME key — the support
- * bridge verifies a plain EIP-191 signature (no ERC-1271/6492 support). The
- * merchant's ACTIVE account (useActiveAccount(), what
- * useCheckoutSigner/useSmartAccount expose) is the ERC-4337 SMART ACCOUNT —
- * signing with it produces a contract signature bound to the smart-account
- * address, which the bridge's plain ecrecover can't verify ("bad_signature").
- * So this uses the wallet's ADMIN EOA (wallet.getAdminAccount()) instead —
- * its address and signature are naturally consistent.
+ * `address` MUST be the merchant's ERC-4337 SMART ACCOUNT, because the bridge
+ * authorizes the order thread by OWNERSHIP: `/me/orders/:orderId/thread` and
+ * `/me/orders/:orderId/messages` both require `session.sub === order.user`.
+ * Our payment rows come from `fetchHistory(address)`, which queries the
+ * subgraph with `where: { userAddress: <merchant address> }`, and that address
+ * is the smart account (useSmartAccount → useActiveAccount). So `order.user`
+ * IS the smart account, and a session minted for any other key — including
+ * the admin EOA — is rejected 403 `not_authorized` on every call.
+ *
+ * `signMessage` still signs with the ADMIN EOA, which is correct and not a
+ * contradiction: the bridge verifies via viem's `verifyHash`, which falls
+ * through to ERC-1271 `isValidSignature` on the smart account (and ERC-6492
+ * when it is still counterfactual). The smart account validates a signature
+ * from its own admin key, so the pair (smart-account address, admin-EOA
+ * signature) verifies AND satisfies the ownership gate. This mirrors the
+ * split `useCheckoutSigner` already uses (`address` = smart account,
+ * `signMessage` = admin EOA).
  *
  * NOT built with the guide's `fromThirdwebAccount` adapter: that helper reads
  * `account.getChain()` for `getChainId`, which is a property of the ACTIVE
@@ -30,15 +39,17 @@ import { ACTIVE_CHAIN, RPC_URL } from "../lib/chain";
  */
 export function useSupportSigner(): SupportSigner | null {
   const wallet = useActiveWallet();
+  const { address, ready } = useSmartAccount();
   return useMemo(() => {
+    if (!ready || !address) return null;
     const adminAccount = wallet?.getAdminAccount?.();
     if (!adminAccount) return null;
     return {
-      address: adminAccount.address as `0x${string}`,
+      address,
       signMessage: (message: string) => adminAccount.signMessage({ message }),
       getChainId: () => ACTIVE_CHAIN.id,
     };
-  }, [wallet]);
+  }, [wallet, address, ready]);
 }
 
 /**
@@ -71,12 +82,15 @@ export function useDisputeOrderStates(orderIds: string[]) {
  * would render NOTHING for a cancelled order. `Support` always renders its
  * "Get help" / dispute-status launcher regardless of order state.
  *
- * MERCHANT-SIDE SCOPE: on-chain `raiseDispute` is filed by the order's BUYER
- * (the wallet in Order.user), not the merchant, so no `txSigner` is passed —
- * this is a chat/relay surface only, never a dispute-filing tx from the
- * merchant's own wallet. (Withdrawal/fiat-cashout rows aren't payment orders
- * and never reach this component — see the `kind !== "withdraw"` filter at
- * the call site.)
+ * CHAT-ONLY SCOPE: no `txSigner` is passed, so this surface never sends an
+ * on-chain `raiseDispute` — it opens the Chatwoot thread and nothing else.
+ * Note this is a deliberate scope choice, NOT a permissions limit: the rows
+ * here are orders where the merchant's own smart account is `Order.user` (see
+ * `fetchHistory`), so the merchant IS the party the contract lets file a
+ * dispute. Wiring `txSigner` is a viable follow-up; it is left out of this
+ * change so the chat path can be fixed and verified on its own.
+ * (Withdrawal/fiat-cashout rows aren't payment orders and never reach this
+ * component — see the `kind !== "withdraw"` filter at the call site.)
  */
 export function OrderDisputeManager({
   orderId,
