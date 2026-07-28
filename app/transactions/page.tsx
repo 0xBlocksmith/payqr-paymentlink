@@ -17,6 +17,7 @@ import { useT } from "../../lib/i18n";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { decryptPayout } from "../../lib/payoutCrypto";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
+import { useDisputeOrderStates, OrderDisputeManager, useSupportSigner } from "../../components/OrderDisputeManager";
 
 // Partially hide a payout handle for a SHAREABLE receipt: keep the first 2 chars
 // and everything from "@"/domain, mask the middle. e.g. "sheldon@upi" → "sh•••@upi",
@@ -64,6 +65,7 @@ export default function Transactions() {
   const router = useRouter();
   const { ready, authenticated, address } = useMerchant();
   const { getIdentity } = useRelayIdentity();
+  const supportSigner = useSupportSigner();
   const [country, setCountry] = useState(null);
   const [rate, setRate] = useState(null);
   const [rows, setRows] = useState([]);
@@ -198,6 +200,15 @@ export default function Transactions() {
     }
     return list;
   }, [items, filter, q]);
+
+  // Dispute Manager: batched live on-chain read for every visible PAYMENT row
+  // (withdrawals aren't disputable orders, so they're excluded). One multicall
+  // for the whole visible page rather than a call per row.
+  const disputableOrderIds = useMemo(
+    () => filtered.filter((t) => t.kind !== "withdraw").map((t) => t.orderId),
+    [filtered]
+  );
+  const { rows: disputeRows } = useDisputeOrderStates(disputableOrderIds);
 
   // Report totals are over RECEIVED sales in the chosen range (money in hand).
   const received = items.filter((t) => t.status === "settled");
@@ -395,14 +406,31 @@ export default function Transactions() {
                   </div>
                 </>
               );
-              return href ? (
-                <button key={`${tx.kind}-${tx.orderId}`} className="hist-row"
-                  onClick={() => router.push(href)} type="button">
+              const rowEl = href ? (
+                <button className="hist-row" onClick={() => router.push(href)} type="button">
                   {inner}
                 </button>
               ) : (
-                <div key={`${tx.kind}-${tx.orderId}`} className="hist-row hist-row-static">
+                <div className="hist-row hist-row-static">
                   {inner}
+                </div>
+              );
+              // Dispute Manager chip: payment rows only (a withdrawal isn't a
+              // disputable order), and only once its live on-chain state has
+              // loaded. Rendered as a sibling — never nested inside the row's
+              // own <button>, which would make it an invalid/broken nested
+              // control and double-fire the receipt navigation on tap.
+              const disputeRow = !isWithdraw && supportSigner ? disputeRows.get(tx.orderId) : null;
+              return (
+                <div key={`${tx.kind}-${tx.orderId}`} className="hist-row-wrap">
+                  {rowEl}
+                  {disputeRow && (
+                    <OrderDisputeManager
+                      orderId={tx.orderId}
+                      order={disputeRow.order}
+                      signer={supportSigner}
+                    />
+                  )}
                 </div>
               );
             })}

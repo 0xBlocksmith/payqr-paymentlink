@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { AccountMenu } from "./AccountMenu";
 import { ThemeButton } from "./ThemeButton";
 import { InstallButton } from "./InstallButton";
+import { DisputeButton } from "./DisputeButton";
 import { SideMenu } from "./SideMenu";
 import { Icon, Logo } from "./Icons";
 
@@ -36,6 +37,7 @@ export function Nav({ center = null, back = false, backHref = "/dashboard", menu
       {center && <div className="nav-center">{center}</div>}
       <div className="nav-right">
         <InstallButton />
+        <DisputeButton />
         <ThemeButton />
         <AccountMenu />
       </div>

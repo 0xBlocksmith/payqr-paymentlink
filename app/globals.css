@@ -53,6 +53,22 @@
 
   --border-w: 1px;         /* one hairline weight everywhere */
   color-scheme: light;
+
+  /* ── @p2pdotme/widgets/support theming ──────────────────
+     The Support launcher/modal reads these CSS vars directly (no theme prop
+     needed) — mapping them to our own tokens keeps the dispute chip on-brand
+     instead of the widget's built-in violet default. */
+  --p2p-color-bg: var(--panel);
+  --p2p-color-surface-alt: var(--bg-soft);
+  --p2p-color-fg: var(--text);
+  --p2p-color-muted: var(--muted);
+  --p2p-color-border: var(--border);
+  --p2p-color-accent: var(--accent);
+  --p2p-color-accent-fg: #ffffff;
+  --p2p-color-success: var(--success);
+  --p2p-color-danger: var(--danger);
+  --p2p-radius-button: 10px;
+  --p2p-radius-modal: 18px;
 }
 
 /* ── Dark theme ─────────────────────────────────────────
@@ -91,6 +107,19 @@
   --shadow-lg: none;
   --shadow-brand: none;
   color-scheme: dark;
+
+  /* ── @p2pdotme/widgets/support theming (dark) ───────────
+     Same var mapping as :root — re-declared here since our tokens
+     themselves already flip per-theme; the --p2p-* NAMES stay the same. */
+  --p2p-color-bg: var(--panel);
+  --p2p-color-surface-alt: var(--bg-soft);
+  --p2p-color-fg: var(--text);
+  --p2p-color-muted: var(--muted);
+  --p2p-color-border: var(--border);
+  --p2p-color-accent: var(--accent);
+  --p2p-color-accent-fg: #ffffff;
+  --p2p-color-success: var(--success);
+  --p2p-color-danger: var(--danger);
 }
 
 body {
@@ -1426,6 +1455,34 @@ h1 { font-size: 22px; }
 /* Non-clickable rows (no receipt yet): no pointer, no hover affordance. */
 .hist-row-static { cursor: default; }
 .hist-row-static:hover { background: none; }
+/* Wraps a .hist-row plus its optional Dispute Manager chip (support/dispute
+   status) so the chip is a sibling, never nested inside the row's own
+   <button> — avoids invalid nested controls and double-firing the receipt
+   link on tap. */
+.hist-row-wrap:not(:last-child) { border-bottom: var(--border-w) solid var(--border); }
+.hist-row-wrap .hist-row { border-bottom: none; }
+.hist-row-wrap:last-child .hist-row { border-bottom: none; }
+/* The dispute/support launcher (@p2pdotme/widgets/support <Support>) renders
+   its own <div data-support-root><button data-support-launcher>...</button></div>
+   with INLINE styles (no CSS classes to target) — colors already flow through
+   our --p2p-color-* vars above, this just fits its footprint to a row footer
+   instead of the widget's default full-size button. */
+[data-support-root] {
+  padding: 0 16px 12px 68px; /* 68px ≈ icon column width, so the chip lines up under the row's text, not the icon */
+}
+[data-support-launcher] {
+  height: 30px !important;
+  padding: 0 12px !important;
+  font-size: 12.5px !important;
+  border-radius: var(--r-pill) !important;
+  background: var(--accent-soft) !important;
+  color: var(--accent-dark) !important;
+  border-color: transparent !important;
+}
+[data-support-launcher]:hover { background: var(--accent-100) !important; }
+@media (min-width: 720px) {
+  [data-support-root] { padding-left: 72px; }
+}
 .hist-ico {
   width: 40px; height: 40px; border-radius: 12px; flex: none;
   display: flex; align-items: center; justify-content: center;
