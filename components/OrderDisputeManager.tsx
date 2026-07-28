@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo } from "react";
-import { useActiveWallet } from "thirdweb/react";
 import { Support, computeOrderAction, useOrderStates } from "@p2pdotme/widgets/support";
 import type { SupportSigner } from "@p2pdotme/widgets/support";
 import type { Order } from "@p2pdotme/sdk/orders";
@@ -19,37 +18,47 @@ import { useSmartAccount } from "./useSmartAccount";
  * IS the smart account, and a session minted for any other key — including
  * the admin EOA — is rejected 403 `not_authorized` on every call.
  *
- * `signMessage` still signs with the ADMIN EOA, which is correct and not a
- * contradiction: the bridge verifies via viem's `verifyHash`, which falls
- * through to ERC-1271 `isValidSignature` on the smart account (and ERC-6492
- * when it is still counterfactual). The smart account validates a signature
- * from its own admin key, so the pair (smart-account address, admin-EOA
- * signature) verifies AND satisfies the ownership gate. This mirrors the
- * split `useCheckoutSigner` already uses (`address` = smart account,
- * `signMessage` = admin EOA).
+ * `signMessage` MUST come from the SMART ACCOUNT too — NOT from the admin EOA.
+ * The bridge verifies with viem's `verifyHash`, which for a contract address
+ * calls ERC-1271 `isValidSignature(hash, sig)` on the account. thirdweb's
+ * `Account` does NOT recover against that raw `hash`: it first wraps it in an
+ * EIP-712 `AccountMessage` envelope (domain-separated by the account), then
+ * recovers against THAT digest and checks the recovered key is an admin.
+ * Verified on a live merchant account on Base:
+ *
+ *   getMessageHash(0x1111…1111) -> 0xf0a7f2326796a55610746c8d424533dc…
+ *
+ * i.e. a different digest from the input. So a plain `personal_sign` from the
+ * admin EOA — which signs over `hashMessage(message)` — recovers to a garbage
+ * address when checked against the wrapped digest, fails the admin check, and
+ * the bridge reports 401 `bad_signature`.
+ *
+ * The smart account's own `signMessage` performs that AccountMessage wrapping
+ * (and ERC-6492-wraps while the account is still counterfactual), so it is the
+ * only signer whose output `isValidSignature` accepts.
+ *
+ * NOTE: `useCheckoutSigner` deliberately signs with the admin EOA and reports
+ * it via `signerAddress` — that is correct for the FRAUD ENGINE, which does a
+ * plain ecrecover against `signerAddress`. The support bridge is the opposite
+ * case: it verifies against `address` via ERC-1271. Do not "unify" these two.
  *
  * NOT built with the guide's `fromThirdwebAccount` adapter: that helper reads
  * `account.getChain()` for `getChainId`, which is a property of the ACTIVE
- * WALLET connection, not of an arbitrary `Account` object — the admin EOA
- * account returned by `getAdminAccount()` has no such method, so
- * `fromThirdwebAccount` throws "could not resolve a numeric chainId from the
- * active chain". Supplying `getChainId` ourselves (same static ACTIVE_CHAIN.id
- * useCheckoutSigner already uses — this merchant wallet never switches chains)
- * sidesteps that gap.
+ * WALLET connection rather than of the `Account` object, so it throws "could
+ * not resolve a numeric chainId from the active chain". Supplying `getChainId`
+ * ourselves (same static ACTIVE_CHAIN.id useCheckoutSigner already uses — this
+ * merchant wallet never switches chains) sidesteps that gap.
  */
 export function useSupportSigner(): SupportSigner | null {
-  const wallet = useActiveWallet();
-  const { address, ready } = useSmartAccount();
+  const { address, ready, account } = useSmartAccount();
   return useMemo(() => {
-    if (!ready || !address) return null;
-    const adminAccount = wallet?.getAdminAccount?.();
-    if (!adminAccount) return null;
+    if (!ready || !address || !account) return null;
     return {
       address,
-      signMessage: (message: string) => adminAccount.signMessage({ message }),
+      signMessage: (message: string) => account.signMessage({ message }),
       getChainId: () => ACTIVE_CHAIN.id,
     };
-  }, [wallet, address, ready]);
+  }, [account, address, ready]);
 }
 
 /**
