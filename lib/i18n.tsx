@@ -215,6 +215,18 @@ const en: Dict = {
   "tour.s5Ready": "Ready to withdraw",
   "tour.s5Bank": "My bank",
   "tour.s5Usdc": "Keep as USDC",
+  // volume challenge campaign
+  "camp.tag": "VOLUME CHALLENGE",
+  "camp.bannerH": "Process $500, earn $5 USDC",
+  "camp.bannerSub": "Aug 10–17 · reward paid same day you hit the goal",
+  "camp.trackProgress": "Track Progress ›",
+  "camp.heroText": "Every successful payment you process between Aug 10–17 counts toward the goal.",
+  "camp.window": "Window: Aug 10 – Aug 17, 2026",
+  "camp.goalReached": "Goal reached! Your $5 USDC{fiat} reward is deposited by the end of today.",
+  "camp.rewardPending": "Hit $500{fiat} in volume and we deposit $5 USDC{rewardFiat} the same day you cross it.",
+  "camp.qualifyingOrders": "Qualifying orders ({n})",
+  "camp.none": "No qualifying payments yet.",
+  "camp.order": "Order #{id}",
 };
 
 const hi: Dict = {
@@ -398,6 +410,18 @@ const hi: Dict = {
   "tour.s5Ready": "निकासी के लिए तैयार",
   "tour.s5Bank": "मेरा बैंक",
   "tour.s5Usdc": "USDC के रूप में रखें",
+  // volume challenge campaign
+  "camp.tag": "वॉल्यूम चैलेंज",
+  "camp.bannerH": "$500 का लेन-देन करें, $5 USDC कमाएँ",
+  "camp.bannerSub": "10–17 अगस्त · लक्ष्य पूरा करते ही उसी दिन इनाम",
+  "camp.trackProgress": "प्रगति देखें ›",
+  "camp.heroText": "10–17 अगस्त के बीच किया गया हर सफल भुगतान लक्ष्य में जुड़ता है।",
+  "camp.window": "अवधि: 10 अगस्त – 17 अगस्त, 2026",
+  "camp.goalReached": "लक्ष्य पूरा हुआ! आपका $5 USDC{fiat} इनाम आज ही जमा किया जाएगा।",
+  "camp.rewardPending": "$500{fiat} का लेन-देन करें और हम लक्ष्य पूरा होते ही उसी दिन $5 USDC{rewardFiat} जमा कर देंगे।",
+  "camp.qualifyingOrders": "योग्य ऑर्डर ({n})",
+  "camp.none": "अभी कोई योग्य भुगतान नहीं।",
+  "camp.order": "ऑर्डर #{id}",
 };
 
 const pt: Dict = {
@@ -581,6 +605,18 @@ const pt: Dict = {
   "tour.s5Ready": "Pronto para sacar",
   "tour.s5Bank": "Meu banco",
   "tour.s5Usdc": "Manter em USDC",
+  // volume challenge campaign
+  "camp.tag": "DESAFIO DE VOLUME",
+  "camp.bannerH": "Processe $500, ganhe $5 USDC",
+  "camp.bannerSub": "10–17 de ago · recompensa paga no dia em que você atingir a meta",
+  "camp.trackProgress": "Ver progresso ›",
+  "camp.heroText": "Todo pagamento bem-sucedido entre 10 e 17 de agosto conta para a meta.",
+  "camp.window": "Período: 10 de ago – 17 de ago de 2026",
+  "camp.goalReached": "Meta atingida! Sua recompensa de $5 USDC{fiat} é depositada até o fim do dia de hoje.",
+  "camp.rewardPending": "Atinja $500{fiat} em volume e depositamos $5 USDC{rewardFiat} no mesmo dia em que você bater a meta.",
+  "camp.qualifyingOrders": "Pedidos elegíveis ({n})",
+  "camp.none": "Ainda não há pagamentos elegíveis.",
+  "camp.order": "Pedido #{id}",
 };
 
 const es: Dict = {
@@ -764,6 +800,18 @@ const es: Dict = {
   "tour.s5Ready": "Listo para retirar",
   "tour.s5Bank": "Mi banco",
   "tour.s5Usdc": "Mantener en USDC",
+  // volume challenge campaign
+  "camp.tag": "RETO DE VOLUMEN",
+  "camp.bannerH": "Procesa $500, gana $5 USDC",
+  "camp.bannerSub": "10–17 ago · recompensa pagada el mismo día que alcances la meta",
+  "camp.trackProgress": "Ver progreso ›",
+  "camp.heroText": "Cada pago exitoso que proceses entre el 10 y el 17 de agosto cuenta para la meta.",
+  "camp.window": "Período: 10 de ago – 17 de ago de 2026",
+  "camp.goalReached": "¡Meta alcanzada! Tu recompensa de $5 USDC{fiat} se deposita antes de que termine el día de hoy.",
+  "camp.rewardPending": "Alcanza $500{fiat} en volumen y depositamos $5 USDC{rewardFiat} el mismo día que cruces la meta.",
+  "camp.qualifyingOrders": "Pedidos calificados ({n})",
+  "camp.none": "Aún no hay pagos calificados.",
+  "camp.order": "Pedido #{id}",
 };
 
 const DICTS: Record<Lang, Dict> = { en, hi, pt, es };

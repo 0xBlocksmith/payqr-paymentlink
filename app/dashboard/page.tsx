@@ -11,6 +11,8 @@ import { Icon } from "../../components/Icons";
 import { AppTour } from "../../components/AppTour";
 import { ConnectionBanner } from "../../components/ConnectionBanner";
 import { SettlementPromo } from "../../components/SettlementBanner";
+import { CampaignPromo } from "../../components/CampaignBanner";
+import { PromoCarousel } from "../../components/PromoCarousel";
 import { WalletSheet } from "../../components/WalletSheet";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc } from "../../lib/contract";
 import { STATIC_STALE_MS } from "../../lib/cache";
@@ -270,15 +272,20 @@ export default function Dashboard() {
           </Link>
         </div>
 
-        {/* promo banner (p2p.me dark-gradient style) */}
-        <div className="promo">
-          <div className="promo-tag">BUILT FOR LOCAL BUSINESS</div>
-          <div className="promo-h">Get paid in USDC, instantly.</div>
-          <div className="promo-sub">
-            Take any local payment — it settles to USDC on-chain. Cash out to your bank once it clears.
+        {/* promo carousel — swipe left/right between slides. Campaign banner
+            is 1st, the original dark promo is 2nd; both share the same
+            dark-gradient card so the swipe reads as one continuous banner. */}
+        <PromoCarousel>
+          <CampaignPromo />
+          <div className="promo">
+            <div className="promo-tag">BUILT FOR LOCAL BUSINESS</div>
+            <div className="promo-h">Get paid in USDC, instantly.</div>
+            <div className="promo-sub">
+              Take any local payment — it settles to USDC on-chain. Cash out to your bank once it clears.
+            </div>
+            <span className="promo-qr"><Icon.Qr /></span>
           </div>
-          <span className="promo-qr"><Icon.Qr /></span>
-        </div>
+        </PromoCarousel>
 
         {/* promo banner clone — white surface, settlement-window notice in place
             of the scrolling ticker so it's readable at a glance (not scrolling),
