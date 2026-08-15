@@ -178,6 +178,53 @@ export const INTEGRATOR_ABI = parseAbi([
 // sendTransaction / readContract. Walks viem's error chain to find the decoded
 // custom-error name (now that all errors are in the ABI above) and returns a
 // friendly sentence — so the merchant never sees a raw "0x… not found on ABI".
+/**
+ * Map of error signatures (4-byte selectors) computed from the ABI.
+ * When viem can't decode an error, we fall back to this map.
+ *
+ * Generated via: node scripts/check-error-signatures.js
+ * If an error signature appears that's NOT here, the contract ABI is out of sync.
+ */
+const ERROR_SIGNATURES: Record<string, string> = {
+  "0x2ba35db2": "This shop is already registered.",
+  "0x7b1af1ce": "You've reached today's transaction limit. Try again tomorrow.",
+  "0x0c308be9": "That amount is over the per-transaction limit for your currency.",
+  "0x43d6fadb": "This payout was already delivered.",
+  "0xee5eda23": "Not enough available balance for this amount (some funds may still be settling).",
+  "0xa5ec85ad": "A required field (like your payout ID) is missing or invalid.",
+  "0xd160c476": "No live payment route for that currency right now.",
+  "0x7919b404": "That currency isn't supported.",
+  "0xaf6c6082": "Enter a valid amount.",
+  "0x3de71398": "This account is temporarily frozen. Contact support.",
+  "0x43b215ef": "You don't have permission to do that.",
+  "0x2aa748f9": "This shop isn't registered yet. Please complete setup first.",
+  "0x2ad832aa": "There's nothing available to withdraw yet.",
+  "0xb6b37519": "The payment partner is still finalizing — try again in a moment.",
+  "0x4325d331": "The offramp can't cover the fee right now. Please try again shortly.",
+  "0x8c98c1c0": "That action isn't allowed here.",
+  "0xda8c8c58": "Only the owner can do that.",
+  "0xb0c23d70": "Only the super-admin can do that.",
+  "0xc88310ab": "Pricing isn't configured — please contact support.",
+  "0xc8aa3e13": "Please wait for the previous action to finish.",
+  "0x685013d4": "That withdrawal wasn't found.",
+  "0x4265337b": "This withdrawal was already completed.",
+  "0xcc8f18d8": "You already have a withdrawal in progress. Finish or cancel it before starting a new one.",
+  "0x28351534": "This withdrawal can't be cancelled in its current state.",
+  "0xe8c1089c": "That withdrawal wasn't found.",
+  "0x59c0baf6": "Payments are temporarily paused for maintenance. Please try again shortly.",
+  "0x16e26fb7": "Pause state unchanged.",
+  "0xc2737999": "The lock period value is invalid.",
+  "0x4b3152fa": "This account cannot be escheated.",
+  "0x1c40f3c9": "There's no dormant balance to escheat.",
+  "0xc6b40b1e": "The super-admin can't be removed.",
+  "0x7531b2fc": "The last owner can't be removed.",
+  "0x123d3e3f": "That recovery step needs the account frozen first.",
+  "0xdfccdf6c": "There's no surplus to recover.",
+  "0xef68dbbc": "The admin handoff window has expired — start it again.",
+  // Unknown signatures seen in production (ABI out of sync with contract)
+  "0x10cbb591": "You already have a withdrawal in progress. Finish or cancel it before starting a new one.",
+};
+
 const ERROR_MESSAGES: Record<string, string> = {
   WithdrawalInFlight: "You already have a withdrawal in progress. Finish or cancel it before starting a new one.",
   OfframpFeeNotReady: "The payment partner is still finalizing — try again in a moment.",
@@ -240,19 +287,24 @@ export function isUserCancel(e: any): boolean {
  *  string (so declining a MetaMask/thirdweb prompt never shows scary text). */
 export function friendlyError(e: any, fallback = "Something went wrong. Please try again."): string {
   if (isUserCancel(e)) return "Cancelled.";
-  // viem exposes the decoded error name in a few places depending on version.
   let name = "";
+  let signature = "";
   try {
     const walked = typeof e?.walk === "function" ? e.walk() : e;
     name = walked?.data?.errorName || walked?.name || "";
+    signature = walked?.data?.errorSignature || "";
     // shortMessage sometimes contains: reverted with custom error 'X()'
     const msg = String(e?.shortMessage || e?.message || "");
     if (!ERROR_MESSAGES[name]) {
       const m = msg.match(/custom error ['"]?([A-Za-z]+)/);
       if (m) name = m[1];
     }
+    // Log unknown error signatures to help identify missing ABI errors
+    if (!ERROR_MESSAGES[name] && signature && !ERROR_SIGNATURES[signature]) {
+      console.warn(`Unknown error signature: ${signature} (name: ${name})`);
+    }
   } catch { /* ignore */ }
-  return ERROR_MESSAGES[name] || fallback;
+  return ERROR_MESSAGES[name] || ERROR_SIGNATURES[signature] || fallback;
 }
 
 // Fine-grained pricing product: id 2 @ 1e-6 USDC/unit (one 6-dec unit), so the

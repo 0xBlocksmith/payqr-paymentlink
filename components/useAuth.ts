@@ -50,9 +50,9 @@ function purgeCrossAccountState(currentAddr: string) {
  * team checklist in the migration notes for which to switch on.
  */
 const AUTH_OPTIONS = [
-  "email",
+  "phone",
   "google",
-  // Only email + Google are offered. Phone and the other social providers
+  // Only phone + Google are offered. Email and the other social providers
   // (apple/facebook/discord/x/telegram/farcaster) are intentionally omitted to
   // keep the login simple, and "passkey"/"guest" are excluded too (guest lets
   // anyone spin up throwaway identities — a fraud-account vector).
@@ -103,7 +103,7 @@ export function useAuth() {
   const wallet = useActiveWallet();
   const { connect } = useConnectModal();
   const { disconnect } = useDisconnect();
-  // In-app wallet profiles expose the login identifier (email / social handle).
+  // In-app wallet profiles expose the login identifier (phone / social handle).
   const { data: profiles } = useProfiles({ client: thirdwebClient });
 
   const ready = status !== "connecting" && status !== "unknown";
