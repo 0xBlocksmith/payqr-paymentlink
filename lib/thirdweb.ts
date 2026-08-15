@@ -7,7 +7,7 @@ import { base, baseSepolia } from "thirdweb/chains";
  * Central thirdweb setup.
  *
  * The merchant's on-chain identity is a thirdweb SMART ACCOUNT (ERC-4337),
- * created from an in-app wallet (email/social login). Gas is SPONSORED by the
+ * created from an in-app wallet (phone/social login). Gas is SPONSORED by the
  * thirdweb paymaster (sponsorGas: true), so the merchant transacts with 0 ETH —
  * same zero-ETH UX as before.
  *
