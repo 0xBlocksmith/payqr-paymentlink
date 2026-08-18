@@ -227,6 +227,11 @@ const en: Dict = {
   "camp.qualifyingOrders": "Qualifying orders ({n})",
   "camp.none": "No qualifying payments yet.",
   "camp.order": "Order #{id}",
+  // p2p ecosystem
+  "eco.title": "P2P Ecosystem",
+  "eco.cardTitle": "Explore the P2P App Store",
+  "eco.cardSubtitle": "This app runs on the P2P protocol. Discover more apps in the family.",
+  "eco.openNewTab": "Open in new tab",
 };
 
 const hi: Dict = {
@@ -422,6 +427,10 @@ const hi: Dict = {
   "camp.qualifyingOrders": "योग्य ऑर्डर ({n})",
   "camp.none": "अभी कोई योग्य भुगतान नहीं।",
   "camp.order": "ऑर्डर #{id}",
+  "eco.title": "P2P इकोसिस्टम",
+  "eco.cardTitle": "P2P ऐप स्टोर एक्सप्लोर करें",
+  "eco.cardSubtitle": "यह ऐप P2P प्रोटोकॉल पर चलता है। इससे जुड़े और ऐप्स खोजें।",
+  "eco.openNewTab": "नए टैब में खोलें",
 };
 
 const pt: Dict = {
@@ -617,6 +626,10 @@ const pt: Dict = {
   "camp.qualifyingOrders": "Pedidos elegíveis ({n})",
   "camp.none": "Ainda não há pagamentos elegíveis.",
   "camp.order": "Pedido #{id}",
+  "eco.title": "Ecossistema P2P",
+  "eco.cardTitle": "Explore a loja de apps P2P",
+  "eco.cardSubtitle": "Este app funciona no protocolo P2P. Descubra mais apps da família.",
+  "eco.openNewTab": "Abrir em nova aba",
 };
 
 const es: Dict = {
@@ -812,6 +825,10 @@ const es: Dict = {
   "camp.qualifyingOrders": "Pedidos calificados ({n})",
   "camp.none": "Aún no hay pagos calificados.",
   "camp.order": "Pedido #{id}",
+  "eco.title": "Ecosistema P2P",
+  "eco.cardTitle": "Explora la tienda de apps P2P",
+  "eco.cardSubtitle": "Esta app funciona con el protocolo P2P. Descubre más apps de la familia.",
+  "eco.openNewTab": "Abrir en nueva pestaña",
 };
 
 const DICTS: Record<Lang, Dict> = { en, hi, pt, es };
