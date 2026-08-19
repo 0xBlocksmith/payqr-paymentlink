@@ -11,10 +11,9 @@ import { Icon } from "../../components/Icons";
 import { AppTour } from "../../components/AppTour";
 import { ConnectionBanner } from "../../components/ConnectionBanner";
 import { SettlementPromo } from "../../components/SettlementBanner";
-import { CampaignPromo } from "../../components/CampaignBanner";
 import { PromoCarousel } from "../../components/PromoCarousel";
 import { WalletSheet } from "../../components/WalletSheet";
-import { EcosystemCard } from "../../components/EcosystemPanel";
+import { EcosystemPromo } from "../../components/EcosystemPanel";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc } from "../../lib/contract";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
@@ -273,11 +272,11 @@ export default function Dashboard() {
           </Link>
         </div>
 
-        {/* promo carousel — swipe left/right between slides. Campaign banner
+        {/* promo carousel — swipe left/right between slides. Ecosystem promo
             is 1st, the original dark promo is 2nd; both share the same
             dark-gradient card so the swipe reads as one continuous banner. */}
         <PromoCarousel>
-          <CampaignPromo />
+          <EcosystemPromo />
           <div className="promo">
             <div className="promo-tag">BUILT FOR LOCAL BUSINESS</div>
             <div className="promo-h">Get paid in USDC, instantly.</div>
@@ -294,11 +293,6 @@ export default function Dashboard() {
             actually need to notice. Shown upfront, before the merchant's first
             order, not only discovered after money is already locked. */}
         <SettlementPromo country={country} />
-
-        {/* P2P ecosystem — this terminal runs on the P2P protocol; surface the
-            wider app store so merchants can discover the other apps. */}
-        <EcosystemCard />
-
 
         {/* stuck sale — waiting too long for a payment partner. Offer a new sale
             or a local dismiss (there's no merchant on-chain cancel; the protocol
