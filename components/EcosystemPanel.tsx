@@ -8,7 +8,7 @@ import { useT } from "../lib/i18n";
 // ecosystem sheet lets merchants discover the other apps in the family. Loaded
 // in an embedded iframe so they never leave PayQR (with an escape hatch to open
 // it in a real tab).
-const ECOSYSTEM_URL = "https://p2p.store";
+const ECOSYSTEM_URL = process.env.NEXT_PUBLIC_ECOSYSTEM_URL || "https://p2p.store";
 
 /** Full-height bottom sheet that embeds the P2P app store in an iframe. */
 function EcosystemSheet({ onClose }: { onClose: () => void }) {
@@ -22,7 +22,7 @@ function EcosystemSheet({ onClose }: { onClose: () => void }) {
           <button
             type="button"
             className="btn small secondary eco-newtab"
-            onClick={() => window.open(ECOSYSTEM_URL, "_blank", "noopener")}
+            onClick={() => window.open(ECOSYSTEM_URL, "_blank", "noopener,noreferrer")}
           >
             <Icon.Link width="15" height="15" /> {t("eco.openNewTab")}
           </button>
@@ -45,6 +45,8 @@ function EcosystemSheet({ onClose }: { onClose: () => void }) {
             onLoad={() => setLoaded(true)}
             className="eco-frame"
             allow="clipboard-read; clipboard-write"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+            referrerPolicy="strict-origin-when-cross-origin"
           />
         </div>
       </div>
@@ -71,19 +73,17 @@ export function EcosystemButton() {
   );
 }
 
-/** Dashboard call-out card that opens the ecosystem sheet. */
-export function EcosystemCard() {
+/** Dashboard promo-carousel slide — same dark-gradient card as the other
+ * promo slides, opens the ecosystem sheet on tap. */
+export function EcosystemPromo() {
   const { t } = useT();
   const [open, setOpen] = useState(false);
   return (
     <>
-      <button className="eco-card" onClick={() => setOpen(true)}>
-        <span className="eco-card-ico"><Icon.Ecosystem width="26" height="26" /></span>
-        <span className="eco-card-mid">
-          <span className="eco-card-title">{t("eco.cardTitle")}</span>
-          <span className="eco-card-sub">{t("eco.cardSubtitle")}</span>
-        </span>
-        <span className="eco-card-arrow">›</span>
+      <button className="promo promo-campaign" onClick={() => setOpen(true)} aria-label={t("eco.title")}>
+        <div className="promo-tag">{t("eco.title")}</div>
+        <div className="promo-h">{t("eco.cardTitle")}</div>
+        <div className="promo-sub">{t("eco.cardSubtitle")}</div>
       </button>
       {open && <EcosystemSheet onClose={() => setOpen(false)} />}
     </>
