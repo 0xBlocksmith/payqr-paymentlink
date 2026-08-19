@@ -8,6 +8,7 @@ import { ThemeButton } from "./ThemeButton";
 import { InstallButton } from "./InstallButton";
 import { DisputeButton } from "./DisputeButton";
 import { SideMenu } from "./SideMenu";
+import { EcosystemButton } from "./EcosystemPanel";
 import { Icon, Logo } from "./Icons";
 
 export function Nav({ center = null, back = false, backHref = "/dashboard", menu = true }) {
@@ -36,6 +37,7 @@ export function Nav({ center = null, back = false, backHref = "/dashboard", menu
       </Link>
       {center && <div className="nav-center">{center}</div>}
       <div className="nav-right">
+        <EcosystemButton />
         <InstallButton />
         <DisputeButton />
         <ThemeButton />

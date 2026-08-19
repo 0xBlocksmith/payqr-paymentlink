@@ -14,6 +14,7 @@ import { SettlementPromo } from "../../components/SettlementBanner";
 import { CampaignPromo } from "../../components/CampaignBanner";
 import { PromoCarousel } from "../../components/PromoCarousel";
 import { WalletSheet } from "../../components/WalletSheet";
+import { EcosystemCard } from "../../components/EcosystemPanel";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc } from "../../lib/contract";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
@@ -293,6 +294,10 @@ export default function Dashboard() {
             actually need to notice. Shown upfront, before the merchant's first
             order, not only discovered after money is already locked. */}
         <SettlementPromo country={country} />
+
+        {/* P2P ecosystem — this terminal runs on the P2P protocol; surface the
+            wider app store so merchants can discover the other apps. */}
+        <EcosystemCard />
 
 
         {/* stuck sale — waiting too long for a payment partner. Offer a new sale
