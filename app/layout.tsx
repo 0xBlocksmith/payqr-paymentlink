@@ -19,7 +19,11 @@ export const metadata = {
   appleWebApp: { capable: true, statusBarStyle: "default", title: "PayQR" },
   icons: { icon: "/icon-192.png", apple: "/icon-192.png" },
   // Modern replacement for the deprecated apple-mobile-web-app-capable meta.
-  other: { "mobile-web-app-capable": "yes" },
+  // "base:app_id" verifies domain ownership for the Base App ecosystem listing.
+  other: {
+    "mobile-web-app-capable": "yes",
+    "base:app_id": "6a86bdd9abf0a9eb2b3c7555",
+  },
 };
 
 export const viewport = {
