@@ -713,13 +713,12 @@ p.muted { color: var(--muted); font-size: 14px; }
 .tour-next:hover { background: var(--accent-dark); }
 
 
-/* ── Nav centered tour pill ───────────────────────────── */
+/* ── Nav tour pill ────────────────────────────────────── */
+/* Lives in the .nav-right cluster (see Nav.tsx) — no absolute centering, so it
+   can't drift into the ecosystem button as that cluster grows. */
 .nav { position: relative; }
-.nav-center {
-  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
-  z-index: 1;
-}
 .tour-pill {
+  flex: none;
   display: inline-flex; align-items: center; gap: 7px;
   background: var(--accent-soft); color: var(--accent-dark);
   border: 1px solid var(--accent-100); border-radius: 999px;
@@ -739,7 +738,8 @@ p.muted { color: var(--muted); font-size: 14px; }
 @media (max-width: 560px) {
   .nav { gap: 8px; padding: 10px 12px; }
   .nav-right { gap: 6px; }
-  /* center pill: icon-only so it doesn't collide with brand/right cluster */
+  /* icon-only on narrow screens — a space thing now, not a collision thing:
+     the pill is in-flow, so this is purely to keep the cluster from wrapping. */
   .tour-pill span { display: none; }
   .tour-pill { padding: 9px; }
   /* shrink the icon buttons a touch */

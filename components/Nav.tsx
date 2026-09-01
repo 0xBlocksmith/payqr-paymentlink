@@ -11,7 +11,7 @@ import { SideMenu } from "./SideMenu";
 import { EcosystemButton } from "./EcosystemPanel";
 import { Icon, Logo } from "./Icons";
 
-export function Nav({ center = null, back = false, backHref = "/dashboard", menu = true }) {
+export function Nav({ action = null, back = false, backHref = "/dashboard", menu = true }) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   return (
@@ -35,8 +35,15 @@ export function Nav({ center = null, back = false, backHref = "/dashboard", menu
       <Link href="/dashboard" className="brand" aria-label="PayQR">
         <Logo size={24} className="brand-mark" />
       </Link>
-      {center && <div className="nav-center">{center}</div>}
+      {/* `action` (the "How it works" pill) rides in the RIGHT cluster, not a
+          separately-centered absolute box: pinned to the viewport's 50% it kept
+          its own position while the icon cluster grew from the right, so at some
+          widths the pill and the ecosystem button ended up flush against each
+          other with no gap. In-flow it sits next to the store icon and inherits
+          the cluster's gap at every width. (Was `center` — renamed, since it no
+          longer centers anything.) */}
       <div className="nav-right">
+        {action}
         <EcosystemButton />
         <InstallButton />
         <DisputeButton />

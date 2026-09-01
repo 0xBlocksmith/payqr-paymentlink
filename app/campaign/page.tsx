@@ -9,11 +9,17 @@ import { loadCountry, fmtFiat } from "../../lib/countries";
 import { fetchUsdcRate } from "../../lib/rates";
 import { useT } from "../../lib/i18n";
 
-// Challenge window: Sep 1–15, 2026, inclusive. Only successful (settled)
-// orders PLACED in this window count — nothing from before Sep 1 carries
-// over into the $500 goal.
-const WINDOW_START = new Date("2026-09-01T00:00:00Z").getTime();
-const WINDOW_END = new Date("2026-09-16T00:00:00Z").getTime(); // exclusive upper bound
+// Challenge window: Sep 1–15, 2026, inclusive, in the MERCHANT'S LOCAL TIME.
+// Only successful (settled) orders PLACED in this window count — nothing from
+// before Sep 1 carries over into the $500 goal.
+//
+// Local, not UTC: the window has to line up with the shopkeeper's trading days.
+// Anchored to UTC midnight it opened at 05:30 on Sep 1 for a merchant in IST
+// (and, worse, closed mid-morning on the 15th), so a full first and last day of
+// real sales fell outside the window. `new Date(y, m, d)` builds LOCAL midnight,
+// which is exactly the boundary a merchant means by "the 1st to the 15th".
+const WINDOW_START = new Date(2026, 8, 1).getTime();        // Sep 1, 00:00 local
+const WINDOW_END = new Date(2026, 8, 16).getTime();         // Sep 16, 00:00 local — exclusive
 const GOAL_USDC = 500;
 const REWARD_USDC = 5;
 

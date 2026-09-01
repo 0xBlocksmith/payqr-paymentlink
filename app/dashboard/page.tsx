@@ -210,7 +210,7 @@ export default function Dashboard() {
   return (
     <>
       <Nav
-        center={
+        action={
           <button className="tour-pill" onClick={() => setTourForce(true)}>
             <Icon.Bulb />
             <span>How it works</span>
