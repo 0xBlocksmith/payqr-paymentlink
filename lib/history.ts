@@ -1,7 +1,9 @@
 // Merchant transaction history straight from the p2p.me subgraph — no backend
-// database. The subgraph indexes every on-chain order; we query the ones placed
-// by this merchant (userAddress). Balances/locks still come live from the
-// contract; this is purely the historical list for the Transactions page.
+// database. The subgraph indexes every on-chain order across the WHOLE p2p
+// protocol, so every query here is scoped to PayQR's own integrator as well as
+// to this merchant — a merchant who also uses other P2P ecosystem apps must not
+// see those orders here. Balances/locks still come live from the contract; this
+// is purely the historical list for the Transactions page.
 
 import { keccak256, stringToBytes, isAddress } from "viem";
 import { SUBGRAPH_URL } from "./p2p";
@@ -10,10 +12,62 @@ import { CONTRACT_ADDRESS } from "./contract";
 const ST = { 0: "matching", 1: "matching", 2: "matching", 3: "settled", 4: "cancelled" };
 
 /**
+ * Fetch the orderIds this merchant placed THROUGH PAYQR'S OWN INTEGRATOR.
+ *
+ * `orders_collection` is protocol-wide and carries NO integrator field (unlike
+ * `b2Borders`), so filtering it by `userAddress` alone returns every order the
+ * address ever placed on the p2p protocol — including ones from the OTHER P2P
+ * ecosystem apps the merchant may have used. Live data confirms this: the same
+ * user address appears under several different integrator ids, and orderIds are
+ * a single protocol-wide sequence.
+ *
+ * `b2Borders` DOES carry `integrator` and shares the same orderId space, so it
+ * is the scoping index: the PayQR ramps are exactly the orderIds that appear in
+ * b2Borders under CONTRACT_ADDRESS for this user. orderType 0 = BUY (an incoming
+ * payment / ramp); orderType 1 = the fiat SELL leg handled by fetchWithdrawals.
+ *
+ * Returns null when scoping can't be established (no configured integrator), so
+ * callers can distinguish "not scopeable" from "scoped to zero orders".
+ */
+async function fetchPayqrOrderIds(address): Promise<string[] | null> {
+  if (!CONTRACT_ADDRESS) return null;
+  const query = `query($user: String!, $integrator: String!) {
+    b2Borders(
+      first: 200,
+      where: { user: $user, orderType: 0, integrator: $integrator },
+      orderBy: blockTimestamp,
+      orderDirection: desc
+    ) {
+      orderId
+    }
+  }`;
+  const res = await fetch(SUBGRAPH_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query,
+      variables: { user: address.toLowerCase(), integrator: CONTRACT_ADDRESS.toLowerCase() },
+    }),
+    cache: "no-store",
+  });
+  const data = await res.json();
+  // Same rule as everywhere else here: a 200-with-errors must not read as an
+  // empty scope, which would silently blank the merchant's whole history.
+  if (data?.errors) {
+    console.error("subgraph error (fetchPayqrOrderIds):", data.errors);
+    throw new Error("Subgraph returned an error.");
+  }
+  return (data?.data?.b2Borders || []).map((o) => String(o.orderId));
+}
+
+/**
  * Fetch a merchant's orders from the subgraph.
  * Returns rows shaped for the Transactions page:
  *   { orderId, amount (raw 6-dec string), status, txHash, createdAt(ms), placedAt }
  * status: 'matching' | 'settled' | 'cancelled'  (the page maps these to badges)
+ *
+ * SCOPED TO PAYQR: only orders placed through this app's integrator are
+ * returned — see fetchPayqrOrderIds for why userAddress alone isn't enough.
  */
 export async function fetchHistory(address) {
   // Only a well-formed 0x address may reach the query — mirrors the ^\d+$ guard
@@ -21,10 +75,28 @@ export async function fetchHistory(address) {
   // string-interpolated), so it is structurally incapable of altering the query
   // even if a future caller reached this without the regex (defense-in-depth).
   if (!address || !isAddress(address)) return [];
-  const query = `query($user: String!) {
+
+  // Establish the PayQR-only scope first: the set of orderIds this merchant
+  // placed through OUR integrator. Everything else the address did elsewhere on
+  // the protocol (other P2P ecosystem apps) is excluded by construction.
+  let ids;
+  try {
+    ids = await fetchPayqrOrderIds(address);
+  } catch {
+    // Scope lookup failed — surface it rather than falling back to the
+    // unscoped query, which would leak other integrators' orders into this
+    // merchant's history.
+    throw new Error("Couldn't reach the transaction index.");
+  }
+  // No integrator configured ⇒ we cannot prove any order is ours. Return empty
+  // rather than showing the whole protocol's traffic as this merchant's.
+  if (ids === null) return [];
+  if (ids.length === 0) return [];
+
+  const query = `query($user: String!, $ids: [String!]) {
     orders_collection(
       first: 50,
-      where: { userAddress: $user },
+      where: { userAddress: $user, orderId_in: $ids },
       orderBy: orderId,
       orderDirection: desc
     ) {
@@ -42,7 +114,7 @@ export async function fetchHistory(address) {
     const res = await fetch(SUBGRAPH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables: { user: address.toLowerCase() } }),
+      body: JSON.stringify({ query, variables: { user: address.toLowerCase(), ids } }),
       cache: "no-store",
     });
     data = await res.json();
