@@ -11,6 +11,7 @@ import { Icon } from "../../components/Icons";
 import { AppTour } from "../../components/AppTour";
 import { ConnectionBanner } from "../../components/ConnectionBanner";
 import { SettlementPromo } from "../../components/SettlementBanner";
+import { CampaignPromo } from "../../components/CampaignBanner";
 import { PromoCarousel } from "../../components/PromoCarousel";
 import { WalletSheet } from "../../components/WalletSheet";
 import { EcosystemPromo } from "../../components/EcosystemPanel";
@@ -272,10 +273,12 @@ export default function Dashboard() {
           </Link>
         </div>
 
-        {/* promo carousel — swipe left/right between slides. Ecosystem promo
-            is 1st, the original dark promo is 2nd; both share the same
-            dark-gradient card so the swipe reads as one continuous banner. */}
+        {/* promo carousel — swipe left/right between slides. Volume-challenge
+            campaign is 1st, ecosystem promo 2nd, the original dark promo 3rd;
+            all share the same dark-gradient card so the swipe reads as one
+            continuous banner. */}
         <PromoCarousel>
+          <CampaignPromo />
           <EcosystemPromo />
           <div className="promo">
             <div className="promo-tag">BUILT FOR LOCAL BUSINESS</div>

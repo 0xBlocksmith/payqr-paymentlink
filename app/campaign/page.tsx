@@ -9,11 +9,11 @@ import { loadCountry, fmtFiat } from "../../lib/countries";
 import { fetchUsdcRate } from "../../lib/rates";
 import { useT } from "../../lib/i18n";
 
-// Challenge window: Aug 10–17, 2026, inclusive. Only successful (settled)
-// orders PLACED in this window count — nothing from before Aug 10 carries
+// Challenge window: Sep 1–15, 2026, inclusive. Only successful (settled)
+// orders PLACED in this window count — nothing from before Sep 1 carries
 // over into the $500 goal.
-const WINDOW_START = new Date("2026-08-10T00:00:00Z").getTime();
-const WINDOW_END = new Date("2026-08-18T00:00:00Z").getTime(); // exclusive upper bound
+const WINDOW_START = new Date("2026-09-01T00:00:00Z").getTime();
+const WINDOW_END = new Date("2026-09-16T00:00:00Z").getTime(); // exclusive upper bound
 const GOAL_USDC = 500;
 const REWARD_USDC = 5;
 
