@@ -654,15 +654,15 @@ export default function PosQr() {
           </div>
         )}
 
-        {/* Friendly message when the QR can't be created (no LP available) */}
+        {/* Friendly message when the payment can't start. payError is whatever
+            friendlyError() produced — for SDK-classified failures (fraud-engine
+            screening rejections, no-eligible-merchant routing, etc.) that's now
+            the SDK's own specific reason, not a generic guess, so show it as the
+            primary explanation instead of assuming "no merchant online". */}
         {payError && !liveWidget && !done && (
           <div className="panel" style={{ textAlign: "center" }}>
             <h2>Couldn’t start this payment</h2>
-            <p className="muted" style={{ margin: "8px 0 4px" }}>
-              No payment partner is available right now to process this sale. This
-              is usually temporary — please try again in a moment.
-            </p>
-            <p className="tiny" style={{ color: "var(--muted)", marginBottom: 14 }}>{payError}</p>
+            <p className="muted" style={{ margin: "8px 0 14px" }}>{payError}</p>
             <button className="btn" style={{ width: "100%" }}
               onClick={() => { setPayError(""); }}>
               Try again
