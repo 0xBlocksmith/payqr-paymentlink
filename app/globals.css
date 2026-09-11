@@ -1862,6 +1862,17 @@ h1 { font-size: 22px; }
 }
 .sm-foot { text-align: center; font-size: 11px; color: var(--faint); margin-top: 12px; }
 
+/* ── Dispute/support order picker (header launcher) ───── */
+.dispute-picker { width: 92%; max-width: 380px; }
+.dispute-picker-list { display: flex; flex-direction: column; gap: 10px; padding: 12px 0; overflow-y: auto; }
+.dispute-picker-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 12px; border-radius: 14px; border: var(--border-w) solid var(--border);
+}
+.dispute-picker-row-info { display: flex; flex-direction: column; gap: 2px; }
+.dispute-picker-order { font-size: 14px; font-weight: 700; color: var(--text); }
+.dispute-picker-amt { font-size: 12px; color: var(--muted); }
+
 /* ── Login (p2p.me style — centered card, globe illustration) ── */
 .login-screen {
   min-height: 100vh; display: flex; align-items: center; justify-content: center;
