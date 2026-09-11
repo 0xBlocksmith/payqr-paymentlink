@@ -284,9 +284,21 @@ export function isUserCancel(e: any): boolean {
 
 /** Extract the friendly message for a contract revert, or a sensible fallback.
  *  A user-cancel is surfaced as a short "Cancelled." rather than a raw wallet
- *  string (so declining a MetaMask/thirdweb prompt never shows scary text). */
+ *  string (so declining a MetaMask/thirdweb prompt never shows scary text).
+ *
+ *  The @p2pdotme/widgets SDK classifies its own failures (fraud-engine
+ *  screening rejections, no-eligible-merchant routing, encryption errors,
+ *  etc.) into a `P2PError` with a purpose-built `userMessage` and `code`
+ *  BEFORE it ever reaches us — that's the real diagnosis (e.g. "fraud engine
+ *  blocked this order", not "no merchant online"). Since a P2PError has no
+ *  Solidity errorName/errorSignature, it always used to fall through to
+ *  `fallback` below, hiding the SDK's actual reason from the user. Surface
+ *  it first. */
 export function friendlyError(e: any, fallback = "Something went wrong. Please try again."): string {
   if (isUserCancel(e)) return "Cancelled.";
+  if (e?.name === "P2PError" && typeof e.userMessage === "string" && e.userMessage) {
+    return e.userMessage;
+  }
   let name = "";
   let signature = "";
   try {
