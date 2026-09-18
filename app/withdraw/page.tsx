@@ -12,7 +12,7 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc, currencyFromBytes32, friendl
 import { USDC_ADDRESS } from "../../lib/p2p";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
-import { loadCountry, fmtFiat, fmtSymbolCode, COUNTRIES } from "../../lib/countries";
+import { loadCountry, fmtFiat, fmtSymbolCode, COUNTRIES, flagUrlForCode } from "../../lib/countries";
 import { buildUsdcWithdraw, buildUsdcTransfer } from "../../lib/withdraw";
 import { fetchCashoutFee } from "../../lib/pricing";
 import { fetchWithdrawals } from "../../lib/history";
@@ -37,6 +37,13 @@ function fmtRemaining(secs) {
   const days = Math.max(1, Math.ceil(secs / 86400));
   return `${days} day${days === 1 ? "" : "s"}`;
 }
+
+// Fiat cash-out (the UPI / bank offramp, in local currency) is HIDDEN: the only
+// withdrawal offered is USDC to the merchant's wallet. Flip to true to bring the
+// local-currency destination back — the whole fiat path below (destination
+// chooser, withdraw-currency picker, Cashout widget handoff, small-order fee
+// handling) is left intact, it just isn't rendered while this is false.
+const FIAT_WITHDRAW_ENABLED = false;
 
 export default function Withdraw() {
   const { ready, address, sendTransaction } = useMerchant();
@@ -76,7 +83,11 @@ export default function Withdraw() {
   // Which destination the merchant is withdrawing to: chosen FIRST, before any
   // currency/UPI UI is shown, so we don't ask USDC-bound questions about local
   // currency (and vice versa). null = not yet chosen.
-  const [destChoice, setDestChoice] = useState<null | "fiat" | "usdc">(null);
+  // With fiat hidden there is nothing to choose between, so the USDC path is
+  // pre-selected and the chooser (and its back button) never render.
+  const [destChoice, setDestChoice] = useState<null | "fiat" | "usdc">(
+    FIAT_WITHDRAW_ENABLED ? null : "usdc"
+  );
 
   useEffect(() => { const c = loadCountry(); setCountry(c); setWdCode(c.code); }, []);
 
@@ -268,11 +279,7 @@ export default function Withdraw() {
   const maxFiat = rate ? maxFiatUsdc * rate.rate : null;
 
   // withdraw-currency helpers
-  const CC = { india: "in", brazil: "br", argentina: "ar" };
-  const flagOf = (code) => {
-    const c = COUNTRIES.find((x) => x.code === code);
-    return `https://flagcdn.com/w40/${CC[c?.id] || "un"}.png`;
-  };
+  const flagOf = flagUrlForCode;
   const wdCountry = COUNTRIES.find((c) => c.code === wdCode) || country;
   // "Home" = withdrawing in the merchant's REGISTERED currency (the one the
   // contract pins the SELL to). Derived from the on-chain currency, not the UI
@@ -588,7 +595,7 @@ export default function Withdraw() {
         {/* STEP 1 — ask WHERE first: local currency (bank/UPI) or USDC wallet.
             Nothing currency- or UPI-specific is shown until this is answered,
             so a USDC withdrawal never has to wade through fiat/UPI fields. */}
-        {!destChoice && (
+        {FIAT_WITHDRAW_ENABLED && !destChoice && (
           <div className="wd-dest-bar">
             <div className="wd-dest-head">{t("wd.chooseDest")}</div>
             <button className="wd-dest-btn"
@@ -616,7 +623,7 @@ export default function Withdraw() {
 
         {/* STEP 2, fiat path — amount, withdraw currency, and UPI/payout fields.
             Only ever shown after "Send to my UPI/bank" is chosen. */}
-        {destChoice === "fiat" && (
+        {FIAT_WITHDRAW_ENABLED && destChoice === "fiat" && (
           <>
             <button className="wallet-back" onClick={() => setDestChoice(null)}>
               <Icon.Back width="16" height="16" /> {t("wd.sendToBank")} {wdCountry?.fiat}
@@ -711,12 +718,18 @@ export default function Withdraw() {
             connected wallet, confirmed in the next step. No fiat/UPI fields at all. */}
         {destChoice === "usdc" && (
           <>
-            <button className="wallet-back" onClick={() => setDestChoice(null)}>
-              <Icon.Back width="16" height="16" /> {t("wd.usdcTitle")}
-            </button>
+            {FIAT_WITHDRAW_ENABLED ? (
+              <button className="wallet-back" onClick={() => setDestChoice(null)}>
+                <Icon.Back width="16" height="16" /> {t("wd.usdcTitle")}
+              </button>
+            ) : (
+              /* No chooser to go back to when fiat is hidden — keep the title as
+                 a plain heading so the form still says what it does. */
+              <div className="wd-dest-head">{t("wd.usdcTitle")}</div>
+            )}
 
             <div className="wd-card">
-              <label className="wd-label">{t("wd.amount")} (USDC)</label>
+              <label className="wd-label">Withdraw to wallet</label>
               <div className="wd-amt-row">
                 <div className="wd-fiat-input" style={{ display: "flex", alignItems: "center", flex: 1, gap: 6 }}>
                   <input className="input" type="number" min="0" step="0.01"
