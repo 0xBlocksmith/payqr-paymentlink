@@ -12,7 +12,7 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc, currencyFromBytes32, friendl
 import { USDC_ADDRESS } from "../../lib/p2p";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
-import { loadCountry, fmtFiat, fmtSymbolCode, COUNTRIES, flagUrlForCode } from "../../lib/countries";
+import { loadCountry, fmtFiat, fmtSymbolCode, COUNTRIES } from "../../lib/countries";
 import { buildUsdcWithdraw, buildUsdcTransfer } from "../../lib/withdraw";
 import { fetchCashoutFee } from "../../lib/pricing";
 import { fetchWithdrawals } from "../../lib/history";
@@ -279,7 +279,11 @@ export default function Withdraw() {
   const maxFiat = rate ? maxFiatUsdc * rate.rate : null;
 
   // withdraw-currency helpers
-  const flagOf = flagUrlForCode;
+  const CC = { india: "in", brazil: "br", argentina: "ar" };
+  const flagOf = (code) => {
+    const c = COUNTRIES.find((x) => x.code === code);
+    return `https://flagcdn.com/w40/${CC[c?.id] || "un"}.png`;
+  };
   const wdCountry = COUNTRIES.find((c) => c.code === wdCode) || country;
   // "Home" = withdrawing in the merchant's REGISTERED currency (the one the
   // contract pins the SELL to). Derived from the on-chain currency, not the UI
