@@ -1,0 +1,211 @@
+/**
+ * p2p.me widget integration helpers.
+ *
+ * The merchant terminal places orders through the official @p2pdotme/widgets
+ * <Checkout> component, which (a) generates and persists a "relay identity"
+ * (the user pubkey used to encrypt UPI details) and (b) auto-resolves the
+ * INR circleId via the subgraph. Our placeOrder callback then encodes a call
+ * to OUR integrator's 6-arg userPlaceOrder.
+ *
+ * Docs: github.com/p2pdotme/widgets
+ */
+import { encodeFunctionData, stringToHex } from "viem";
+import { INTEGRATOR_ABI, CONTRACT_ADDRESS, CLIENT_ADDRESS, PRODUCT_ID } from "./contract";
+
+// The team's Base Sepolia subgraph — enables automatic circle selection.
+export const SUBGRAPH_URL =
+  process.env.NEXT_PUBLIC_SUBGRAPH_URL ||
+  "https://api.studio.thegraph.com/query/1745491/event-indexer/v0.0.6";
+
+export const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS || "";
+export const DIAMOND_ADDRESS = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS || "";
+
+// INR via UPI, circleId omitted → resolved by the widget through the subgraph.
+export const CURRENCIES = [{ symbol: "INR", flag: "🇮🇳", paymentMethod: "UPI", symbolNative: "₹" }];
+
+// B2B fraud screening (see @p2pdotme/widgets README § "Fraud screening (B2B)").
+// undefined when unconfigured, so <Checkout screening={...}> cleanly falls
+// back to its no-screening path instead of hitting the fraud engine with
+// empty credentials.
+const FRAUD_ENGINE_API_URL = process.env.NEXT_PUBLIC_FRAUD_ENGINE_API_URL || "";
+const FRAUD_ENGINE_ENCRYPTION_KEY = process.env.NEXT_PUBLIC_FRAUD_ENGINE_ENCRYPTION_KEY || "";
+export const SCREENING_CONFIG =
+  FRAUD_ENGINE_API_URL && FRAUD_ENGINE_ENCRYPTION_KEY
+    ? {
+        apiUrl: FRAUD_ENGINE_API_URL,
+        encryptionKey: FRAUD_ENGINE_ENCRYPTION_KEY,
+        orderSource: process.env.NEXT_PUBLIC_FRAUD_ENGINE_ORDER_SOURCE || undefined,
+      }
+    : undefined;
+
+// Per-order dispute support (see @p2pdotme/widgets/support). The bridge URL is
+// p2p.me-hosted infra provisioned per integrator — unset in steady state until
+// p2p.me hands it over, so the Dispute Manager UI stays dormant (no bridge
+// calls) rather than pointing at nothing.
+export const SUPPORT_BRIDGE_URL = process.env.NEXT_PUBLIC_SUPPORT_BRIDGE_URL || "";
+// Display label only (shown in the support modal's privacy notice) — NOT a
+// routing key. Routing is derived from the on-chain order's circle/integrator.
+export const SUPPORT_ORIGIN_APP = "PayQR";
+
+// ── Generic currency ⇄ bytes32 (no per-country hardcoding) ──────────
+// The subgraph stores a currency as a left-aligned bytes32 of the ASCII code.
+// e.g. "INR" → 0x494e52…00 , "BRL" → 0x42524c…00.
+export function codeToHex(code: string): string {
+  // Normalize to at most 32 ASCII uppercase letters BEFORE encoding: a non-ASCII
+  // char (charCodeAt > 255) would emit >2 hex digits and corrupt the bytes32
+  // filter, and an overlong code would overflow 32 bytes. Currency codes are
+  // A–Z only, so this is lossless for real input and safe for any future caller.
+  const safe = String(code || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 32);
+  let hex = "0x";
+  for (let i = 0; i < 32; i++) {
+    const ch = i < safe.length ? safe.charCodeAt(i) : 0;
+    hex += ch.toString(16).padStart(2, "0");
+  }
+  return hex.toLowerCase();
+}
+export function hexToCode(hex: string): string {
+  const h = hex.replace(/^0x/, "");
+  let out = "";
+  for (let i = 0; i < h.length; i += 2) {
+    const b = parseInt(h.slice(i, i + 2), 16);
+    if (b === 0) break;
+    out += String.fromCharCode(b);
+  }
+  return out;
+}
+
+let _circlesCache: { at: number; rows: { circleId: bigint; code: string }[] } | null = null;
+
+/**
+ * GENERIC: fetch every currency the protocol can settle, straight from the live
+ * "circles" on the subgraph. This is the single source of truth — whatever the
+ * protocol funds appears here automatically, with NO per-country code. Cached
+ * 60s. Returns [{ circleId, code }] e.g. [{1,"INR"},{2,"BRL"}, …future…].
+ */
+export async function fetchSupportedCurrencies(): Promise<{ circleId: bigint; code: string }[]> {
+  if (_circlesCache && Date.now() - _circlesCache.at < 60_000) return _circlesCache.rows;
+  try {
+    const res = await fetch(SUBGRAPH_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: `{ circles(first: 100) { circleId currency } }` }),
+    });
+    const json = await res.json();
+    const rows = (json.data?.circles || [])
+      .map((c: any) => ({ circleId: BigInt(c.circleId), code: hexToCode(c.currency) }))
+      .filter((r: any) => r.code.length > 0);
+    _circlesCache = { at: Date.now(), rows };
+    return rows;
+  } catch {
+    // offline fallback — the known-live circles so the UI still works
+    return [{ circleId: 1n, code: "INR" }, { circleId: 2n, code: "BRL" }];
+  }
+}
+
+/**
+ * GENERIC: resolve the circle id for ANY currency code. Returns null if the
+ * protocol has no funded circle for it (→ the UI hides/disables that currency).
+ */
+export async function resolveCircleId(code: string): Promise<bigint | null> {
+  const list = await fetchSupportedCurrencies();
+  return list.find((c) => c.code === code)?.circleId ?? null;
+}
+
+/**
+ * Build the placeOrder callback the widget invokes once it has resolved the
+ * circleId and the relay identity (pubkey). We encode OUR 6-arg userPlaceOrder
+ * — the integrator forwards (currency, circleId, pubKey) to the Diamond and
+ * passes its own 0,0 for preferredPaymentChannelConfigId / fiatAmountLimit.
+ *
+ * @param signer        CheckoutSigner (thirdweb smart-account adapter)
+ * @param publicClient  viem public client for receipt parsing
+ * @param quantity      bigint product-2 units (USDC cents)
+ * @param getIdentity   async () => RelayIdentity ({ publicKey })
+ */
+export function makePlaceOrder({ signer, publicClient, quantity, getIdentity }) {
+  return async (ctx) => {
+    const circleId = ctx?.currency?.circleId;
+    if (circleId === undefined || circleId === null) {
+      throw new Error("No circle resolved for INR — check subgraphUrl/usdcAmount");
+    }
+
+    const identity = await getIdentity();
+    if (!identity?.publicKey) throw new Error("relay identity missing");
+
+    const data = encodeFunctionData({
+      abi: INTEGRATOR_ABI,
+      functionName: "userPlaceOrder",
+      args: [
+        CLIENT_ADDRESS,
+        PRODUCT_ID,
+        quantity,
+        stringToHex(ctx.currency.symbol, { size: 32 }),
+        BigInt(circleId),
+        identity.publicKey, // 128-char hex, no prefix (BUY path — already works, #307/#309)
+      ],
+    });
+
+    const { hash } = await signer.sendTransaction({
+      to: CONTRACT_ADDRESS,
+      data,
+      gasLimit: 1_500_000,
+    });
+
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status === "reverted") throw new Error("order tx reverted");
+
+    // Decode the orderId from OUR OrderPlaced event (Diamond also emits
+    // B2BOrderPlaced; either resolves the id — we use ours since it's in the ABI).
+    let orderId = null;
+    for (const log of receipt.logs) {
+      try {
+        const { decodeEventLog } = await import("viem");
+        const ev: any = decodeEventLog({ abi: INTEGRATOR_ABI, data: log.data, topics: log.topics });
+        if (ev.eventName === "OrderPlaced") {
+          orderId = ev.args.orderId.toString();
+          break;
+        }
+      } catch {
+        // not our event — skip
+      }
+    }
+    if (!orderId) throw new Error("orderId missing from receipt");
+
+    return { orderId, txHash: hash };
+  };
+}
+
+// ── Pending-order persistence ──────────────────────────────────────
+// A merchant who closes the checkout dialog after the order lands on-chain
+// (but before it completes) would otherwise lose the orderId — the sale sits
+// pending forever with no way to get back to it. We stash the minimal info
+// needed to reopen <Checkout orderId={...}> in tracking-only mode, and clear
+// it once the widget reports the order finished (complete/cancel/error).
+const PENDING_KEY = "payqr.pendingOrder";
+
+export type PendingOrder = {
+  orderId: string;
+  fiat: number;
+  usdc: number;
+  countryId: string;
+  shopLabel: string;
+  savedAt: number;
+};
+
+export function savePendingOrder(order: PendingOrder): void {
+  try { localStorage.setItem(PENDING_KEY, JSON.stringify(order)); } catch {}
+}
+
+export function loadPendingOrder(): PendingOrder | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function clearPendingOrder(): void {
+  try { localStorage.removeItem(PENDING_KEY); } catch {}
+}
