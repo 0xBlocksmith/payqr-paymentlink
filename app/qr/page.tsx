@@ -16,7 +16,7 @@ import { loadPendingOrder, savePendingOrder, clearPendingOrder } from "../../lib
 import { fetchOrder, receiptToken } from "../../lib/history";
 import type { PendingOrder } from "../../lib/p2p";
 import { useT } from "../../lib/i18n";
-import { ACTIVE_CHAIN } from "../../lib/chain";
+import { EXPLORER_URL } from "../../lib/chain";
 import { decryptPayout } from "../../lib/payoutCrypto";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
 import dynamic from "next/dynamic";
@@ -39,7 +39,7 @@ function maskHandle(h: string): string {
 }
 
 const INTEGRATOR = CONTRACT_ADDRESS;
-const SCAN = ACTIVE_CHAIN.blockExplorers?.default.url ?? "https://basescan.org";
+const SCAN = EXPLORER_URL;
 
 const CheckoutWidget = dynamic(
   () => import("../../components/CheckoutWidget").then((m) => m.CheckoutWidget),

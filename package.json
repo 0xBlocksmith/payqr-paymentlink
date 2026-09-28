@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node --max-old-space-size=3072 node_modules/next/dist/bin/next dev -H 0.0.0.0",
-    "build": "next build",
+    "build": "node --max-old-space-size=4096 node_modules/next/dist/bin/next build",
     "start": "next start",
     "typecheck": "tsc --noEmit"
   },

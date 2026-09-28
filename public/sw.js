@@ -7,7 +7,7 @@
    SKIP_WAITING when the merchant taps Refresh). This means a code push can't
    swap out the running app mid-sale — the merchant chooses when to apply it.
    Bump CACHE on every release so the activate step purges the old shell. */
-const CACHE = "payqr-v9";
+const CACHE = "payqr-v12";
 // Precache ONLY immutable static assets — NEVER HTML navigations. HTML embeds
 // hashed _next/static/chunks/* URLs; a precached OLD "/" or "/dashboard" served
 // after a deploy would <script src> chunk URLs that no longer exist on the
@@ -63,3 +63,4 @@ self.addEventListener("fetch", (e) => {
       )
   );
 });
+

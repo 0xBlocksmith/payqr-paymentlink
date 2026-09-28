@@ -201,3 +201,23 @@ export function usdcForUsdcTarget(targetUsdc: number, cfg: PriceConfig): bigint 
   if (usdc <= 0n) return 0n;
   return usdc;
 }
+
+/**
+ * usdcForFiat's inverse: what fiat a customer actually pays for a link whose
+ * on-chain `amount` (6-dec USDC-equivalent, as stored by createLink) is
+ * `usdcAmount`.
+ *
+ * A payment-link amount is written ONCE at creation time from a fiat quote
+ * (usdcForFiat), so displaying it back requires re-deriving the fiat the same
+ * way the widget will charge it: totalFiat = (usdcAmount + fee) * buyPrice /
+ * 1e6, fee applying only when usdcAmount is at/under the threshold — mirrors
+ * this file's header comment exactly, just run in the other direction.
+ * Returns null if the amount can't be priced right now (Diamond unreachable),
+ * so callers can show a loading/placeholder state instead of a wrong number.
+ */
+export function fiatForUsdc(usdcAmount: bigint, cfg: PriceConfig): number {
+  const { buyPrice, smallOrderThreshold, smallOrderFixedFee } = cfg;
+  const feeUsdc = usdcAmount <= smallOrderThreshold ? smallOrderFixedFee : 0n;
+  const totalFiat6 = (usdcAmount + feeUsdc) * buyPrice / 1_000_000n;
+  return Number(totalFiat6) / 1e6;
+}

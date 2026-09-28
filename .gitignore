@@ -19,4 +19,5 @@ _*.mjs
 .vscode/
 .DS_Store
 *.log
+*.pid
 .claude/
