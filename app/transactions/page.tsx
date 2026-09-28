@@ -18,6 +18,7 @@ import { STATIC_STALE_MS } from "../../lib/cache";
 import { decryptPayout } from "../../lib/payoutCrypto";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
 import { useDisputeOrderStates, OrderDisputeManager, useSupportSigner } from "../../components/OrderDisputeManager";
+import { useMerchantProxies } from "../../components/useMerchantProxies";
 
 // Partially hide a payout handle for a SHAREABLE receipt: keep the first 2 chars
 // and everything from "@"/domain, mask the middle. e.g. "sheldon@upi" → "sh•••@upi",
@@ -133,21 +134,25 @@ export default function Transactions() {
     return `/receipt/${tx.orderId}?${q.toString()}`;
   }, [rate, country, address, upiMasked]);
 
-  // The merchant's per-merchant proxy — fiat withdrawals (SELL orders) are
-  // indexed in the subgraph under THIS address, so we read it to fetch them.
-  const { data: proxyAddr } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "proxyAddress",
-    args: [address], query: { enabled: !!address },
-  });
+  // The merchant's per-merchant proxy. Two different things are indexed under
+  // it: fiat withdrawals (SELL orders), and — less obviously — every PAYMENT
+  // LINK sale, because `relayerPlaceOrder` records the proxy as the order's
+  // user where a POS sale records the merchant. So this address is needed for
+  // the payments query too, not only the withdrawals one.
+  // One proxy PER INTEGRATOR: an upgrade gives the merchant a new proxy, and
+  // link sales / withdrawals made before it are recorded under the old one.
+  const { proxies } = useMerchantProxies(address);
+  const proxyKey = (proxies ?? []).join(",");
 
   const refresh = useCallback(async () => {
-    if (!address) return;
+    if (!address || !proxies) return;
     try {
-      // Payments (BUY orders, keyed by merchant) + fiat withdrawals (SELL
-      // orders, keyed by the merchant's proxy). Merge into one timeline.
+      // Payments (BUY orders — keyed by the merchant for POS sales, by the
+      // proxy for payment-link sales) + fiat withdrawals (SELL orders, keyed by
+      // the proxy). Merge into one timeline.
       const [payments, withdrawals] = await Promise.all([
-        fetchHistory(address),
-        proxyAddr ? fetchWithdrawals(proxyAddr) : Promise.resolve([]),
+        fetchHistory(address, proxies),
+        proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([]),
       ]);
       const merged = [...payments.map((r) => ({ ...r, kind: "payment" })), ...withdrawals]
         .sort((a, b) => b.placedAt - a.placedAt);
@@ -162,7 +167,9 @@ export default function Transactions() {
       setLoadError(true);
     }
     finally { setLoaded(true); }
-  }, [address, proxyAddr]);
+    // proxyKey stands in for proxies: same content, stable identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, proxyKey]);
 
   useEffect(() => {
     refresh();

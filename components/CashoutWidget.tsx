@@ -8,7 +8,7 @@ import { useRelayIdentity } from "./useRelayIdentity";
 import { decryptPayout, PAYOUT_PLACEHOLDER } from "../lib/payoutCrypto";
 import { SUBGRAPH_URL, USDC_ADDRESS, DIAMOND_ADDRESS, resolveCircleId, codeToHex } from "../lib/p2p";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError } from "../lib/contract";
-import { ACTIVE_CHAIN } from "../lib/chain";
+import { ACTIVE_CHAIN, RPC_URL } from "../lib/chain";
 import { Icon } from "./Icons";
 
 /**
@@ -236,6 +236,7 @@ export function CashoutWidget({
         mode="inline"
         signer={signer as any}
         chainId={ACTIVE_CHAIN.id}
+        rpcUrl={RPC_URL || undefined}
         diamondAddress={(DIAMOND_ADDRESS || undefined) as `0x${string}`}
         usdcAddress={(USDC_ADDRESS || undefined) as `0x${string}`}
         subgraphUrl={SUBGRAPH_URL}

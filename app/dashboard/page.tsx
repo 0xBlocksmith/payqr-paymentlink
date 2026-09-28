@@ -11,7 +11,7 @@ import { Icon } from "../../components/Icons";
 import { AppTour } from "../../components/AppTour";
 import { ConnectionBanner } from "../../components/ConnectionBanner";
 import { SettlementPromo } from "../../components/SettlementBanner";
-import { CampaignPromo } from "../../components/CampaignBanner";
+import { CampaignPromo, campaignActive } from "../../components/CampaignBanner";
 import { PromoCarousel } from "../../components/PromoCarousel";
 import { WalletSheet } from "../../components/WalletSheet";
 import { EcosystemPromo } from "../../components/EcosystemPanel";
@@ -21,6 +21,8 @@ import { fetchUsdcRate } from "../../lib/rates";
 import { fetchHistory } from "../../lib/history";
 import { loadCountry, fmtFiat } from "../../lib/countries";
 import { useT } from "../../lib/i18n";
+import { usePrevBalances } from "../../components/usePrevBalances";
+import { useMerchantProxies } from "../../components/useMerchantProxies";
 
 function timeAgo(iso) {
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -37,7 +39,10 @@ function isToday(iso) {
 export default function Dashboard() {
   const router = useRouter();
   const { t } = useT();
-  const { ready, authenticated, address } = useMerchant();
+  const { ready, authenticated, address, isRegistered } = useMerchant();
+  // Every integrator's proxy: link sales, and history from before a contract
+  // upgrade, are recorded under them rather than under the merchant.
+  const { proxies } = useMerchantProxies(address);
   const [country, setCountry] = useState(null);
   const [rate, setRate] = useState(null);
   const [rows, setRows] = useState([]);
@@ -53,20 +58,13 @@ export default function Dashboard() {
 
   // Registration is checked lazily: the dashboard opens for everyone, and we
   // route to /onboarding only when the merchant tries to accept a payment.
-  const { data: isRegistered, isLoading: regLoading } = useReadContract({
-    address: CONTRACT_ADDRESS,
-    abi: INTEGRATOR_ABI,
-    functionName: "registered",
-    // Registration doesn't change during a session — cache it so it isn't
-    // re-read from RPC on every dashboard mount.
-    args: [address],
-    query: { enabled: !!address, staleTime: STATIC_STALE_MS },
-  });
+  // (isRegistered comes from useMerchant, which also counts a merchant
+  // registered on a PREVIOUS integrator — carried over, never onboarded again.)
 
   function acceptPayment() {
-    // Registration status hasn't loaded yet — don't bounce a registered
-    // merchant to /onboarding just because the read is still in flight.
-    if (!address || regLoading) return;
+    // Not ready yet (including a returning merchant's carry-over in flight) —
+    // don't bounce a registered merchant to /onboarding on a pending read.
+    if (!address || !ready) return;
     router.push(isRegistered ? "/qr" : "/onboarding");
   }
 
@@ -107,18 +105,24 @@ export default function Dashboard() {
   useEffect(() => {
     if (!address) return;
     let on = true;
-    const load = () => fetchHistory(address).then((h) => on && setRows(h)).catch(() => {});
+    if (!proxies) return; // wait for every integrator's proxy, then load once
+    const load = () => fetchHistory(address, proxies).then((h) => on && setRows(h)).catch(() => {});
     load();
     const t = setInterval(load, 15000);
     return () => { on = false; clearInterval(t); };
-  }, [address]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, (proxies ?? []).join(",")]);
 
   const [pending, available, , isFrozen] = balance ?? [0n, 0n, 0n, false];
-  const availUsdc = Number(available) / 1e6;
+  // Includes every PREVIOUS contract, so a contract upgrade never makes the
+  // merchant's balance look like it dropped to zero. Moving old funds happens
+  // on the withdraw page.
+  const prevBal = usePrevBalances(address);
+  const availUsdc = (Number(available) + Number(prevBal.available)) / 1e6;
   const fiatEquiv = rate && country ? availUsdc * rate.rate : null;
   // Account balance = everything in the contract (locked + unlocked). NOT
   // totalDeposited (a lifetime counter). Withdrawable = the unlocked part.
-  const accountUsdc = (Number(pending) + Number(available)) / 1e6;
+  const accountUsdc = (Number(pending) + Number(available) + Number(prevBal.total)) / 1e6;
   const accountFiat = rate && country ? accountUsdc * rate.rate : null;
 
   // Settlement-ready notification: when the available balance JUMPS UP between
@@ -253,6 +257,12 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {prevBal.total > 0n && (
+          <Link href="/withdraw" className="muted" style={{ display: "block", fontSize: 12.5, margin: "6px 2px 0", textDecoration: "none" }}>
+            Includes ${(Number(prevBal.total) / 1e6).toFixed(2)} on your previous terminal{prevBal.rows.length > 1 ? "s" : ""} · Withdraw ›
+          </Link>
+        )}
+
         {/* action tiles — Wallet · Accept · Withdraw · Activity (p2p.me layout) */}
         <div className="quick">
           <button className="quick-item" onClick={() => setWalletOpen(true)} style={{ background: "none", border: "none", cursor: "pointer" }}>
@@ -263,6 +273,10 @@ export default function Dashboard() {
             <span className="quick-ico"><Icon.Down /></span>
             <span>{t("nav.accept")}</span>
           </button>
+          <Link className="quick-item" href="/payment-links">
+            <span className="quick-ico"><Icon.Link /></span>
+            <span>{t("nav.paymentLinks")}</span>
+          </Link>
           <Link className="quick-item" href="/withdraw">
             <span className="quick-ico"><Icon.Up /></span>
             <span>{t("nav.withdraw")}</span>
@@ -277,17 +291,21 @@ export default function Dashboard() {
             campaign is 1st, ecosystem promo 2nd, the original dark promo 3rd;
             all share the same dark-gradient card so the swipe reads as one
             continuous banner. */}
+        {/* Built as a list, not literal children: the carousel renders every
+            child as a slide, so a hidden (false) one would leave an empty slide. */}
         <PromoCarousel>
-          <CampaignPromo />
-          <EcosystemPromo />
-          <div className="promo">
+          {[
+            ...(campaignActive() ? [<CampaignPromo key="campaign" />] : []),
+            <EcosystemPromo key="ecosystem" />,
+          <div key="usdc" className="promo">
             <div className="promo-tag">BUILT FOR LOCAL BUSINESS</div>
             <div className="promo-h">Get paid in USDC, instantly.</div>
             <div className="promo-sub">
               Take any local payment — it settles to USDC on-chain. Cash out to your bank once it clears.
             </div>
             <span className="promo-qr"><Icon.Qr /></span>
-          </div>
+          </div>,
+          ]}
         </PromoCarousel>
 
         {/* promo banner clone — white surface, settlement-window notice in place

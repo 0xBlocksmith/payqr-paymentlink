@@ -49,12 +49,79 @@ export const COUNTRIES: Country[] = [
     validatePayout: (v) => v.trim().length >= 3,
     locale: "es-AR",
   },
+  {
+    id: "venezuela",
+    flag: "🇻🇪",
+    name: "Venezuela",
+    code: "VES",
+    // "Bs." with a trailing space, for the same reason ARS carries one: the
+    // concatenation sites write `${symbol}${amount}` directly, and "Bs.500"
+    // reads worse than "Bs. 500".
+    symbol: "Bs. ",
+    // Pago Móvil is the everyday rail — a transfer addressed by phone number,
+    // national ID and bank code rather than an account number. There is no QR
+    // or deep-link standard for it, so the pay page shows the bank-transfer
+    // card and a copyable payout handle, which is the correct treatment (see
+    // PaymentLinkWidget's rail selection).
+    fiat: "Pago Móvil",
+    payoutLabel: "Pago Móvil",
+    payoutPlaceholder: "0412-1234567 / C.I.",
+    validatePayout: (v) => v.trim().length >= 3,
+    locale: "es-VE",
+  },
 ];
 
 export const DEFAULT_COUNTRY: Country = COUNTRIES[0];
 
 export function getCountry(id: string | null | undefined): Country {
   return COUNTRIES.find((c) => c.id === id) || DEFAULT_COUNTRY;
+}
+
+/**
+ * Resolve a display config for ANY currency code the protocol can settle — not
+ * only the ones listed above.
+ *
+ * The list above is a UI convenience, but which currencies actually exist is
+ * decided elsewhere: the protocol's live circles (see p2p.ts's
+ * `fetchSupportedCurrencies`, read from the subgraph) and whatever a merchant
+ * registered on-chain. Those move without this file moving, so a currency that
+ * is perfectly real here can be absent above.
+ *
+ * The old lookup — `getCountry(COUNTRIES.find(c => c.code === code)?.id)` —
+ * handled that by returning DEFAULT_COUNTRY, which is India. So an unlisted
+ * currency did not degrade, it LIED: a link priced in a currency this file has
+ * never heard of rendered its amounts with a ₹ and Indian digit grouping, to a
+ * customer about to send real money. Showing the wrong currency symbol on a
+ * payment screen is worse than showing a plain one.
+ *
+ * So an unknown code degrades to something honest instead: the ISO code as its
+ * own symbol, neutral grouping, and a generic bank-transfer rail. Every field
+ * stays populated, so callers need no special case — and adding a country to
+ * the list above still upgrades it to the local symbol, rail name and payout
+ * validator, exactly as before.
+ */
+export function countryForCurrency(code: string | null | undefined): Country {
+  const wanted = String(code || "").trim().toUpperCase();
+  const known = COUNTRIES.find((c) => c.code === wanted);
+  if (known) return known;
+  if (!wanted) return DEFAULT_COUNTRY;
+
+  return {
+    id: `currency:${wanted}`,
+    flag: "🌐",
+    name: wanted,
+    code: wanted,
+    // Trailing space for the same reason ARS has one: bare `${symbol}${amount}`
+    // concatenation would otherwise read "MXN500".
+    symbol: `${wanted} `,
+    fiat: "Bank transfer",
+    payoutLabel: "Payment address",
+    payoutPlaceholder: "",
+    validatePayout: (v) => v.trim().length >= 3,
+    // Neutral grouping. Never inherit another country's locale — en-IN would
+    // render 100000 as "1,00,000" for a currency that does not group that way.
+    locale: "en",
+  };
 }
 
 const KEY = "payqr.country";

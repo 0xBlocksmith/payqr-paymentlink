@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useAuth } from "../../components/useAuth";
 import { useReadContract, usePublicClient } from "wagmi";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, stringToHex, hexToString } from "viem";
 import { Nav } from "../../components/Nav";
 import { useMerchant } from "../../components/useMerchant";
 import { Splash } from "../../components/Splash";
@@ -22,7 +22,7 @@ import {
 import { useTheme } from "../../components/theme";
 import { useAppUpdate } from "../../components/AppUpdate";
 import { useT } from "../../lib/i18n";
-import { ACTIVE_CHAIN } from "../../lib/chain";
+import { EXPLORER_URL } from "../../lib/chain";
 
 const THEMES = [
   { id: "light", labelKey: "set.light", Ico: Icon.Sun },
@@ -30,7 +30,7 @@ const THEMES = [
   { id: "system", labelKey: "set.system", Ico: Icon.Help },
 ];
 
-const SCAN = ACTIVE_CHAIN.blockExplorers?.default.url ?? "https://basescan.org";
+const SCAN = EXPLORER_URL;
 
 export default function Settings() {
   const router = useRouter();
@@ -65,6 +65,10 @@ export default function Settings() {
   });
   const encPayout = (info?.[0] as string) || ""; // on-chain ciphertext blob (bytes)
   const shopName = info?.[1] || "";
+  // getMerchantInfo[5] — bytes32, decoded for display. Empty for a merchant who
+  // registered before the sector existed, which reads as an empty input rather
+  // than an error.
+  const businessSector = info?.[5] ? hexToString(info[5] as `0x${string}`, { size: 32 }) : "";
   // The payout handle belongs to the REGISTERED (on-chain, immutable) currency —
   // not the freely-switchable UI country above. Validate/label the profile edit
   // against it, or an INR merchant who tapped "Brazil" in the country section
@@ -95,15 +99,26 @@ export default function Settings() {
   const [editing, setEditing] = useState(false);
   const [edShop, setEdShop] = useState("");
   const [edPayout, setEdPayout] = useState("");
+  const [edSector, setEdSector] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMsg, setProfileMsg] = useState("");
 
   function startEdit() {
-    setEdShop(shopName); setEdPayout(payoutId || ""); setProfileMsg(""); setEditing(true);
+    setEdShop(shopName); setEdPayout(payoutId || ""); setEdSector(businessSector);
+    setProfileMsg(""); setEditing(true);
   }
   async function saveProfile() {
     setProfileMsg("");
     if (!edShop.trim()) return setProfileMsg(t("set.errShopName"));
+    // 128 BYTES on-chain (FieldTooLong) — see onboarding.
+    if (new TextEncoder().encode(edShop.trim()).length > 128) return setProfileMsg(t("set.errShopNameLong"));
+    // Sent on every updateProfile, so it must be present or the call reverts —
+    // and a merchant who registered before the field existed has none stored.
+    if (!edSector.trim()) return setProfileMsg(t("set.errSectorRequired"));
+    // bytes32 holds 31 BYTES, not characters — a label with accented or
+    // non-Latin characters is longer than it looks.
+    if (new TextEncoder().encode(edSector.trim()).length > 31)
+      return setProfileMsg(t("set.errSectorLong"));
     if (!edPayout.trim()) return setProfileMsg(t("set.errPayoutRequired").replace("{label}", payCountry.payoutLabel));
     if (payCountry.validatePayout && !payCountry.validatePayout(edPayout.trim())) {
       return setProfileMsg(t("set.errPayoutInvalid").replace("{label}", payCountry.payoutLabel).replace("{example}", payCountry.payoutPlaceholder));
@@ -117,7 +132,7 @@ export default function Settings() {
       const encNew = await encryptPayout(edPayout.trim(), identity);
       const data = encodeFunctionData({
         abi: INTEGRATOR_ABI, functionName: "updateProfile",
-        args: [encNew, edShop.trim()],
+        args: [encNew, edShop.trim(), stringToHex(edSector.trim(), { size: 32 })],
       });
       const hash = await sendTransaction({ to: CONTRACT_ADDRESS, data });
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
@@ -171,6 +186,9 @@ export default function Settings() {
               <label className="set-k" style={{ display: "block", marginTop: 6 }}>{t("set.shopName")}</label>
               <input className="input" value={edShop} onChange={(e) => setEdShop(e.target.value)}
                 placeholder={t("set.shopNamePlaceholder")} />
+              <label className="set-k" style={{ display: "block", marginTop: 10 }}>{t("set.sector")}</label>
+              <input className="input" value={edSector} onChange={(e) => setEdSector(e.target.value)}
+                placeholder={t("set.sectorPlaceholder")} maxLength={31} />
               <label className="set-k" style={{ display: "block", marginTop: 10 }}>{payCountry.payoutLabel}</label>
               <input className="input" value={edPayout} onChange={(e) => setEdPayout(e.target.value)}
                 placeholder={payCountry.payoutPlaceholder} />

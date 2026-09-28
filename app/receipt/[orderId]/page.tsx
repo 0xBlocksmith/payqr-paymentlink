@@ -4,9 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { createPublicClient, http } from "viem";
 import { fetchOrder, fetchWithdrawalOrder, receiptToken } from "../../../lib/history";
-import { fmtUsdc, CONTRACT_ADDRESS, INTEGRATOR_ABI } from "../../../lib/contract";
+import { fmtUsdc, ALL_CONTRACT_ADDRESSES, CROSS_VERSION_ABI } from "../../../lib/contract";
 import { fetchPriceConfig } from "../../../lib/pricing";
-import { ACTIVE_CHAIN, RPC_URL } from "../../../lib/chain";
+import { ACTIVE_CHAIN, RPC_URL, EXPLORER_URL } from "../../../lib/chain";
 import { Icon, Logo } from "../../../components/Icons";
 
 // Read-only chain client (public receipt has no wallet — just reads). Use the
@@ -79,20 +79,27 @@ function isDefinitiveError(e: any): boolean {
   );
 }
 
-/** getMerchantInfo(addr) → { registered, shopName }. Returns registered=false on
- *  a definitive not-registered/contract error (fail CLOSED), or null ONLY on a
- *  transient RPC error (caller may fail open for a real customer on a flaky RPC). */
+/** Is `addr` a registered merchant on `contract`, and under what shop name?
+ *  Returns registered=false on a definitive not-registered/contract error (fail
+ *  CLOSED), or null ONLY on a transient RPC error. Uses the cross-version reads
+ *  (`registered` + the `merchants` getter) because getMerchantInfo changed shape
+ *  between integrator versions and would fail to decode on the oldest one. */
 async function readMerchant(
-  addr: string
+  addr: string,
+  contract: `0x${string}`
 ): Promise<{ registered: boolean; shopName: string } | null> {
   try {
-    // getMerchantInfo(address) returns (v12: payout is encrypted bytes, not a string)
-    //   (bytes encPayoutId, string shopName, bytes32 currency, bool isRegistered, bool isFrozen)
-    const info: any = await reader.readContract({
-      address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI,
-      functionName: "getMerchantInfo", args: [addr as `0x${string}`],
-    } as any);
-    return { registered: info?.[3] === true, shopName: (info?.[1] as string) || "" };
+    const [registered, m] = await Promise.all([
+      reader.readContract({
+        address: contract, abi: CROSS_VERSION_ABI,
+        functionName: "registered", args: [addr as `0x${string}`],
+      } as any),
+      reader.readContract({
+        address: contract, abi: CROSS_VERSION_ABI,
+        functionName: "merchants", args: [addr as `0x${string}`],
+      } as any),
+    ]);
+    return { registered: registered === true, shopName: ((m as any)?.[2] as string) || "" };
   } catch (e) {
     // Definitive contract error → treat as NOT registered (fail closed).
     if (isDefinitiveError(e)) return { registered: false, shopName: "" };
@@ -114,32 +121,45 @@ type OwnerCheck = { state: "verified" | "notOurs" | "unverified"; shopName: stri
  *  the customer just refreshes. Only a chain-confirmed registered merchant yields
  *  "verified"; a definitive non-match yields "notOurs". */
 async function verifyOrderOwner(placer: string): Promise<OwnerCheck> {
-  // 1) BUY case: the placer itself is the merchant EOA.
-  const direct = await readMerchant(placer);
+  // Checked against EVERY PayQR integrator, current and previous: a receipt for
+  // a sale made before a contract upgrade is still a genuine PayQR receipt, and
+  // the merchant is registered on the contract that took the sale — not
+  // necessarily on the current one.
+  let sawTransient = false;
+  for (const contract of ALL_CONTRACT_ADDRESSES) {
+    const r = await verifyOnContract(placer, contract);
+    if (r.state === "verified") return r;
+    if (r.state === "unverified") sawTransient = true;
+  }
+  // Nothing verified. Only claim "not ours" when every check was definitive.
+  return { state: sawTransient ? "unverified" : "notOurs", shopName: "" };
+}
+
+async function verifyOnContract(placer: string, contract: `0x${string}`): Promise<OwnerCheck> {
+  // 1) POS BUY: the placer itself is the merchant.
+  const direct = await readMerchant(placer, contract);
   if (direct === null) return { state: "unverified", shopName: "" }; // transient
   if (direct.registered) return { state: "verified", shopName: direct.shopName };
 
-  // 2) SELL case: the placer is a per-merchant proxy → resolve to the merchant.
+  // 2) Link BUY / SELL: the placer is this integrator's proxy for the merchant.
   let merchant: string;
   try {
     merchant = (await reader.readContract({
-      address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI,
+      address: contract, abi: CROSS_VERSION_ABI,
       functionName: "proxyMerchant", args: [placer as `0x${string}`],
     } as any)) as string;
   } catch (e) {
-    // Definitive contract error → definitively not ours; transient → unverified.
     if (isDefinitiveError(e)) return { state: "notOurs", shopName: "" };
     return { state: "unverified", shopName: "" };
   }
-  // Not a registered EOA AND not one of our proxies → definitively not ours.
   if (!merchant || /^0x0+$/i.test(merchant)) return { state: "notOurs", shopName: "" };
 
-  const viaProxy = await readMerchant(merchant);
+  const viaProxy = await readMerchant(merchant, contract);
   if (viaProxy === null) return { state: "unverified", shopName: "" }; // transient
   return { state: viaProxy.registered ? "verified" : "notOurs", shopName: viaProxy.shopName };
 }
 
-const SCAN = ACTIVE_CHAIN.blockExplorers?.default.url ?? "https://basescan.org";
+const SCAN = EXPLORER_URL;
 
 /**
  * PUBLIC customer receipt — no login. The merchant shares this link (or shows
@@ -332,7 +352,7 @@ export default function Receipt() {
           <p className="muted" style={{ textAlign: "center", padding: "30px 0" }}>
             {verifying ? "Verifying receipt…" : "Loading receipt…"}
           </p>
-        ) : !order ? (
+        ) : !order && safeId ? (
           <div style={{ textAlign: "center", padding: "20px 0" }}>
             <h2>Receipt not ready yet</h2>
             <p className="muted" style={{ marginTop: 6 }}>

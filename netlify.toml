@@ -1,0 +1,16 @@
+# Netlify build config.
+#
+# The repo carries BOTH bun.lock and package-lock.json, and Netlify installs
+# with Bun when it sees bun.lock. package-lock.json is the one kept in sync with
+# package.json and used by every local build and test, so the build command
+# reinstalls with `npm ci` to ship exactly what was tested.
+#
+# Next.js is served by Netlify's Next.js runtime, which Netlify adds
+# automatically for Next sites — nothing to install here.
+
+[build]
+  command = "npm ci && npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"

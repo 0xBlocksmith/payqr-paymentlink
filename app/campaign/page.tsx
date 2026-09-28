@@ -8,6 +8,7 @@ import { fetchHistory } from "../../lib/history";
 import { loadCountry, fmtFiat } from "../../lib/countries";
 import { fetchUsdcRate } from "../../lib/rates";
 import { useT } from "../../lib/i18n";
+import { useMerchantProxies } from "../../components/useMerchantProxies";
 
 // Challenge window: Sep 1–15, 2026, inclusive, in the MERCHANT'S LOCAL TIME.
 // Only successful (settled) orders PLACED in this window count — nothing from
@@ -30,6 +31,9 @@ function fmtDate(iso) {
 export default function Campaign() {
   const { t } = useT();
   const { ready, authenticated, address } = useMerchant();
+  // Every integrator's proxy: link sales, and history from before a contract
+  // upgrade, are recorded under them rather than under the merchant.
+  const { proxies } = useMerchantProxies(address);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [country, setCountry] = useState(null);
@@ -46,14 +50,15 @@ export default function Campaign() {
   }, [country]);
 
   useEffect(() => {
-    if (!address) return;
+    if (!address || !proxies) return;
     let cancelled = false;
-    fetchHistory(address)
+    fetchHistory(address, proxies)
       .then((data) => { if (!cancelled) setRows(data); })
       .catch(() => {})
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [address]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, (proxies ?? []).join(",")]);
 
   if (!ready || !authenticated) return <Splash />;
 

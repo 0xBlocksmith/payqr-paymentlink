@@ -2167,3 +2167,75 @@ body {
 .set-update-cta { flex: 0 0 auto; font-size: 13px; font-weight: 700; color: var(--accent); }
 .set-update-row.ready .set-ico { color: var(--accent); }
 .set-update-row.ready .set-update-txt { color: var(--accent); font-weight: 600; }
+
+/* ── Payment link: create ──────────────────────────────── */
+.pl-create { max-width: 480px; }
+.pl-head { margin: 4px 0 18px; }
+.pl-title { font-size: 21px; font-weight: 700; letter-spacing: -0.3px; }
+.pl-subtitle { font-size: 13px; color: var(--muted); margin-top: 4px; }
+
+.pl-card {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--r-lg); padding: 18px; margin-bottom: 14px;
+}
+.pl-section-label {
+  font-size: 12px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px;
+}
+.pl-hint { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+.pl-row-split { display: flex; gap: 14px; }
+.pl-field-half { flex: 1; min-width: 0; }
+
+/* Segmented control — two equal-width options in one flat track. */
+.seg {
+  display: flex; background: var(--bg-soft); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: 4px; gap: 4px;
+}
+.seg-opt {
+  flex: 1; background: none; border: none; border-radius: calc(var(--r-md) - 4px);
+  padding: 10px 10px; font-size: 13px; font-weight: 600; color: var(--muted);
+  cursor: pointer; transition: background .15s ease, color .15s ease, box-shadow .15s ease;
+  white-space: nowrap;
+}
+.seg-opt:hover { color: var(--text); }
+.seg-opt.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(16,15,35,0.06); }
+[data-theme="dark"] .seg-opt.on { box-shadow: none; border: 1px solid var(--border-strong); }
+
+/* Fixed-amount entry — big legible figure, symbol prefix inline. */
+.pl-amount-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 14px;
+  border: 1px solid var(--border-strong); border-radius: var(--r-md);
+  padding: 12px 14px; background: var(--panel);
+  transition: border-color .15s, box-shadow .15s;
+}
+.pl-amount-row:focus-within { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.pl-amount-symbol { font-size: 20px; font-weight: 700; color: var(--muted); }
+.pl-amount-input {
+  flex: 1; border: none; outline: none; background: none; color: var(--text);
+  font-size: 22px; font-weight: 700; letter-spacing: -0.3px; min-width: 0;
+}
+.pl-amount-input::placeholder { color: var(--faint); font-weight: 700; }
+
+/* Expiry chip row */
+.chip-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  background: var(--bg-soft); border: 1px solid var(--border); color: var(--text);
+  border-radius: var(--r-pill); padding: 8px 14px; font-size: 12.5px; font-weight: 600;
+  cursor: pointer; transition: background .15s, border-color .15s, color .15s;
+}
+.chip:hover { border-color: var(--border-strong); }
+.chip.on { background: var(--accent-soft); border-color: var(--accent-100); color: var(--accent-dark); }
+[data-theme="dark"] .chip.on { color: var(--accent); }
+
+.pl-submit { width: 100%; margin-top: 4px; padding: 15px; font-size: 15px; }
+
+/* ── Payment link: created (success) ──────────────────── */
+.pl-done { max-width: 420px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+.pl-done-head { margin: 4px 0 4px; }
+.pl-done-title { font-size: 19px; font-weight: 700; letter-spacing: -0.3px; }
+.pl-done-url {
+  font-size: 12px; color: var(--muted); margin-top: 6px; word-break: break-all;
+  max-width: 320px;
+}
+.pl-done-actions { display: flex; gap: 10px; width: 100%; max-width: 320px; margin-top: 18px; }
+.pl-done-actions .btn { flex: 1; }

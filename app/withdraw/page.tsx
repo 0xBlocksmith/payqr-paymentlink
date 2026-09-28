@@ -8,6 +8,7 @@ import { Nav } from "../../components/Nav";
 import { useMerchant } from "../../components/useMerchant";
 import { Icon } from "../../components/Icons";
 import { PrevTerminalWithdraw } from "../../components/PrevTerminalWithdraw";
+import { usePrevBalances } from "../../components/usePrevBalances";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc, currencyFromBytes32, friendlyError } from "../../lib/contract";
 import { USDC_ADDRESS } from "../../lib/p2p";
 import { STATIC_STALE_MS } from "../../lib/cache";
@@ -182,7 +183,11 @@ export default function Withdraw() {
     if (!proxyAddr) return setError("Still loading — try again in a moment.");
     setBusy("recover");
     try {
-      const rows = await fetchWithdrawals(proxyAddr as string);
+      // Recovery calls reconcile on the CURRENT contract, so only its own
+      // withdrawals qualify — history now spans every integrator.
+      const rows = (await fetchWithdrawals(proxyAddr as string)).filter(
+        (r) => (r.integrator || "").toLowerCase() === CONTRACT_ADDRESS.toLowerCase()
+      );
       const latest = rows?.[0]; // newest-first
       if (!latest?.orderId) throw new Error("Couldn't find the withdrawal to recover.");
       const orderId = BigInt(latest.orderId);
@@ -229,6 +234,17 @@ export default function Withdraw() {
   const pendingNum = Number(pending) / 1e6;
   const accountNum = pendingNum + availNum;               // total USDC in contract
   const accountFiat = rate ? accountNum * rate.rate : null;
+  // HEADLINE figures include every PREVIOUS contract too, so a contract upgrade
+  // never makes a merchant's money look like it vanished. The withdraw FORM
+  // below still works against the current contract only (availNum/availFiat);
+  // old balances are moved by the PrevTerminalWithdraw card.
+  const prevBal = usePrevBalances(address);
+  const prevTotalNum = Number(prevBal.total) / 1e6;
+  const prevAvailNum = Number(prevBal.available) / 1e6;
+  const shownAccountNum = accountNum + prevTotalNum;
+  const shownAvailNum = availNum + prevAvailNum;
+  const shownAccountFiat = rate ? shownAccountNum * rate.rate : null;
+  const shownAvailFiat = rate ? shownAvailNum * rate.rate : null;
   // Soonest unlock across the locked buckets → drives the maturity note with the
   // REAL on-chain wait (this build settles in ~10 min; prod uses 30 days). We
   // read the actual timestamp rather than hardcode a period that may be wrong.
@@ -553,19 +569,24 @@ export default function Withdraw() {
         <div className="wd-balances">
           <div className="wd-bal-box">
             <div className="wd-bal-label">{t("wd.accountBalance")}</div>
-            <div className="wd-bal-amt">${accountNum.toFixed(2)}</div>
+            <div className="wd-bal-amt">${shownAccountNum.toFixed(2)}</div>
             <div className="wd-bal-sub">
-              {accountFiat != null ? `≈ ${fmtFiat(country, accountFiat)} ${country.code}` : "≈ —"}
+              {shownAccountFiat != null ? `≈ ${fmtFiat(country, shownAccountFiat)} ${country.code}` : "≈ —"}
             </div>
           </div>
           <div className="wd-bal-box">
             <div className="wd-bal-label">{t("wd.withdrawable")}</div>
-            <div className="wd-bal-amt">${availNum.toFixed(2)}</div>
+            <div className="wd-bal-amt">${shownAvailNum.toFixed(2)}</div>
             <div className="wd-bal-sub">
-              {availFiat != null ? `≈ ${fmtFiat(country, availFiat)} ${country.code}` : "≈ —"}
+              {shownAvailFiat != null ? `≈ ${fmtFiat(country, shownAvailFiat)} ${country.code}` : "≈ —"}
             </div>
           </div>
         </div>
+        {prevTotalNum > 0 && (
+          <p className="muted" style={{ fontSize: 12.5, margin: "6px 2px 0" }}>
+            This terminal ${accountNum.toFixed(2)} · previous terminal{prevBal.rows.length > 1 ? "s" : ""} ${prevTotalNum.toFixed(2)} (move below)
+          </p>
+        )}
         {/* Funds still maturing → show how much and the REAL time until the next
             tranche unlocks (read from chain, not a hardcoded period). */}
         {pendingNum > 0 && (
@@ -594,7 +615,7 @@ export default function Withdraw() {
             and this merchant still holds a balance on the OLD one, let them drain
             it here. Fully dormant (renders nothing) unless a previous address is
             configured AND the merchant has funds there. */}
-        <PrevTerminalWithdraw />
+        <PrevTerminalWithdraw onWithdrawn={() => refetch()} />
 
         {/* STEP 1 — ask WHERE first: local currency (bank/UPI) or USDC wallet.
             Nothing currency- or UPI-specific is shown until this is answered,

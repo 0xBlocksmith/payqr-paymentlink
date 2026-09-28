@@ -5,7 +5,7 @@ import { Checkout } from "@p2pdotme/widgets/checkout";
 import { useCheckoutSigner } from "./useCheckoutSigner";
 import { useRelayIdentity } from "./useRelayIdentity";
 import { makePlaceOrder, SUBGRAPH_URL, USDC_ADDRESS, DIAMOND_ADDRESS, CURRENCIES, SCREENING_CONFIG } from "../lib/p2p";
-import { ACTIVE_CHAIN } from "../lib/chain";
+import { ACTIVE_CHAIN, RPC_URL } from "../lib/chain";
 import { friendlyError } from "../lib/contract";
 import { Icon } from "./Icons";
 
@@ -82,6 +82,10 @@ export function CheckoutWidget({ orderId, usdcAmount, fiatAmount, quantity, prod
         orderId={orderId}
         signer={signer}
         chainId={ACTIVE_CHAIN.id}
+        /* The app's own RPC. Without it the widget used viem's public default
+           (rate-limited), and order-status polling during a live sale could
+           stall on 429s. */
+        rpcUrl={RPC_URL || undefined}
         diamondAddress={(DIAMOND_ADDRESS || undefined) as `0x${string}` | undefined}
         currencies={currencies && currencies.length ? currencies : CURRENCIES}
         productName={productName}
