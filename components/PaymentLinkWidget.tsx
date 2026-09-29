@@ -41,7 +41,13 @@ import type { Hex } from "viem";
 
 type UiPhase = "matching" | "accepted" | "paying" | "completed" | "cancelled" | "expired" | "error";
 
-const WINDOW_SECONDS = 9 * 60; // matches the widget's own payment-window concept
+// The protocol's window to pay after a merchant accepts, before it auto-cancels
+// the order — p2p.me's <Checkout> widget (AUTO_CANCEL_WINDOW_MS) and user-app
+// both use 5 minutes, counted from the order's ON-CHAIN acceptance time. This
+// used to be a fixed 9 minutes started whenever this page noticed the
+// acceptance, so a customer could still see minutes left — and pay — after the
+// order had already been cancelled.
+const AUTO_CANCEL_WINDOW_SECONDS = 5 * 60;
 const POLL_MS = 4000;
 
 type PaymentLinkWidgetProps = {
@@ -105,7 +111,10 @@ export function PaymentLinkWidget({
   const [order, setOrder] = useState<Order | null>(null);
   const [decryptedUpi, setDecryptedUpi] = useState<string | null>(null);
   const [phase, setPhase] = useState<UiPhase>("matching");
-  const [secondsLeft, setSecondsLeft] = useState(WINDOW_SECONDS);
+  const [secondsLeft, setSecondsLeft] = useState(AUTO_CANCEL_WINDOW_SECONDS);
+  // When the payment window closes (ms). From the chain's acceptedAt, so a
+  // reload shows the true time left rather than restarting the clock.
+  const deadlineRef = useRef<number | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -156,6 +165,15 @@ export function PaymentLinkWidget({
           return;
         }
         if (o.status === "accepted") {
+          // Before the phase changes, so the countdown starts from the right
+          // deadline. acceptedAt can read 0 for a moment after acceptance; the
+          // widget then counts from now, and so does this until the real time
+          // arrives.
+          if (o.acceptedAt > 0n) {
+            deadlineRef.current = Number(o.acceptedAt) * 1000 + AUTO_CANCEL_WINDOW_SECONDS * 1000;
+          } else if (deadlineRef.current === null) {
+            deadlineRef.current = Date.now() + AUTO_CANCEL_WINDOW_SECONDS * 1000;
+          }
           // Once the LOCAL countdown has already declared this expired, the
           // chain read is stale (or the order simply hasn't been closed out
           // server-side yet) — reverting to "accepted" here restarted the
@@ -187,18 +205,23 @@ export function PaymentLinkWidget({
   }, [orderId]);
 
   // Countdown only while actively waiting for the customer to pay.
+  // Recomputed from the deadline each second rather than decremented, so a
+  // throttled background tab can't drift behind the real window.
   useEffect(() => {
     if (phase !== "accepted") return;
-    tickRef.current = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          clearInterval(tickRef.current);
-          setPhase("expired");
-          return 0;
-        }
-        return s - 1;
-      });
-    }, 1000);
+    const update = () => {
+      if (deadlineRef.current === null) return;
+      const left = Math.ceil((deadlineRef.current - Date.now()) / 1000);
+      if (left <= 0) {
+        clearInterval(tickRef.current);
+        setSecondsLeft(0);
+        setPhase("expired");
+        return;
+      }
+      setSecondsLeft(left);
+    };
+    update();
+    tickRef.current = setInterval(update, 1000);
     return () => clearInterval(tickRef.current);
   }, [phase]);
 
