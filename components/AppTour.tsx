@@ -21,13 +21,36 @@ function ArtWelcome() {
   );
 }
 function ArtAccept({ t }) {
+  // A shopkeeper behind the counter, a QR stand on the desk, and the customer's
+  // phone-scan cue — the "in person" story, drawn instead of a keypad.
   return (
     <div className="tour-art">
       <div className="ta-pill">{t("tour.s2Pill")}</div>
-      <div className="ta-amount">₹250</div>
-      <div className="ta-keys">
-        {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => <span key={k}>{k}</span>)}
-      </div>
+      <svg viewBox="0 0 162 110" width="100%" role="img" aria-hidden="true">
+        {/* person */}
+        <circle cx="46" cy="30" r="12" fill="#f3c9a5" />
+        <path d="M34 27c1-9 8-14 14-13 7 0 12 5 12 13-4-4-9-6-13-6-5 0-9 2-13 6z" fill="#2b2a4a" />
+        <path d="M22 78c0-17 10-30 24-30s24 13 24 30z" fill="var(--accent)" />
+        <circle cx="42" cy="31" r="1.2" fill="#2b2a4a" />
+        <circle cx="51" cy="31" r="1.2" fill="#2b2a4a" />
+        <path d="M43 36c2 2 6 2 8 0" stroke="#2b2a4a" strokeWidth="1.3" fill="none" strokeLinecap="round" />
+        {/* arm resting toward the stand */}
+        <path d="M62 62c8 3 14 8 18 13" stroke="var(--accent)" strokeWidth="7" strokeLinecap="round" fill="none" />
+        {/* desk */}
+        <rect x="6" y="76" width="150" height="8" rx="3" fill="#8a6a4d" />
+        <rect x="14" y="84" width="6" height="22" fill="#6d523b" />
+        <rect x="142" y="84" width="6" height="22" fill="#6d523b" />
+        {/* QR stand */}
+        <path d="M108 76l6-8h24l6 8z" fill="#d9d7f2" />
+        <rect x="110" y="34" width="34" height="42" rx="4" fill="#fff" stroke="var(--accent)" strokeWidth="2" />
+        <rect x="116" y="40" width="22" height="22" rx="1.5" fill="var(--text)" />
+        <rect x="118.5" y="42.5" width="6" height="6" fill="#fff" />
+        <rect x="129.5" y="42.5" width="6" height="6" fill="#fff" />
+        <rect x="118.5" y="53.5" width="6" height="6" fill="#fff" />
+        <rect x="128" y="52" width="3" height="3" fill="#fff" />
+        <rect x="132" y="56" width="3" height="3" fill="#fff" />
+        <text x="127" y="71" textAnchor="middle" fontSize="6.5" fontWeight="800" fill="var(--accent)">PayQR</text>
+      </svg>
       <div className="ta-cta"><Icon.Qr width="14" height="14" /> {t("tour.s2Cta")}</div>
     </div>
   );
@@ -37,7 +60,7 @@ function ArtLink({ t }) {
     <div className="tour-art">
       <div className="ta-pill">{t("tour.sLPill")}</div>
       <div className="ta-amount">₹1,200</div>
-      <div className="ta-opt sel"><Icon.Link width="16" height="16" /> payqr.app/pay/… <span className="ta-chk">✓</span></div>
+      <div className="ta-opt sel"><Icon.Link width="16" height="16" /> payqr.pro/pay/… <span className="ta-chk">✓</span></div>
       <div className="ta-cta" style={{ marginTop: 8 }}><Icon.Link width="14" height="14" /> {t("tour.sLCta")}</div>
     </div>
   );
