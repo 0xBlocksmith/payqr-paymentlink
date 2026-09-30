@@ -358,6 +358,88 @@ export function linkWalletTypedData(chainId: number, linkId: Hex, expiry: number
   } as const;
 }
 
+// ─── Fixed amount in the customer's own currency ───────────────────────────
+//
+// A link's on-chain `amount` is USDC, and the contract requires exactly that
+// USDC on payment — so a "₹10" link, priced once at creation, then charged
+// ₹9.90 one day and ₹10.03 the next as the rate moved. To charge the SAME local
+// amount every time without a contract change, such a link is an open-amount
+// link on-chain (amount 0), and its price travels in its URL, signed by the
+// merchant. The pay page checks that signature against the link's on-chain
+// owner and prices the amount in USDC at the moment of payment, so the
+// customer's currency is fixed and the merchant's USDC moves with the rate.
+//
+// Enforced by the pay page, not the contract or the relayer, which accept any
+// amount on an open-amount link: editing the URL breaks the signature, and
+// going around the page is no easier than on any open-amount link.
+
+export const FIXED_AMOUNT_PARAM = "fa"; // local currency, 6 decimals
+export const FIXED_SIG_PARAM = "fs";
+
+export type FixedAmount = { amount6: bigint; signature: Hex };
+
+/** What the merchant signs. Bound to the link and its currency, so a
+ *  signature can't be moved to another link or read in another currency. */
+export function fixedAmountTypedData(chainId: number, linkId: Hex, amount6: bigint, currency: Hex) {
+  return {
+    domain: {
+      name: "PayQR Fixed Amount",
+      version: "1",
+      chainId,
+      verifyingContract: CONTRACT_ADDRESS,
+    },
+    types: {
+      FixedAmount: [
+        { name: "linkId", type: "bytes32" },
+        { name: "amount", type: "uint256" },
+        { name: "currency", type: "bytes32" },
+      ],
+    },
+    primaryType: "FixedAmount" as const,
+    message: { linkId, amount: amount6, currency },
+  } as const;
+}
+
+export function withFixedAmount(url: string, fixed: FixedAmount): string {
+  const u = new URL(url);
+  u.searchParams.set(FIXED_AMOUNT_PARAM, fixed.amount6.toString());
+  u.searchParams.set(FIXED_SIG_PARAM, fixed.signature);
+  return u.toString();
+}
+
+/** The fixed amount carried by a pay URL's query string: null when there is
+ *  none, "malformed" when it is there but unusable — which the page must treat
+ *  as a broken link, never as an open amount. */
+export function parseFixedAmount(search: string): FixedAmount | "malformed" | null {
+  const q = new URLSearchParams(search);
+  const a = q.get(FIXED_AMOUNT_PARAM);
+  const s = q.get(FIXED_SIG_PARAM);
+  if (a === null && s === null) return null;
+  if (!a || !s || !/^[1-9]\d{0,30}$/.test(a) || !/^0x(?:[0-9a-fA-F]{2})+$/.test(s)) return "malformed";
+  return { amount6: BigInt(a), signature: s as Hex };
+}
+
+/** True when the link's on-chain owner signed this amount for this link.
+ *  ERC-1271 aware — the merchant is a smart account — exactly as the relayer
+ *  verifies the same merchant's LinkWallet signature (provision.ts). */
+export async function verifyFixedAmount(
+  // Only the one method: callers hold differently-parameterised viem clients.
+  publicClient: { verifyTypedData: (args: any) => Promise<boolean> },
+  chainId: number,
+  link: { linkId: Hex; owner: Address; currency: Hex },
+  fixed: FixedAmount
+): Promise<boolean> {
+  try {
+    return await publicClient.verifyTypedData({
+      address: link.owner,
+      ...fixedAmountTypedData(chainId, link.linkId, fixed.amount6, link.currency),
+      signature: fixed.signature,
+    });
+  } catch {
+    return false;
+  }
+}
+
 /** Provisioning result from the worker. `existing: true` means this link id
  *  was already minted (e.g. a retry after a dropped response) — the SAME
  *  account is returned, safe to batch createLink+registerAgent against again
@@ -881,6 +963,36 @@ export function rememberedLinks(merchant?: Address | string): Hex[] {
       : [];
   } catch {
     return [];
+  }
+}
+
+// A fixed local amount lives only in the link's URL (see fixedAmountTypedData),
+// so the list can show it and share the full URL only on the device that made
+// the link. Elsewhere the same link reads as an open amount.
+const FIXED_KEY_PREFIX = "payqr.linkFixed:"; // + lowercased linkId
+
+export function rememberFixedAmount(linkId: Hex, fixed: FixedAmount): void {
+  try {
+    localStorage.setItem(
+      FIXED_KEY_PREFIX + linkId.toLowerCase(),
+      JSON.stringify({ a: fixed.amount6.toString(), s: fixed.signature })
+    );
+  } catch {
+    /* storage unavailable: the list shows the link as an open amount */
+  }
+}
+
+export function rememberedFixedAmount(linkId: Hex): FixedAmount | null {
+  try {
+    const raw = localStorage.getItem(FIXED_KEY_PREFIX + linkId.toLowerCase());
+    if (!raw) return null;
+    const { a, s } = JSON.parse(raw) as { a?: unknown; s?: unknown };
+    const parsed = parseFixedAmount(
+      new URLSearchParams({ [FIXED_AMOUNT_PARAM]: String(a ?? ""), [FIXED_SIG_PARAM]: String(s ?? "") }).toString()
+    );
+    return parsed && parsed !== "malformed" ? parsed : null;
+  } catch {
+    return null;
   }
 }
 

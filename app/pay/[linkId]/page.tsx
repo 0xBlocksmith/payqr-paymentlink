@@ -5,7 +5,7 @@ import { useParams } from "next/navigation";
 import { createPublicClient, http } from "viem";
 import dynamic from "next/dynamic";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, PREV_CONTRACT_ADDRESSES, currencyFromBytes32 } from "../../../lib/contract";
-import { fetchPriceConfig, usdcForFiat, fiatForUsdc } from "../../../lib/pricing";
+import { fetchPriceConfig, usdcForFiat, fiatForUsdc, minimumFiat } from "../../../lib/pricing";
 import { ACTIVE_CHAIN, RPC_URL } from "../../../lib/chain";
 import { countryForCurrency, fmtFiat } from "../../../lib/countries";
 import {
@@ -18,6 +18,8 @@ import {
   PaymentPendingError,
   getPendingPayment,
   resolvePendingPayment,
+  parseFixedAmount,
+  verifyFixedAmount,
 } from "../../../lib/paymentLinks";
 import type { PaymentLink } from "../../../lib/paymentLinks";
 import { getCustomerIdentity } from "../../../lib/customerRelayIdentity";
@@ -177,6 +179,42 @@ export default function PayLink() {
     if (!link || !country) return;
     fetchPriceConfig(country.code).then(setPriceCfg);
   }, [link, country]);
+
+  // A fixed amount in the customer's own currency, carried in the URL and
+  // signed by the merchant (see fixedAmountTypedData). Only for a link that is
+  // open-amount on-chain; a USDC-fixed link ignores it. Present but not signed
+  // by this link's owner means the URL was changed — the page refuses it rather
+  // than falling back to an open amount the customer could type.
+  const [fixed, setFixed] = useState<
+    { status: "none" } | { status: "checking" } | { status: "valid"; amount: number } | { status: "invalid" }
+  >({ status: "none" });
+  useEffect(() => {
+    if (state !== "verified" || !link || link.amount !== 0n) {
+      setFixed({ status: "none" });
+      return;
+    }
+    const parsed = parseFixedAmount(window.location.search);
+    if (parsed === null) {
+      setFixed({ status: "none" });
+      return;
+    }
+    if (parsed === "malformed") {
+      setFixed({ status: "invalid" });
+      return;
+    }
+    let alive = true;
+    setFixed({ status: "checking" });
+    verifyFixedAmount(
+      reader,
+      ACTIVE_CHAIN.id,
+      { linkId: safeLinkId as `0x${string}`, owner: link.owner, currency: link.currency },
+      parsed
+    ).then((ok) => {
+      if (!alive) return;
+      setFixed(ok ? { status: "valid", amount: Number(parsed.amount6) / 1e6 } : { status: "invalid" });
+    });
+    return () => { alive = false; };
+  }, [state, link, safeLinkId]);
 
   // Warm the customer's own (thirdweb-free) relay identity as soon as the
   // page is viable, so it's ready before they tap Pay.
@@ -346,16 +384,35 @@ export default function PayLink() {
     );
   }
 
+  if (fixed.status === "invalid" && !inProgress) {
+    return (
+      <Centered>
+        <p className="pl-notice">
+          This payment link has been changed or isn't valid. Please ask the merchant for a new link.
+        </p>
+      </Centered>
+    );
+  }
+
   const isVariable = l.amount === 0n;
-  // Fixed link: `l.amount` is 6-dec USDC-equivalent, not fiat — convert back
-  // through the live price so the displayed number matches what the widget
+  // Open-amount on-chain, but the merchant fixed the local amount in the URL.
+  const fixedLocal = isVariable && fixed.status === "valid" ? fixed.amount : null;
+  const checkingFixed = isVariable && fixed.status === "checking";
+  const customerTypes = isVariable && fixedLocal === null && !checkingFixed;
+  // USDC-fixed link: `l.amount` is 6-dec USDC-equivalent, not fiat — convert
+  // back through the live price so the displayed number matches what the widget
   // will actually charge (see the priceCfg effect above). Falls back to the
   // raw units while priceCfg is still loading rather than showing nothing.
-  const amountNum = isVariable
-    ? Number(amountInput) || 0
-    : priceCfg
-      ? fiatForUsdc(l.amount, priceCfg)
-      : Number(l.amount) / 1e6;
+  const amountNum =
+    fixedLocal !== null
+      ? fixedLocal
+      : checkingFixed
+        ? 0
+        : isVariable
+          ? Number(amountInput) || 0
+          : priceCfg
+            ? fiatForUsdc(l.amount, priceCfg)
+            : Number(l.amount) / 1e6;
   // The cap expressed in the customer's own currency, so the message names a
   // number they recognise rather than a USDC figure they have no way to relate
   // to what they just typed. Unknown until both reads land — and "unknown"
@@ -374,10 +431,22 @@ export default function PayLink() {
     try {
       let quantity = l.amount;
       if (isVariable) {
-        const fiat = Number(amountInput);
+        const fiat = fixedLocal !== null ? fixedLocal : Number(amountInput);
         if (!fiat || fiat <= 0) throw new Error("Enter a valid amount.");
-        if (!priceCfg) throw new Error("Could not price this amount right now. Try again shortly.");
-        quantity = usdcForFiat(fiat, priceCfg);
+        // Priced NOW, not at page load: the protocol charges the customer at the
+        // price in force when the order is placed, so pricing with a stale rate
+        // would miss the amount they were shown.
+        const cfg = (country ? await fetchPriceConfig(country.code).catch(() => null) : null) ?? priceCfg;
+        if (!cfg) throw new Error("Could not price this amount right now. Try again shortly.");
+        // Below p2p.me's small-order fee the fee alone would cost more than the
+        // amount, and the customer would be charged it on top.
+        const floor = minimumFiat(cfg);
+        if (fiat < floor) {
+          throw new Error(
+            `That amount is too small to pay — the minimum is ${country ? fmtFiat(country, Math.ceil(floor * 100) / 100) : Math.ceil(floor * 100) / 100}.`
+          );
+        }
+        quantity = usdcForFiat(fiat, cfg);
         if (quantity <= 0n) throw new Error("That amount is too small.");
       }
 
@@ -470,7 +539,7 @@ export default function PayLink() {
           </div>
           <div className={shopName ? "pl-hero-name" : "pl-hero-name pl-hero-name-addr"}>{merchantLabel}</div>
 
-          {isVariable ? (
+          {customerTypes ? (
             <div className="pl-amount-input-wrap">
               {/* `country` is non-null whenever a link has loaded, and this
                   input only renders past that point — but guard rather than
@@ -490,6 +559,8 @@ export default function PayLink() {
                 autoFocus
               />
             </div>
+          ) : checkingFixed ? (
+            <div className="pl-hero-amount">…</div>
           ) : (
             <div className="pl-hero-amount">{country && fmtFiat(country, amountNum)}</div>
           )}
@@ -517,6 +588,8 @@ export default function PayLink() {
                 <span className="pl-spinner" aria-hidden="true" />
                 Preparing your payment…
               </span>
+            ) : checkingFixed ? (
+              "Checking link…"
             ) : isVariable ? (
               overCap ? (
                 "Amount too high"

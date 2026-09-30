@@ -12,7 +12,7 @@ import { stringToHex } from "viem";
 import { useReadContract } from "wagmi";
 import { countryForCurrency, fmtFiat, COUNTRIES } from "../../../lib/countries";
 import { fetchSupportedCurrencies } from "../../../lib/p2p";
-import { fetchPriceConfig, usdcForFiat, fiatForUsdc, usdcForUsdcTarget } from "../../../lib/pricing";
+import { fetchPriceConfig, usdcForFiat, fiatForUsdc, usdcForUsdcTarget, minimumFiat, minimumUsdc } from "../../../lib/pricing";
 import { encryptToSelf } from "../../../lib/payoutCrypto";
 import {
   buildCreateLinkCalldata,
@@ -22,7 +22,11 @@ import {
   randomLinkSalt,
   buildPayLinkUrl,
   rememberLink,
+  fixedAmountTypedData,
+  withFixedAmount,
+  rememberFixedAmount,
   PAYMENT_LINKS_ENABLED,
+  type FixedAmount,
 } from "../../../lib/paymentLinks";
 import { ACTIVE_CHAIN } from "../../../lib/chain";
 import { useT } from "../../../lib/i18n";
@@ -151,7 +155,9 @@ export default function CreatePaymentLink() {
 
   const [amountMode, setAmountMode] = useState<"fixed" | "variable">("fixed");
   const [amountFiat, setAmountFiat] = useState("");
-  /** Which unit the typed number is in. The link always stores 6-dec USDC. */
+  /** Which unit the typed number is in. USDC is stored on-chain as the link's
+   *  fixed amount; a local-currency amount travels signed in the link's URL
+   *  and is priced at payment time (see fixedAmountTypedData). */
   const [amountUnit, setAmountUnit] = useState<"fiat" | "usdc">("fiat");
 
   // The live price, held in state rather than fetched only at submit, so the
@@ -179,13 +185,15 @@ export default function CreatePaymentLink() {
       amountUnit === "usdc" ? usdcForUsdcTarget(typed, priceCfg) : usdcForFiat(typed, priceCfg);
     if (usdc6 <= 0n) return "";
     const over = capUsdc6 !== null && usdc6 > capUsdc6;
-    const other =
-      amountUnit === "usdc"
-        ? `≈ ${fmtFiat(country, fiatForUsdc(usdc6, priceCfg))}`
-        : `≈ ${(Number(usdc6) / 1e6).toFixed(2)} USDC`;
-    if (!over) return `Customer pays ${other}`;
-    const capFiat = fiatForUsdc(capUsdc6!, priceCfg);
-    return `${other} — over your ${fmtFiat(country, capFiat)} limit per payment.`;
+    if (over) {
+      const capFiat = fiatForUsdc(capUsdc6!, priceCfg);
+      return `Over your ${fmtFiat(country, capFiat)} limit per payment.`;
+    }
+    // A local amount is what the customer pays, always; the USDC it credits is
+    // today's figure and moves with the rate (after p2p.me's small-order fee).
+    return amountUnit === "usdc"
+      ? `Customer pays ≈ ${fmtFiat(country, fiatForUsdc(usdc6, priceCfg))} today`
+      : `Customer always pays ${fmtFiat(country, typed)} · you receive ≈ ${(Number(usdc6) / 1e6).toFixed(2)} USDC at today's rate`;
   })();
   const [description, setDescription] = useState("");
   const [singleUse, setSingleUse] = useState(true);
@@ -221,19 +229,31 @@ export default function CreatePaymentLink() {
       // submit time, not at whatever moment the merchant last typed.
       const cfg = amountMode === "fixed" ? await fetchPriceConfig(linkCurrency) : null;
       let amountUsdc6 = 0n;
+      // A fixed LOCAL amount: the link is open-amount on-chain, and this signed
+      // amount goes in its URL (see fixedAmountTypedData).
+      let fixedLocal6: bigint | null = null;
       if (amountMode === "fixed") {
         const typed = Number(amountFiat);
         if (!typed || typed <= 0) throw new Error("Enter a valid amount.");
         if (!cfg) throw new Error("Could not price this amount right now. Try again shortly.");
-        // Either unit lands on the same field — the link stores 6-decimal USDC
-        // regardless. usdcForUsdcTarget inverts the small-order fee so "5 USDC"
-        // charges the customer five, not five plus a fee.
-        amountUsdc6 =
-          amountUnit === "usdc" ? usdcForUsdcTarget(typed, cfg) : usdcForFiat(typed, cfg);
-        if (amountUsdc6 <= 0n) throw new Error("That amount is too small.");
+        // usdcForUsdcTarget inverts the small-order fee so "5 USDC" charges the
+        // customer five, not five plus a fee. A local amount is priced again at
+        // payment time; today's USDC here only checks it against the cap.
+        // Below p2p.me's small-order fee the customer would pay the fee on top.
+        const floor = amountUnit === "usdc" ? minimumUsdc(cfg) : minimumFiat(cfg);
+        if (typed < floor) {
+          const shown = Math.ceil(floor * 100) / 100;
+          throw new Error(
+            `That amount is too small — the minimum is ${amountUnit === "usdc" ? `${shown.toFixed(2)} USDC` : fmtFiat(country, shown)}.`
+          );
+        }
+        const usdc6 = amountUnit === "usdc" ? usdcForUsdcTarget(typed, cfg) : usdcForFiat(typed, cfg);
+        if (usdc6 <= 0n) throw new Error("That amount is too small.");
+        if (amountUnit === "usdc") amountUsdc6 = usdc6;
+        else fixedLocal6 = BigInt(Math.round(typed * 1e6));
         // Refuse here, in the merchant's own words, rather than letting
         // createLink revert ExceedsPerTxCap after they have signed.
-        if (capUsdc6 !== null && amountUsdc6 > capUsdc6) {
+        if (capUsdc6 !== null && usdc6 > capUsdc6) {
           const capFiat = fiatForUsdc(capUsdc6, cfg);
           throw new Error(
             `That is above your limit of ${fmtFiat(country, capFiat)} per payment. ` +
@@ -254,6 +274,16 @@ export default function CreatePaymentLink() {
 
       if (!signTypedData || !sendBatchTransaction) {
         throw new Error("Wallet isn't ready yet. Please try again in a moment.");
+      }
+
+      // Signed before the link exists — the signature only names the id — so a
+      // failure here leaves nothing half-made on-chain.
+      let fixed: FixedAmount | null = null;
+      if (fixedLocal6 !== null) {
+        const signature = await signTypedData(
+          fixedAmountTypedData(ACTIVE_CHAIN.id, linkId, fixedLocal6, stringToHex(linkCurrency, { size: 32 }))
+        );
+        fixed = { amount6: fixedLocal6, signature };
       }
 
       // Encrypt the description to the merchant's OWN relay key before it ever
@@ -344,8 +374,9 @@ export default function CreatePaymentLink() {
       // own links vanish from their own list. Only the ID is stored; every
       // field still comes from getLink on-chain.
       rememberLink(address as `0x${string}`, linkId);
+      if (fixed) rememberFixedAmount(linkId, fixed);
 
-      const url = buildPayLinkUrl(linkId);
+      const url = fixed ? withFixedAmount(buildPayLinkUrl(linkId), fixed) : buildPayLinkUrl(linkId);
       setCreated({ linkId, url });
     } catch (e: any) {
       setError(friendlyError(e, e?.message || "Could not create the link. Please try again."));
