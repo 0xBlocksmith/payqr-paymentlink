@@ -74,11 +74,14 @@ function fmtTyped(raw: string): string {
 // The order this browser placed on a link, kept so a reload resumes the SAME
 // payment screen (matching, pay, verifying, receipt) instead of starting over,
 // and, worse, offering Pay again while the first order is still live. Cleared
-// when the order is cancelled or its window expires. A completed order is kept
-// longer so the receipt is still there when the customer comes back.
+// when the order is cancelled. A completed order is kept only briefly, so the
+// receipt is still there after a reload.
 const ORDER_KEY_PREFIX = "payqr.linkOrder:";
 const ORDER_LIVE_TTL_MS = 30 * 60 * 1000; // matching wait + the 5-minute pay window, with slack
-const ORDER_DONE_TTL_MS = 24 * 60 * 60 * 1000;
+// A finished payment's receipt is only kept briefly (enough to survive a reload
+// right after paying). Beyond that, reopening the link shows the pay page again;
+// the receipt itself is still reachable from the merchant's shared receipt link.
+const ORDER_DONE_TTL_MS = 5 * 60 * 1000;
 type StoredOrder = { orderId: string; at: number; done?: boolean };
 
 function orderKey(linkId: string) { return `${ORDER_KEY_PREFIX}${linkId.toLowerCase()}`; }
@@ -585,7 +588,14 @@ export default function PayLink() {
             if (!loadStoredOrder(safeLinkId)?.done) saveStoredOrder(safeLinkId, { orderId: id, at: Date.now(), done: true });
           }}
           onCancel={() => clearStoredOrder(safeLinkId)}
-          onExpire={() => clearStoredOrder(safeLinkId)}
+          // Expiry is NOT cancellation: the order can still be live on-chain
+          // (a customer may have paid late), so it stays stored until the chain
+          // says cancelled/completed or its TTL passes.
+          onNewPayment={() => {
+            clearStoredOrder(safeLinkId);
+            setOrderId(null);
+            setPrepareError("");
+          }}
           getHumanSolution={getHumanSolution}
         />
       ) : (
@@ -658,8 +668,15 @@ export default function PayLink() {
               country ? `Pay ${fmtFiat(country, amountNum)}` : "Pay"
             )}
           </button>
+          <p className="pl-privacy">
+            To help keep payments safe, we check basic device details (like browser and screen size) when you pay.
+          </p>
         </div>
       )}
+
+      <style jsx global>{`
+        .pl-privacy { margin: 14px 0 0; font-size: 11.5px; line-height: 1.4; color: rgba(255,255,255,0.75); text-align: center; max-width: 30ch; }
+      `}</style>
 
       <style jsx global>{`
         .pl-page {
