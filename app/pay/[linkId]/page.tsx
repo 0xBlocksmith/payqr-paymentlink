@@ -69,6 +69,40 @@ function fmtTyped(raw: string): string {
   return decPart !== undefined ? `${grouped}.${decPart}` : grouped;
 }
 
+// The order this browser placed on a link, kept so a reload resumes the SAME
+// payment screen (matching, pay, verifying, receipt) instead of starting over,
+// and, worse, offering Pay again while the first order is still live. Cleared
+// when the order is cancelled or its window expires. A completed order is kept
+// longer so the receipt is still there when the customer comes back.
+const ORDER_KEY_PREFIX = "payqr.linkOrder:";
+const ORDER_LIVE_TTL_MS = 30 * 60 * 1000; // matching wait + the 5-minute pay window, with slack
+const ORDER_DONE_TTL_MS = 24 * 60 * 60 * 1000;
+type StoredOrder = { orderId: string; at: number; done?: boolean };
+
+function orderKey(linkId: string) { return `${ORDER_KEY_PREFIX}${linkId.toLowerCase()}`; }
+function saveStoredOrder(linkId: string, o: StoredOrder) {
+  try { localStorage.setItem(orderKey(linkId), JSON.stringify(o)); } catch { /* best-effort */ }
+}
+function clearStoredOrder(linkId: string) {
+  try { localStorage.removeItem(orderKey(linkId)); } catch { /* nothing to clear */ }
+}
+function loadStoredOrder(linkId: string): StoredOrder | null {
+  try {
+    const raw = localStorage.getItem(orderKey(linkId));
+    if (!raw) return null;
+    const o = JSON.parse(raw) as Partial<StoredOrder>;
+    if (typeof o?.orderId !== "string" || !/^\d+$/.test(o.orderId) || typeof o?.at !== "number") {
+      clearStoredOrder(linkId);
+      return null;
+    }
+    if (Date.now() - o.at > (o.done ? ORDER_DONE_TTL_MS : ORDER_LIVE_TTL_MS)) {
+      clearStoredOrder(linkId);
+      return null;
+    }
+    return o as StoredOrder;
+  } catch { return null; }
+}
+
 function shortAddr(a: string): string {
   return a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "";
 }
@@ -244,6 +278,23 @@ export default function PayLink() {
       .catch(() => {});
     return () => { alive = false; };
   }, [state, link, merchantCurrency]);
+
+  // Resume the order this browser already placed on this link (see
+  // loadStoredOrder): same screen, same countdown (the widget derives it from
+  // the chain's acceptance time), until it completes, is cancelled or times out.
+  useEffect(() => {
+    if (!safeLinkId) return;
+    const stored = loadStoredOrder(safeLinkId);
+    if (stored) setOrderId(stored.orderId);
+  }, [safeLinkId]);
+
+  // Remember a freshly placed (or freshly resolved) order. `at` is only set the
+  // first time, so a reload never extends the window.
+  useEffect(() => {
+    if (!safeLinkId || !orderId) return;
+    if (loadStoredOrder(safeLinkId)?.orderId === orderId) return;
+    saveStoredOrder(safeLinkId, { orderId, at: Date.now() });
+  }, [safeLinkId, orderId]);
 
   // Resume a payment that was still confirming when the page was left or
   // reloaded, instead of offering the Pay button again.
@@ -461,6 +512,11 @@ export default function PayLink() {
           currencyBytes32={l.currency}
           orderId={orderId}
           onError={() => {}}
+          onComplete={(id) => {
+            if (!loadStoredOrder(safeLinkId)?.done) saveStoredOrder(safeLinkId, { orderId: id, at: Date.now(), done: true });
+          }}
+          onCancel={() => clearStoredOrder(safeLinkId)}
+          onExpire={() => clearStoredOrder(safeLinkId)}
           getHumanSolution={getHumanSolution}
         />
       ) : (

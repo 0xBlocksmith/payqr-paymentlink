@@ -297,14 +297,18 @@ export default function Dashboard() {
           {[
             ...(campaignActive() ? [<CampaignPromo key="campaign" />] : []),
             <EcosystemPromo key="ecosystem" />,
-          <div key="usdc" className="promo">
-            <div className="promo-tag">BUILT FOR LOCAL BUSINESS</div>
-            <div className="promo-h">Get paid in USDC, instantly.</div>
-            <div className="promo-sub">
-              Take any local payment — it settles to USDC on-chain. Cash out to your bank once it clears.
-            </div>
-            <span className="promo-qr"><Icon.Qr /></span>
-          </div>,
+            <div key="counter-qr" className="promo">
+              <div className="promo-tag">{t("dash.cqTag")}</div>
+              <div className="promo-h">{t("dash.cqH")}</div>
+              <div className="promo-sub">{t("dash.cqSub")}</div>
+              <span className="promo-qr"><Icon.Qr /></span>
+            </div>,
+            <div key="payment-links" className="promo">
+              <div className="promo-tag">{t("dash.plTag")}</div>
+              <div className="promo-h">{t("dash.plH")}</div>
+              <div className="promo-sub">{t("dash.plSub")}</div>
+              <span className="promo-qr"><Icon.Link /></span>
+            </div>,
           ]}
         </PromoCarousel>
 
