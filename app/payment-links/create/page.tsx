@@ -389,7 +389,11 @@ export default function CreatePaymentLink() {
     if (!created || sharing) return;
     setSharing(true);
     try {
-      const message = `Pay me on PayQR: ${created.url}`;
+      const message = `Hi! Please complete your payment securely with PayQR.
+
+Scan the QR code or tap the link below to pay:
+
+${created.url}`;
 
       // Try image + text + link together first (the native share sheet on
       // Android/iOS supports this combination for MANY targets — Messages,

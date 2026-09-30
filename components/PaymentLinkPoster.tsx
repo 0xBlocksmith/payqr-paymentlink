@@ -15,6 +15,42 @@ const TEMPLATE_SRC = "/qr_temp_1.jpeg";
 // Dashed square's inner edge, as a fraction of the template image size.
 const BOX = { left: 0.213, top: 0.311, right: 0.785, bottom: 0.672 };
 
+/**
+ * Builds the same poster PNG as the component below, on demand and without
+ * mounting it — for row-level Download / Share actions on the links list.
+ */
+export async function composePosterDataUrl(url: string): Promise<string> {
+  const [{ createRoot }, { flushSync }] = await Promise.all([import("react-dom/client"), import("react-dom")]);
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-9999px;top:0;width:0;height:0;overflow:hidden";
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() => root.render(<QRCodeCanvas value={url} size={512} bgColor="#ffffff" fgColor="#16151f" level="M" />));
+    // QRCodeCanvas draws in an effect; yield past a paint so it has run.
+    await new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    const qrCanvas = host.querySelector("canvas");
+    if (!qrCanvas) throw new Error("QR not rendered");
+    const template = new Image();
+    template.src = TEMPLATE_SRC;
+    await template.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = template.naturalWidth;
+    canvas.height = template.naturalHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("Canvas unavailable");
+    ctx.drawImage(template, 0, 0);
+    const w = (BOX.right - BOX.left) * canvas.width;
+    const h = (BOX.bottom - BOX.top) * canvas.height;
+    const size = Math.min(w, h);
+    ctx.drawImage(qrCanvas, BOX.left * canvas.width + (w - size) / 2, BOX.top * canvas.height + (h - size) / 2, size, size);
+    return canvas.toDataURL("image/png");
+  } finally {
+    root.unmount();
+    host.remove();
+  }
+}
+
 export function PaymentLinkPoster({
   url,
   fileName = "payqr-poster.png",
