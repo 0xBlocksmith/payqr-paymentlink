@@ -17,7 +17,7 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError, currencyFromBytes32 } 
 import { encryptPayout, decryptPayout, PAYOUT_PLACEHOLDER } from "../../lib/payoutCrypto";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import {
-  COUNTRIES, LANGUAGES, loadCountry, saveCountry, clearLocalUserData, fmtSymbolCode,
+  COUNTRIES, LANGUAGES, loadCountry, clearLocalUserData, fmtSymbolCode,
 } from "../../lib/countries";
 import { useTheme } from "../../components/theme";
 import { useAppUpdate } from "../../components/AppUpdate";
@@ -145,7 +145,6 @@ export default function Settings() {
     } finally { setSavingProfile(false); }
   }
 
-  function pickCountry(c) { setCountry(c); saveCountry(c.id); }
   function pickLang(code) { setLang(code); }
   function copyAddr() {
     if (!address) return;
@@ -239,16 +238,14 @@ export default function Settings() {
           )}
         </div>
 
-        {/* country */}
+        {/* country — the merchant's registered country only. It is locked on-chain
+            at registration, so there is nothing to pick. */}
         <div className="set-group">
           <div className="set-glabel">{t("set.country")}</div>
-          {COUNTRIES.map((c) => (
-            <button key={c.id} className={`set-row ${country.id === c.id ? "sel" : ""}`} onClick={() => pickCountry(c)}>
-              <span className="set-flag">{c.flag}</span>
-              <span className="set-rt">{c.name}<small>{c.fiat} · {fmtSymbolCode(c)}</small></span>
-              {country.id === c.id && <span className="set-chk">✓</span>}
-            </button>
-          ))}
+          <div className="set-row sel" style={{ cursor: "default" }}>
+            <span className="set-flag">{payCountry.flag}</span>
+            <span className="set-rt">{payCountry.name}<small>{payCountry.fiat} · {fmtSymbolCode(payCountry)}</small></span>
+          </div>
         </div>
 
         {/* language */}

@@ -576,18 +576,9 @@ export function PaymentLinkWidget({
         .pc-success-amt { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; color: var(--pq-text); font-variant-numeric: tabular-nums; }
         .pc-success-sub { font-size: 13.5px; color: var(--pq-muted); }
 
-        .pc-rcpt.rcpt-card {
-          flex: none; max-width: none; width: 100%; min-height: 0; overflow: visible;
-          border-radius: 24px; border: 1px solid rgba(255,255,255,0.7);
-          box-shadow: 0 18px 40px -20px rgba(0,20,60,0.35);
-        }
-        .pc-rcpt-share {
-          margin-top: 14px; width: 100%; border: none; cursor: pointer; background: #ffffff; color: #453deb;
-          font-family: inherit; font-size: 14.5px; font-weight: 800; padding: 14px; border-radius: 14px;
-          box-shadow: 0 18px 40px -20px rgba(0,20,60,0.4);
-        }
-        .pc-rcpt-share:disabled { opacity: 0.6; cursor: default; }
-        .pc-rcpt-help { display: block; margin-top: 14px; text-align: center; font-size: 12.5px; color: #ffffff; text-decoration: underline; text-shadow: 0 1px 6px rgba(0,20,50,0.25); }
+        .pc-rcpt-full { position: fixed; inset: 0; z-index: 60; overflow-y: auto; background: var(--bg, #fff); }
+        .pc-rcpt-share { width: 100%; margin-top: 16px; }
+        .pc-rcpt-full .rcpt-help { margin: 12px 0 0; }
 
         .pc-expired-ico {
           width: 76px; height: 76px; border-radius: 50%; background: var(--pq-danger-soft); color: var(--pq-danger);
@@ -763,40 +754,45 @@ function ReceiptPanel({
   }
 
   return (
-    <>
-      <div className="rcpt-card pc-rcpt" ref={captureRef}>
-        <div className="brand rcpt-brand"><Logo size={24} className="brand-mark" /> PayQR</div>
-        <div className="rcpt-tick ok"><CheckIconLg /></div>
-        <div className="rcpt-status">Payment successful</div>
-        <div className="rcpt-shop">Paid to {merchantName}</div>
-        <div className="rcpt-amount">{amount}</div>
-        <div className="rcpt-amount-sub">You paid</div>
+    <div className="pc-rcpt-full">
+      <div className="rcpt-screen">
+        <div className="rcpt-card" ref={captureRef}>
+          <div className="brand rcpt-brand"><Logo size={24} className="brand-mark" /> PayQR</div>
+          <div className="rcpt-tick ok"><CheckIconLg /></div>
+          <div className="rcpt-status">Payment successful</div>
+          <div className="rcpt-shop">Paid to {merchantName}</div>
+          <div className="rcpt-amount">{amount}</div>
+          <div className="rcpt-amount-sub">You paid</div>
 
-        <div className="rcpt-rows">
-          <div className="rcpt-row"><span>Paid to</span><b>{merchantName}</b></div>
-          {handle && (
-            <div className="rcpt-row"><span>{country.payoutLabel}</span><b className="mono">{handle}</b></div>
-          )}
-          <div className="rcpt-row"><span>Via</span><b>{country.flag} {country.name} · {country.code}</b></div>
-          {usdc6 > 0n && <div className="rcpt-row"><span>Settled as</span><b>{usdc(usdc6)} USDC</b></div>}
-          {feeUsdc6 > 0n && <div className="rcpt-row"><span>Transaction fee</span><b>{usdc(feeUsdc6)} USDC</b></div>}
-          {when && <div className="rcpt-row"><span>When</span><b>{when}</b></div>}
-          <div className="rcpt-row"><span>Receipt no.</span><b>#{orderId}</b></div>
-          <div className="rcpt-row"><span>Status</span><b className="g">Completed</b></div>
+          <div className="rcpt-rows">
+            <div className="rcpt-row"><span>Paid to</span><b>{merchantName}</b></div>
+            {handle && (
+              <div className="rcpt-row"><span>{country.payoutLabel}</span><b className="mono">{handle}</b></div>
+            )}
+            <div className="rcpt-row"><span>Via</span><b>{country.flag} {country.name} · {country.code}</b></div>
+            {usdc6 > 0n && <div className="rcpt-row"><span>Settled as</span><b>{usdc(usdc6)} USDC</b></div>}
+            {feeUsdc6 > 0n && <div className="rcpt-row"><span>Transaction fee</span><b>{usdc(feeUsdc6)} USDC</b></div>}
+            {when && <div className="rcpt-row"><span>When</span><b>{when}</b></div>}
+            <div className="rcpt-row"><span>Receipt no.</span><b>#{orderId}</b></div>
+            <div className="rcpt-row"><span>Status</span><b className="g">Completed</b></div>
+          </div>
+          <p className="rcpt-foot">Save this receipt as proof of your payment.</p>
+
+          {/* Inside the card, but left out of the saved image. */}
+          <button className="btn ghost pc-rcpt-share" data-html2canvas-ignore="true" onClick={shareAsImage} disabled={imgBusy}>
+            {imgBusy ? "Preparing image…" : "Share as image"}
+          </button>
+          <a
+            className="rcpt-help"
+            data-html2canvas-ignore="true"
+            href={`https://t.me/PayQRdotPRO?text=${encodeURIComponent(`Hi, I need help with payment #${orderId}.`)}`}
+            target="_blank" rel="noopener noreferrer"
+          >
+            Something wrong with this payment? Report an issue ↗
+          </a>
         </div>
-        <p className="rcpt-foot">Save this receipt as proof of your payment.</p>
       </div>
-      <button className="pc-rcpt-share" onClick={shareAsImage} disabled={imgBusy}>
-        {imgBusy ? "Preparing image…" : "Share as image"}
-      </button>
-      <a
-        className="pc-rcpt-help"
-        href={`https://t.me/PayQRdotPRO?text=${encodeURIComponent(`Hi, I need help with payment #${orderId}.`)}`}
-        target="_blank" rel="noopener noreferrer"
-      >
-        Something wrong with this payment? Report an issue ↗
-      </a>
-    </>
+    </div>
   );
 }
 
