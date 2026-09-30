@@ -91,7 +91,7 @@ function fmtAmount(usdc6: bigint, currencyCode: string): string {
   return fmtFiat(countryForCurrency(currencyCode), Number(usdc6) / 1e6);
 }
 
-function upiUri(params: { upiId: string; merchantName: string; amountInr: number; orderId: string }) {
+function upiUri(params: { upiId: string; merchantName: string; amountInr: string; orderId: string }) {
   const q = new URLSearchParams({
     pa: params.upiId,
     pn: params.merchantName,
@@ -290,11 +290,14 @@ export function PaymentLinkWidget({
 
   const fiat6 = order?.actualFiatAmount && order.actualFiatAmount > 0n ? order.actualFiatAmount : order?.fiatAmount ?? 0n;
   const fiatDisplay = fmtAmount(fiat6, currency);
-  const fiatWhole = Math.round(Number(fiat6) / 1e6);
+  // Paise included, as p2p.me's widget writes it (`am=${fiatDisplay}`, two
+  // decimals). This was rounded to whole rupees, so a ₹99.99 order put ₹100 in
+  // the UPI QR — the customer paid a different amount from the one owed.
+  const fiatUpi = (Number(fiat6) / 1e6).toFixed(2);
 
   const qrValue =
     currency === "INR" && decryptedUpi
-      ? upiUri({ upiId: decryptedUpi, merchantName, amountInr: fiatWhole, orderId: orderId || "" })
+      ? upiUri({ upiId: decryptedUpi, merchantName, amountInr: fiatUpi, orderId: orderId || "" })
       : decryptedUpi || "";
 
   // The widget's `remaining < 60_000`.

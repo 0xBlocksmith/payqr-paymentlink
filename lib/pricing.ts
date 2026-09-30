@@ -192,6 +192,24 @@ export function usdcForFiat(quoteFiat: number, cfg: PriceConfig): bigint {
  * usdcForFiat's inversion; if that pushes the principal above the threshold
  * (fee no longer applies at that size), fall back to the un-inverted amount.
  */
+/**
+ * The smallest amount a small order can be charged at EXACTLY, in local
+ * currency (`minimumFiat`) and in USDC (`minimumUsdc`). Below the small-order
+ * fee's own value there is no principal left once the fee is taken out, and
+ * usdcForFiat / usdcForUsdcTarget then keep the amount AND the Diamond adds the
+ * fee on top — 10 ARS would charge ~50. The /qr terminal refuses those with its
+ * minimum-order floor; payment links check these. 0 when there is no fee.
+ */
+export function minimumFiat(cfg: PriceConfig): number {
+  if (cfg.smallOrderFixedFee <= 0n) return 0;
+  // The least quote whose principal is at least one 6-dec unit after the fee.
+  return Number(((cfg.smallOrderFixedFee + 1n) * cfg.buyPrice + 999_999n) / 1_000_000n) / 1e6;
+}
+
+export function minimumUsdc(cfg: PriceConfig): number {
+  return cfg.smallOrderFixedFee > 0n ? Number(cfg.smallOrderFixedFee + 1n) / 1e6 : 0;
+}
+
 export function usdcForUsdcTarget(targetUsdc: number, cfg: PriceConfig): bigint {
   const target6 = BigInt(Math.round(targetUsdc * 1e6));
   const { smallOrderThreshold, smallOrderFixedFee } = cfg;
