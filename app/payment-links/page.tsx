@@ -10,7 +10,7 @@ import { useMerchant } from "../../components/useMerchant";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, PREV_CONTRACT_ADDRESSES, CROSS_VERSION_ABI, isPrevContract, friendlyError, currencyFromBytes32 } from "../../lib/contract";
 import { useMerchantProxies } from "../../components/useMerchantProxies";
 import { countryForCurrency, fmtFiat } from "../../lib/countries";
-import { PAYMENT_LINKS_ENABLED, LinkStatus, fetchMerchantLinkIds, fetchIndexedMerchantLinkIds, fetchMerchantLinkEvents, fetchLink, buildPayLinkUrl, rememberedLinks } from "../../lib/paymentLinks";
+import { PAYMENT_LINKS_ENABLED, LinkStatus, fetchMerchantLinkIds, fetchIndexedMerchantLinkIds, fetchMerchantLinkEvents, fetchLink, buildPayLinkUrl, rememberedLinks, rememberedFixedAmount, withFixedAmount } from "../../lib/paymentLinks";
 import { fetchPriceConfig, fiatForUsdc, type PriceConfig } from "../../lib/pricing";
 import { PaymentLinkQR } from "../../components/PaymentLinkQR";
 import { fetchLinkOrders, receiptToken } from "../../lib/history";
@@ -545,7 +545,10 @@ export default function PaymentLinksList() {
 
         {liveLinks.map((l) => {
           const country = countryForCurrency(l.currency);
-          const url = buildPayLinkUrl(l.linkId);
+          // A fixed local amount lives in the link's signed URL, known only on
+          // the device that made it (see rememberFixedAmount).
+          const fixedLocal = l.amount === 0n ? rememberedFixedAmount(l.linkId) : null;
+          const url = fixedLocal ? withFixedAmount(buildPayLinkUrl(l.linkId), fixedLocal) : buildPayLinkUrl(l.linkId);
           const isActive = l.status === LinkStatus.ACTIVE;
           const expired = l.expiresAt !== 0n && BigInt(Math.floor(Date.now() / 1000)) > l.expiresAt;
           // maxUses 0 means unlimited, so it can never be exhausted — a counter
@@ -554,16 +557,18 @@ export default function PaymentLinksList() {
           return (
             <div className="card" key={l.linkId} style={{ marginBottom: 12 }}>
               <div className="value" style={{ fontSize: 20 }}>
-                {l.amount === 0n
-                  ? "Any amount"
-                  : priceCfgs[l.currency]
-                    ? fmtFiat(country, fiatForUsdc(l.amount, priceCfgs[l.currency]))
-                    : "…"}
+                {fixedLocal
+                  ? fmtFiat(country, Number(fixedLocal.amount6) / 1e6)
+                  : l.amount === 0n
+                    ? "Any amount"
+                    : priceCfgs[l.currency]
+                      ? fmtFiat(country, fiatForUsdc(l.amount, priceCfgs[l.currency]))
+                      : "…"}
                 {/* "Any amount" alone did not say WHY, and the two link types
                     behave differently enough that the merchant needs to know
                     which one they are looking at: one is an invoice, the other
                     is a standing counter QR. */}
-                {l.amount === 0n && (
+                {l.amount === 0n && !fixedLocal && (
                   <span className="sub" style={{ fontSize: 13, marginLeft: 8, opacity: 0.8 }}>
                     Counter QR — customer enters it
                   </span>
