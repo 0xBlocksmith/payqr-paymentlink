@@ -63,6 +63,8 @@ type PaymentLinkWidgetProps = {
   /** The payment window ran out: the order is over from the customer's side. */
   onExpire?: (orderId: string) => void;
   onError?: (msg: string) => void;
+  /** "New payment": the caller forgets this order and shows the pay form again. */
+  onNewPayment?: () => void;
   /** The order to track — undefined until the caller has placed one. */
   orderId: string | null;
   /** Solves a fresh human-check challenge for mark-paid/cancel — the relayer
@@ -112,6 +114,7 @@ export function PaymentLinkWidget({
   onCancel,
   onExpire,
   onError,
+  onNewPayment,
   getHumanSolution,
 }: PaymentLinkWidgetProps) {
   const [order, setOrder] = useState<Order | null>(null);
@@ -386,14 +389,15 @@ export function PaymentLinkWidget({
             feeUsdc6={order?.fixedFeePaid ?? 0n}
             whenSecs={Number(order?.completedAt || order?.paidAt || order?.placedAt || 0n)}
             payoutHandle={decryptedUpi}
+            onNewPayment={onNewPayment}
           />
         )}
 
         {phase === "expired" && (
-          <ExpiredPanel onCancel={handleCancel} busy={busy} />
+          <ExpiredPanel orderId={orderId || ""} onPaid={handleMarkPaid} onCancel={handleCancel} busy={busy} />
         )}
 
-        {phase === "cancelled" && <CancelledPanel />}
+        {phase === "cancelled" && <CancelledPanel onNewPayment={onNewPayment} />}
 
         {/* Errors outside the "accepted" panel (which shows its own): a cancel
             refused on the expired screen — busy, rate-limited, network — used
@@ -716,10 +720,11 @@ function maskHandle(h: string): string {
 }
 
 function ReceiptPanel({
-  amount, merchantName, currency, orderId, usdc6, feeUsdc6, whenSecs, payoutHandle,
+  amount, merchantName, currency, orderId, usdc6, feeUsdc6, whenSecs, payoutHandle, onNewPayment,
 }: {
   amount: string; merchantName: string; currency: string; orderId: string;
   usdc6: bigint; feeUsdc6: bigint; whenSecs: number; payoutHandle: string | null;
+  onNewPayment?: () => void;
 }) {
   const country = countryForCurrency(currency);
   const captureRef = useRef<HTMLDivElement>(null);
@@ -789,6 +794,11 @@ function ReceiptPanel({
           <button className="btn ghost pc-rcpt-share" data-html2canvas-ignore="true" onClick={shareAsImage} disabled={imgBusy}>
             {imgBusy ? "Preparing image…" : "Share as image"}
           </button>
+          {onNewPayment && (
+            <button className="btn pc-rcpt-share" data-html2canvas-ignore="true" onClick={onNewPayment}>
+              New payment
+            </button>
+          )}
           <a
             className="rcpt-help"
             data-html2canvas-ignore="true"
@@ -803,23 +813,39 @@ function ReceiptPanel({
   );
 }
 
-function ExpiredPanel({ onCancel, busy }: { onCancel: () => void; busy: boolean }) {
+// We can't know here whether the customer paid after the window closed, so this
+// panel never claims that no money moved: it offers "I already paid" (the order
+// may still be live on-chain) and a support route, besides cancelling.
+function ExpiredPanel({
+  orderId, onPaid, onCancel, busy,
+}: { orderId: string; onPaid: () => void; onCancel: () => void; busy: boolean }) {
   return (
     <div className="pc-expired">
       <div className="pc-expired-ico"><ClockIcon /></div>
-      <div className="pc-expired-h">Payment window expired</div>
-      <div className="pc-expired-sub">This payment session timed out. No funds were moved.</div>
-      <button className="pc-retry-btn" onClick={onCancel} disabled={busy}>{busy ? "Cancelling…" : "Cancel order"}</button>
+      <div className="pc-expired-h">Payment window ended</div>
+      <div className="pc-expired-sub">
+        If you already paid, tap "I already paid" — don't pay again. Otherwise you can cancel this order.
+      </div>
+      <button className="pc-retry-btn" onClick={onPaid} disabled={busy}>{busy ? "Working…" : "I already paid"}</button>
+      <button className="pc-cancel-btn" onClick={onCancel} disabled={busy}>Cancel order</button>
+      <a
+        className="pc-expired-sub"
+        href={`https://t.me/PayQRdotPRO?text=${encodeURIComponent(`Hi, I need help with payment #${orderId}.`)}`}
+        target="_blank" rel="noopener noreferrer"
+      >
+        Need help? Contact support ↗
+      </a>
     </div>
   );
 }
 
-function CancelledPanel() {
+function CancelledPanel({ onNewPayment }: { onNewPayment?: () => void }) {
   return (
     <div className="pc-expired">
       <div className="pc-expired-ico"><XIcon /></div>
       <div className="pc-expired-h">Order cancelled</div>
-      <div className="pc-expired-sub">No funds were moved.</div>
+      <div className="pc-expired-sub">This order was cancelled.</div>
+      {onNewPayment && <button className="pc-retry-btn" onClick={onNewPayment}>New payment</button>}
     </div>
   );
 }
