@@ -23,11 +23,22 @@ function ArtWelcome() {
 function ArtAccept({ t }) {
   return (
     <div className="tour-art">
+      <div className="ta-pill">{t("tour.s2Pill")}</div>
       <div className="ta-amount">₹250</div>
       <div className="ta-keys">
         {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((k) => <span key={k}>{k}</span>)}
       </div>
       <div className="ta-cta"><Icon.Qr width="14" height="14" /> {t("tour.s2Cta")}</div>
+    </div>
+  );
+}
+function ArtLink({ t }) {
+  return (
+    <div className="tour-art">
+      <div className="ta-pill">{t("tour.sLPill")}</div>
+      <div className="ta-amount">₹1,200</div>
+      <div className="ta-opt sel"><Icon.Link width="16" height="16" /> payqr.app/pay/… <span className="ta-chk">✓</span></div>
+      <div className="ta-cta" style={{ marginTop: 8 }}><Icon.Link width="14" height="14" /> {t("tour.sLCta")}</div>
     </div>
   );
 }
@@ -68,6 +79,7 @@ function ArtWithdraw({ t }) {
 const STEPS = [
   { art: ArtWelcome, titleKey: "tour.s1Title", textKey: "tour.s1Text" },
   { art: ArtAccept, titleKey: "tour.s2Title", textKey: "tour.s2Text" },
+  { art: ArtLink, titleKey: "tour.sLTitle", textKey: "tour.sLText" },
   { art: ArtMoney, titleKey: "tour.s3Title", textKey: "tour.s3Text" },
   { art: ArtActivity, titleKey: "tour.s4Title", textKey: "tour.s4Text" },
   { art: ArtWithdraw, titleKey: "tour.s5Title", textKey: "tour.s5Text" },

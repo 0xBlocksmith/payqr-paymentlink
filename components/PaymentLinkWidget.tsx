@@ -9,6 +9,7 @@ import { currencyFromBytes32 } from "../lib/contract";
 import { countryForCurrency, fmtFiat } from "../lib/countries";
 import { ACTIVE_CHAIN } from "../lib/chain";
 import { PAYMENT_LINK_QR_STYLE } from "./PaymentLinkQR";
+import { Logo } from "./Icons";
 import type { Hex } from "viem";
 
 /**
@@ -57,6 +58,8 @@ type PaymentLinkWidgetProps = {
   onOrderId?: (orderId: string) => void;
   onComplete?: (orderId: string) => void;
   onCancel?: (orderId?: string) => void;
+  /** The payment window ran out: the order is over from the customer's side. */
+  onExpire?: (orderId: string) => void;
   onError?: (msg: string) => void;
   /** The order to track — undefined until the caller has placed one. */
   orderId: string | null;
@@ -105,6 +108,7 @@ export function PaymentLinkWidget({
   onOrderId,
   onComplete,
   onCancel,
+  onExpire,
   onError,
   getHumanSolution,
 }: PaymentLinkWidgetProps) {
@@ -216,6 +220,7 @@ export function PaymentLinkWidget({
         clearInterval(tickRef.current);
         setSecondsLeft(0);
         setPhase("expired");
+        if (orderId) onExpire?.(orderId);
         return;
       }
       setSecondsLeft(left);
@@ -364,7 +369,18 @@ export function PaymentLinkWidget({
           </div>
         )}
 
-        {phase === "completed" && <SuccessPanel amount={fiatDisplay} merchantName={merchantName} />}
+        {phase === "completed" && (
+          <ReceiptPanel
+            amount={fiatDisplay}
+            merchantName={merchantName}
+            currency={currency}
+            orderId={orderId || ""}
+            usdc6={order?.actualUsdcAmount && order.actualUsdcAmount > 0n ? order.actualUsdcAmount : order?.usdcAmount ?? 0n}
+            feeUsdc6={order?.fixedFeePaid ?? 0n}
+            whenSecs={Number(order?.completedAt || order?.paidAt || order?.placedAt || 0n)}
+            payoutHandle={decryptedUpi}
+          />
+        )}
 
         {phase === "expired" && (
           <ExpiredPanel onCancel={handleCancel} busy={busy} />
@@ -560,6 +576,19 @@ export function PaymentLinkWidget({
         .pc-success-amt { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; color: var(--pq-text); font-variant-numeric: tabular-nums; }
         .pc-success-sub { font-size: 13.5px; color: var(--pq-muted); }
 
+        .pc-rcpt.rcpt-card {
+          flex: none; max-width: none; width: 100%; min-height: 0; overflow: visible;
+          border-radius: 24px; border: 1px solid rgba(255,255,255,0.7);
+          box-shadow: 0 18px 40px -20px rgba(0,20,60,0.35);
+        }
+        .pc-rcpt-share {
+          margin-top: 14px; width: 100%; border: none; cursor: pointer; background: #ffffff; color: #453deb;
+          font-family: inherit; font-size: 14.5px; font-weight: 800; padding: 14px; border-radius: 14px;
+          box-shadow: 0 18px 40px -20px rgba(0,20,60,0.4);
+        }
+        .pc-rcpt-share:disabled { opacity: 0.6; cursor: default; }
+        .pc-rcpt-help { display: block; margin-top: 14px; text-align: center; font-size: 12.5px; color: #ffffff; text-decoration: underline; text-shadow: 0 1px 6px rgba(0,20,50,0.25); }
+
         .pc-expired-ico {
           width: 76px; height: 76px; border-radius: 50%; background: var(--pq-danger-soft); color: var(--pq-danger);
           display: flex; align-items: center; justify-content: center; margin-bottom: 6px;
@@ -677,14 +706,97 @@ function StatusStrip({ secondsLeft, urgent }: { secondsLeft: number; urgent: boo
   );
 }
 
-function SuccessPanel({ amount, merchantName }: { amount: string; merchantName: string }) {
+// The PayQR receipt (the same card the customer receipt uses at
+// /receipt/[orderId]) told from the PAYER's side: what you paid, to whom, and
+// how. Built from the order the widget already polls, so it needs no token, no
+// subgraph and no login, and it survives a reload the same way.
+function maskHandle(h: string): string {
+  if (!h || h === "Session changed") return "";
+  if (h.length <= 4) return h;
+  const at = h.indexOf("@");
+  return `${h.slice(0, 2)}•••${h.slice(at > 0 ? at : h.length - 2)}`;
+}
+
+function ReceiptPanel({
+  amount, merchantName, currency, orderId, usdc6, feeUsdc6, whenSecs, payoutHandle,
+}: {
+  amount: string; merchantName: string; currency: string; orderId: string;
+  usdc6: bigint; feeUsdc6: bigint; whenSecs: number; payoutHandle: string | null;
+}) {
+  const country = countryForCurrency(currency);
+  const captureRef = useRef<HTMLDivElement>(null);
+  const [imgBusy, setImgBusy] = useState(false);
+  const when = whenSecs
+    ? new Date(whenSecs * 1000).toLocaleString(undefined, {
+        day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+      })
+    : "";
+  const handle = payoutHandle ? maskHandle(payoutHandle) : "";
+  const usdc = (n: bigint) => (Number(n) / 1e6).toFixed(2);
+
+  async function shareAsImage() {
+    if (!captureRef.current || imgBusy) return;
+    setImgBusy(true);
+    try {
+      const { default: html2canvas } = await import("html2canvas");
+      const canvas = await html2canvas(captureRef.current, {
+        backgroundColor: "#ffffff",
+        scale: Math.min(window.devicePixelRatio || 2, 3),
+      });
+      const blob: Blob | null = await new Promise((r) => canvas.toBlob(r, "image/png"));
+      if (!blob) return;
+      const file = new File([blob], `payqr-receipt-${orderId}.png`, { type: "image/png" });
+      if (navigator.canShare?.({ files: [file] })) {
+        await navigator.share({ files: [file], title: "PayQR receipt" });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = file.name;
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      }
+    } catch {
+      // best-effort: the on-screen receipt is still there
+    } finally {
+      setImgBusy(false);
+    }
+  }
+
   return (
-    <div className="pc-success">
-      <div className="pc-success-ico"><CheckIconLg /></div>
-      <div className="pc-success-h">Payment successful</div>
-      <div className="pc-success-amt">{amount}</div>
-      <div className="pc-success-sub">Payment received by {merchantName}</div>
-    </div>
+    <>
+      <div className="rcpt-card pc-rcpt" ref={captureRef}>
+        <div className="brand rcpt-brand"><Logo size={24} className="brand-mark" /> PayQR</div>
+        <div className="rcpt-tick ok"><CheckIconLg /></div>
+        <div className="rcpt-status">Payment successful</div>
+        <div className="rcpt-shop">Paid to {merchantName}</div>
+        <div className="rcpt-amount">{amount}</div>
+        <div className="rcpt-amount-sub">You paid</div>
+
+        <div className="rcpt-rows">
+          <div className="rcpt-row"><span>Paid to</span><b>{merchantName}</b></div>
+          {handle && (
+            <div className="rcpt-row"><span>{country.payoutLabel}</span><b className="mono">{handle}</b></div>
+          )}
+          <div className="rcpt-row"><span>Via</span><b>{country.flag} {country.name} · {country.code}</b></div>
+          {usdc6 > 0n && <div className="rcpt-row"><span>Settled as</span><b>{usdc(usdc6)} USDC</b></div>}
+          {feeUsdc6 > 0n && <div className="rcpt-row"><span>Transaction fee</span><b>{usdc(feeUsdc6)} USDC</b></div>}
+          {when && <div className="rcpt-row"><span>When</span><b>{when}</b></div>}
+          <div className="rcpt-row"><span>Receipt no.</span><b>#{orderId}</b></div>
+          <div className="rcpt-row"><span>Status</span><b className="g">Completed</b></div>
+        </div>
+        <p className="rcpt-foot">Save this receipt as proof of your payment.</p>
+      </div>
+      <button className="pc-rcpt-share" onClick={shareAsImage} disabled={imgBusy}>
+        {imgBusy ? "Preparing image…" : "Share as image"}
+      </button>
+      <a
+        className="pc-rcpt-help"
+        href={`https://t.me/PayQRdotPRO?text=${encodeURIComponent(`Hi, I need help with payment #${orderId}.`)}`}
+        target="_blank" rel="noopener noreferrer"
+      >
+        Something wrong with this payment? Report an issue ↗
+      </a>
+    </>
   );
 }
 
