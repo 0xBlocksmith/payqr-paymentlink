@@ -12,7 +12,7 @@ import { useMerchantProxies } from "../../components/useMerchantProxies";
 import { countryForCurrency, fmtFiat } from "../../lib/countries";
 import { PAYMENT_LINKS_ENABLED, LinkStatus, fetchMerchantLinkIds, fetchIndexedMerchantLinkIds, fetchMerchantLinkEvents, fetchLink, buildPayLinkUrl, rememberedLinks, rememberedFixedAmount, withFixedAmount } from "../../lib/paymentLinks";
 import { fetchPriceConfig, fiatForUsdc, type PriceConfig } from "../../lib/pricing";
-import { PaymentLinkQR } from "../../components/PaymentLinkQR";
+import { composePosterDataUrl } from "../../components/PaymentLinkPoster";
 import { fetchLinkOrders, receiptToken } from "../../lib/history";
 
 /** One label/value line in the Summary tab. */
@@ -368,9 +368,46 @@ export default function PaymentLinksList() {
     return `/receipt/${o.orderId}?${q.toString()}`;
   }
 
+  /** Download the QR poster (same template as after creation) for a link. */
+  async function downloadQr(linkId: string, url: string) {
+    setQrFor(linkId);
+    try {
+      const a = document.createElement("a");
+      a.href = await composePosterDataUrl(url);
+      a.download = `payqr-${linkId}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch {
+      setError("Could not create the QR image. Please try again.");
+    } finally {
+      setQrFor(null);
+    }
+  }
+
   /** Re-share a link: the native sheet where there is one, clipboard otherwise. */
   async function share(url: string) {
-    const text = `Pay me on PayQR: ${url}`;
+    const text = `Hi! Please complete your payment securely with PayQR.
+
+Scan the QR code or tap the link below to pay:
+
+${url}`;
+    // Same poster image as on the create screen, attached where the device can
+    // share files alongside text.
+    if (navigator.share && navigator.canShare) {
+      try {
+        const blob = await (await fetch(await composePosterDataUrl(url))).blob();
+        const file = new File([blob], "payqr-payment-link.png", { type: "image/png" });
+        const payload = { files: [file], title: "PayQR payment link", text };
+        if (navigator.canShare(payload)) {
+          await navigator.share(payload);
+          navigator.clipboard?.writeText(url).catch(() => {});
+          return;
+        }
+      } catch (e: any) {
+        if (e?.name === "AbortError") return;
+      }
+    }
     if (navigator.share) {
       try {
         await navigator.share({ title: "PayQR payment link", text, url });
@@ -598,8 +635,8 @@ export default function PaymentLinksList() {
                     new Date(Number(l.expiresAt) * 1000).toLocaleString()}
               </div>
               <div className="row" style={{ marginTop: 10 }}>
-                <button className="btn small ghost" onClick={() => setQrFor(qrFor === l.linkId ? null : l.linkId)}>
-                  {qrFor === l.linkId ? "Hide QR" : "Show QR"}
+                <button className="btn small ghost" disabled={qrFor === l.linkId} onClick={() => downloadQr(l.linkId, url)}>
+                  {qrFor === l.linkId ? "Preparing…" : "Download QR"}
                 </button>
                 {/* Re-share. The create screen offers this once, at the moment
                     a link is made, and never again — so sending the same link to
@@ -624,11 +661,6 @@ export default function PaymentLinksList() {
                   </button>
                 )}
               </div>
-              {qrFor === l.linkId && url && (
-                <div style={{ marginTop: 12 }}>
-                  <PaymentLinkQR url={url} />
-                </div>
-              )}
             </div>
           );
         })}
