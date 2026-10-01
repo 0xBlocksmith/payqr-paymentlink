@@ -8,6 +8,16 @@ export default defineConfig({
     environment: "node",
     include: ["test/**/*.test.ts"],
     setupFiles: ["test/setup.ts"],
+    // Vitest's default is 5 s per test, which is not enough here.
+    // routeLinkCircle's tests import lib/customerOrder, and that first import
+    // pulls the viem/thirdweb/SDK module graph through the transform pipeline:
+    // 1.4 s for the whole file when it runs alone, but 7-13 s for a single
+    // test when the suite's files are competing for the same CPU. So the file
+    // passed on its own and failed in company — a test that is only ever
+    // flaky on a loaded machine, which is to say on CI. Nothing here waits on
+    // a network or a timer, so a generous ceiling costs a passing run
+    // nothing; it only stops the slow import being read as a failure.
+    testTimeout: 30_000,
     env: {
       NEXT_PUBLIC_CHAIN: "baseSepolia",
       NEXT_PUBLIC_RELAYER_WORKER_URL: "https://relayer.test/",
