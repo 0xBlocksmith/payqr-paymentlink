@@ -31,6 +31,7 @@ import {
 import { ACTIVE_CHAIN } from "../../../lib/chain";
 import { useT } from "../../../lib/i18n";
 import { PaymentLinkPoster } from "../../../components/PaymentLinkPoster";
+import { Icon } from "../../../components/Icons";
 
 /**
  * Merchant-facing Payment Link creation. Mirrors /qr's auth-gate shape
@@ -203,6 +204,7 @@ export default function CreatePaymentLink() {
   const [created, setCreated] = useState<{ linkId: string; url: string } | null>(null);
   const [posterDataUrl, setPosterDataUrl] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   if (!ready || !authenticated) return <Splash />;
 
@@ -440,6 +442,13 @@ ${created.url}`;
     }
   }
 
+  function copyLink() {
+    if (!created) return;
+    navigator.clipboard?.writeText(created.url).catch(() => {});
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 1500);
+  }
+
   if (created) {
     return (
       <>
@@ -447,7 +456,18 @@ ${created.url}`;
         <div className="screen pl-done">
           <div className="pl-done-head">
             <div className="pl-done-title">Payment link created</div>
-            <div className="pl-done-url">{created.url}</div>
+            <div className="pl-done-url">
+              <span>{created.url}</span>
+              <button
+                type="button"
+                className={`pl-done-copy${linkCopied ? " copied" : ""}`}
+                onClick={copyLink}
+                aria-label="Copy payment link"
+                title={linkCopied ? "Copied" : "Copy link"}
+              >
+                {linkCopied ? <Icon.Check width="14" height="14" /> : <Icon.Copy width="14" height="14" />}
+              </button>
+            </div>
           </div>
 
           <PaymentLinkPoster
