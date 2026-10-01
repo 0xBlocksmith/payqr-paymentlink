@@ -3,11 +3,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
 import type { Order } from "@p2pdotme/sdk/orders";
+import {
+  getStoredQrPayload,
+  PAYMENT_ID_FIELDS,
+  assignStoredPaymentIdToFieldValues,
+  unpackPackedPaymentId,
+} from "@p2pdotme/sdk/country";
+import type { CurrencyCode } from "@p2pdotme/sdk/country";
 import { getCustomerIdentity } from "../lib/customerRelayIdentity";
 import { getCustomerOrder, decryptPayoutAddress, markOrderPaid, cancelCustomerOrder, isStillConfirming } from "../lib/customerOrder";
 import { currencyFromBytes32 } from "../lib/contract";
 import { countryForCurrency, fmtFiat } from "../lib/countries";
 import { ACTIVE_CHAIN } from "../lib/chain";
+import { fetchPriceConfig } from "../lib/pricing";
+import type { PriceConfig } from "../lib/pricing";
 import { PAYMENT_LINK_QR_STYLE } from "./PaymentLinkQR";
 import { Logo } from "./Icons";
 import type { Hex } from "viem";
@@ -57,6 +66,8 @@ type PaymentLinkWidgetProps = {
   linkId: Hex;
   merchantName?: string;
   currencyBytes32: Hex;
+  /** The fiat amount the payer was quoted when they placed the order. */
+  quotedFiat?: number | null;
   onOrderId?: (orderId: string) => void;
   onComplete?: (orderId: string) => void;
   onCancel?: (orderId?: string) => void;
@@ -104,10 +115,34 @@ function upiUri(params: { upiId: string; merchantName: string; amountInr: string
   return `upi://pay?${q.toString()}`;
 }
 
+/** The QR the SELLER stored with their payout id (e.g. a Pago Móvil bank QR), for
+ *  rails where the payer scans a QR the seller uploaded rather than one we can
+ *  build ourselves (INR/BRL are built from the handle). null when there is none. */
+function sellerQrFor(currency: string, payoutId: string | null): string | null {
+  if (!payoutId || currency === "INR" || currency === "BRL") return null;
+  try { return getStoredQrPayload(currency as CurrencyCode, payoutId); } catch { return null; }
+}
+
+/** A multi-field payout id ("phone|Cédula/RIF|bank") split into labelled rows, the
+ *  way p2p.me's own checkout shows it. null for a single-field rail. */
+function compoundRowsFor(currency: string, payoutId: string | null): { key: string; label: string; value: string }[] | null {
+  if (!payoutId) return null;
+  try {
+    const fields = PAYMENT_ID_FIELDS[currency as CurrencyCode] ?? [];
+    if (fields.length < 2) return null;
+    const values = assignStoredPaymentIdToFieldValues(currency as CurrencyCode, payoutId);
+    const rows = fields
+      .map((f) => ({ key: f.key, label: f.displayLabel ?? f.label, value: values[f.key] ?? "" }))
+      .filter((r) => r.value !== "");
+    return rows.length ? rows : null;
+  } catch { return null; }
+}
+
 export function PaymentLinkWidget({
   linkId,
   merchantName = "the merchant",
   currencyBytes32,
+  quotedFiat,
   orderId,
   onOrderId,
   onComplete,
@@ -130,6 +165,8 @@ export function PaymentLinkWidget({
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [warningMsg, setWarningMsg] = useState("");
+  // Fee schedule, only read once an order has ended (see payerTotal6 below).
+  const [feeCfg, setFeeCfg] = useState<PriceConfig | null>(null);
   const pollRef = useRef<any>(null);
   const tickRef = useRef<any>(null);
   // Mirrors decryptedUpi for the poll's tick() closure below — tick() is
@@ -237,6 +274,13 @@ export function PaymentLinkWidget({
   }, [phase]);
 
   useEffect(() => {
+    if (phase !== "expired" && phase !== "cancelled") return;
+    let alive = true;
+    fetchPriceConfig(currency).then((c) => { if (alive) setFeeCfg(c); }).catch(() => {});
+    return () => { alive = false; };
+  }, [phase, currency]);
+
+  useEffect(() => {
     if (copied === null) return;
     const t = setTimeout(() => setCopied(null), 1500);
     return () => clearTimeout(t);
@@ -293,6 +337,22 @@ export function PaymentLinkWidget({
 
   const fiat6 = order?.actualFiatAmount && order.actualFiatAmount > 0n ? order.actualFiatAmount : order?.fiatAmount ?? 0n;
   const fiatDisplay = fmtAmount(fiat6, currency);
+
+  // FALLBACK for the cancelled/expired screens, used only when the amount the
+  // payer was quoted wasn't recorded (see quotedFiat). The order's fiatAmount is
+  // the USDC leg at the buy price; the small-order fee is added on top of it
+  // (lib/pricing.ts: total = (usdc + fee) × price). Uses the fee the order
+  // recorded, else the on-chain schedule; never the settled amount, which is the
+  // merchant's side. Not guaranteed to equal the quote (e.g. a partial fill).
+  const payerTotal6 = (() => {
+    const fiat = order?.fiatAmount ?? 0n;
+    const usdc = order?.usdcAmount ?? 0n;
+    if (fiat <= 0n) return 0n;
+    if (usdc <= 0n) return fiat;
+    const recorded = order?.fixedFeePaid ?? 0n;
+    const fee = recorded > 0n ? recorded : feeCfg && usdc <= feeCfg.smallOrderThreshold ? feeCfg.smallOrderFixedFee : 0n;
+    return fiat + (fee * fiat) / usdc;
+  })();
   // Paise included, as p2p.me's widget writes it (`am=${fiatDisplay}`, two
   // decimals). This was rounded to whole rupees, so a ₹99.99 order put ₹100 in
   // the UPI QR — the customer paid a different amount from the one owed.
@@ -302,6 +362,16 @@ export function PaymentLinkWidget({
     currency === "INR" && decryptedUpi
       ? upiUri({ upiId: decryptedUpi, merchantName, amountInr: fiatUpi, orderId: orderId || "" })
       : decryptedUpi || "";
+
+  const railQr = sellerQrFor(currency, decryptedUpi);
+  const compoundRows = compoundRowsFor(currency, decryptedUpi);
+  // A payout id that IS just the QR has no typed part worth showing as a row.
+  const singlePayout = (() => {
+    if (!decryptedUpi || compoundRows) return null;
+    if (!railQr) return decryptedUpi;
+    if (decryptedUpi.trim() === railQr) return null;
+    try { return unpackPackedPaymentId(decryptedUpi.trim()).rest.trim() || null; } catch { return decryptedUpi; }
+  })();
 
   // The widget's `remaining < 60_000`.
   const urgent = phase === "accepted" && secondsLeft < 60;
@@ -335,24 +405,38 @@ export function PaymentLinkWidget({
                   <IndiaPayMethods qrValue={qrValue} />
                 ) : currency === "BRL" ? (
                   <BrazilPayMethod qrValue={qrValue} copied={copied} onCopy={copy} />
+                ) : railQr ? (
+                  <RailQrCard qrValue={railQr} />
                 ) : (
                   <OtherRailNote currency={currency} />
                 )}
 
                 <div className="pc-details">
                   <div className="pc-details-h">Payment details</div>
-                  <DetailRow
-                    // The rail's own name for this field — "UPI ID", "PIX key",
-                    // "CBU / alias" — from the country registry rather than two
-                    // hardcoded cases, so a currency added there is labelled
-                    // correctly here with no change to this file. Anything
-                    // unlisted degrades to a plain "Payment address".
-                    label={countryForCurrency(currency).payoutLabel}
-                    value={decryptedUpi}
-                    onCopy={() => copy("payout", decryptedUpi)}
-                    copied={copied === "payout"}
-                    mono
-                  />
+                  {compoundRows?.map((r) => (
+                    <DetailRow
+                      key={r.key}
+                      label={r.label}
+                      value={r.value}
+                      onCopy={() => copy(r.key, r.value)}
+                      copied={copied === r.key}
+                      mono
+                    />
+                  ))}
+                  {singlePayout && (
+                    <DetailRow
+                      // The rail's own name for this field — "UPI ID", "PIX key",
+                      // "CBU / alias" — from the country registry rather than two
+                      // hardcoded cases, so a currency added there is labelled
+                      // correctly here with no change to this file. Anything
+                      // unlisted degrades to a plain "Payment address".
+                      label={countryForCurrency(currency).payoutLabel}
+                      value={singlePayout}
+                      onCopy={() => copy("payout", singlePayout)}
+                      copied={copied === "payout"}
+                      mono
+                    />
+                  )}
                   <DetailRow label="Amount" value={fiatDisplay} />
                 </div>
 
@@ -397,8 +481,12 @@ export function PaymentLinkWidget({
           <EndedReceipt
             expired={phase === "expired"}
             details={{
-              // What the customer ordered, not the settled amount fiatDisplay prefers.
-              amount: order?.fiatAmount && order.fiatAmount > 0n ? fmtAmount(order.fiatAmount, currency) : fiatDisplay,
+              // What the payer was quoted ("Pay ₹10.02"), which already covers any
+              // fee — not the settled amount. Falls back to the chain figure plus
+              // fee only when the quote wasn't recorded.
+              amount: quotedFiat && quotedFiat > 0
+                ? fmtFiat(countryForCurrency(currency), quotedFiat)
+                : payerTotal6 > 0n ? fmtAmount(payerTotal6, currency) : fiatDisplay,
               merchantName,
               currency,
               orderId: orderId || "",
@@ -675,6 +763,20 @@ function BrazilPayMethod({
         </button>
       </div>
     </>
+  );
+}
+
+// A QR the seller stored for this rail (e.g. Venezuela's Pago Móvil bank QR),
+// scanned from the payer's own banking app.
+function RailQrCard({ qrValue }: { qrValue: string }) {
+  return (
+    <div className="pc-qr-card">
+      <div className="pc-qr-label">Scan to pay</div>
+      <div className="pc-qr-box">
+        <QRCodeSVG value={qrValue} size={196} {...PAYMENT_LINK_QR_STYLE} />
+      </div>
+      <div className="pc-qr-hint">Scan this QR code with your banking app</div>
+    </div>
   );
 }
 
