@@ -196,6 +196,25 @@ export function clearLocalUserData(): void {
   } catch { /* ignore */ }
 }
 
+/** True when the locale groups thousands with "." (and so uses "," for decimals). */
+function dotGroups(locale: string): boolean {
+  try {
+    return new Intl.NumberFormat(locale).formatToParts(1234567.5).some((p) => p.type === "group" && p.value === ".");
+  } catch { return false; }
+}
+
+/** An amount as the PAYER sees it on a payment link.
+ *
+ *  Where "." is the thousands separator (es-VE, es-AR, pt-BR) "Bs 1.000" reads as
+ *  one, not one thousand. For those currencies this uses the notation of the
+ *  p2p.me checkout on /qr — "VEN 1000.00": the currency code, then the amount
+ *  with two decimals and no grouping — so the same order reads the same on both.
+ *  Every other currency keeps its symbol and grouping (see fmtFiat). */
+export function fmtPayerFiat(country: Country, amount: number | string): string {
+  if (!dotGroups(country.locale)) return fmtFiat(country, amount);
+  return `${country.code} ${(Number(amount) || 0).toFixed(2)}`;
+}
+
 /** Format a fiat amount with the country's symbol + locale grouping.
  *  `decimals` = MAXIMUM fraction digits: whole amounts stay clean ("₹500"),
  *  amounts that carry cents show them in full ("₹10.50") instead of being
