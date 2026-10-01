@@ -29,11 +29,12 @@
 // TYPE-ONLY: see customerRelayIdentity.ts. createOrders is loaded on demand so
 // the ECIES stack stays off the pay page's first paint.
 import type { Order, OrdersClient } from "@p2pdotme/sdk/orders";
-import { createPublicClient, http, type Hex } from "viem";
+import { createPublicClient, http, type Address, type Hex } from "viem";
 import { ACTIVE_CHAIN, RPC_URL } from "./chain";
 import { DIAMOND_ADDRESS, USDC_ADDRESS, SUBGRAPH_URL } from "./p2p";
 import { RELAYER_WORKER_URL, getLinkClaim, markPaidTypedData, cancelTypedData } from "./paymentLinks";
-import { customerRelayStore, getCustomerSigner } from "./customerRelayIdentity";
+import { customerRelayStore, getCustomerSigner, getCustomerIdentity } from "./customerRelayIdentity";
+import { LINK_ROUTER_ABI, LINK_ROUTER_ADDRESS } from "./contract";
 
 const reader = createPublicClient({ chain: ACTIVE_CHAIN, transport: http(RPC_URL) });
 
@@ -60,13 +61,99 @@ export async function getCustomerOrder(orderId: string): Promise<Order> {
   return result.value;
 }
 
-/** Decrypt an order's `encUpi` with the customer's OWN relay identity —
- *  returns "Session changed" text if it was encrypted to a different key
- *  (mirrors the widget's own fallback), never throws for a wrong-key case. */
-export async function decryptPayoutAddress(encUpi: string): Promise<string> {
-  const result = await (await client()).decryptPaymentAddress({ encrypted: encUpi });
-  if (result.isErr()) return "Session changed";
-  return result.value;
+/** Decrypt an order's `encUpi` with the customer's OWN relay identity.
+ *  null when it can't be decrypted on this device (encrypted to another key).
+ *  It used to return the text "Session changed", which the page then showed as
+ *  the payout address and put into the UPI QR (review M1) — never a value to
+ *  pay to. */
+export async function decryptPayoutAddress(encUpi: string): Promise<string | null> {
+  try {
+    const result = await (await client()).decryptPaymentAddress({ encrypted: encUpi });
+    return result.isErr() || !result.value ? null : result.value;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The circle to place a link order in, chosen the way p2p.me's Checkout widget
+ * chooses (review M5): the SDK routes to a circle with partners eligible for
+ * THIS amount. Taking the first circle listed for the currency left every link
+ * order on "Setting up your payment…" whenever that circle had nobody
+ * online, while another had partners.
+ *
+ * "none" means no partner can take it right now — the caller says so instead
+ * of placing an order nobody will accept. null means routing itself failed (a
+ * subgraph or RPC hiccup); the caller falls back to the currency's circle.
+ * `user` is who the order belongs to on-chain: the merchant's proxy.
+ */
+export async function routeLinkCircle(p: {
+  currency: string;
+  usdcAmount: bigint;
+  fiatAmount: bigint;
+  user: Address;
+}): Promise<bigint | "none" | null> {
+  try {
+    const prepared = await (await client()).placeOrder.prepare({
+      orderType: 0, // BUY
+      currency: p.currency as any,
+      user: p.user,
+      amount: p.usdcAmount,
+      fiatAmount: p.fiatAmount,
+      recipientAddr: p.user,
+      preferredPaymentChannelConfigId: 0n,
+    } as any);
+    if (prepared.isErr()) return prepared.error.code === "CIRCLE_SELECTION_FAILED" ? "none" : null;
+    return prepared.value.meta?.circleId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * How far this device's clock is from the chain's, in ms — 0 unless it is off
+ * by more than 30 s. The pay window is counted from the chain's acceptance time
+ * against this device's clock (as p2p.me's widget does), so a phone running
+ * five minutes fast showed the window as already over the moment it opened
+ * (review M4). Ignoring small differences keeps the countdown identical to the
+ * widget's on a correctly set phone. A failed read assumes the clock is right.
+ */
+export async function deviceClockSkewMs(): Promise<number> {
+  try {
+    const block = await reader.getBlock();
+    const skew = Number(block.timestamp) * 1000 - Date.now();
+    return Math.abs(skew) > 30_000 ? skew : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Is `orderId` really an order on THIS link, placed with THIS browser's key?
+ * Read from the LinkRouter, which records both when the order is placed.
+ *
+ * The order id reaches the page from the relayer, and nothing checked it
+ * (review M1): a compromised relayer could hand back an order on another link,
+ * placed with this customer's pubkey — so the customer would be shown, and
+ * pay, a stranger's payout details. Checked before any payment details are
+ * shown. "unknown" is a read failure: keep waiting, show nothing, retry.
+ */
+export async function verifyLinkOrder(orderId: string, linkId: Hex): Promise<"ok" | "mismatch" | "unknown"> {
+  try {
+    const identity = await getCustomerIdentity();
+    const [customer, onLink] = (await reader.readContract({
+      address: LINK_ROUTER_ADDRESS as `0x${string}`,
+      abi: LINK_ROUTER_ABI,
+      functionName: "orders",
+      args: [BigInt(orderId)],
+    } as any)) as readonly [string, Hex];
+    if (/^0x0+$/.test(customer)) return "unknown"; // not recorded yet (or not a link order)
+    const sameLink = onLink.toLowerCase() === linkId.toLowerCase();
+    const sameCustomer = customer.toLowerCase() === String(identity.address).toLowerCase();
+    return sameLink && sameCustomer ? "ok" : "mismatch";
+  } catch {
+    return "unknown";
+  }
 }
 
 async function forwardToRelay(params: {

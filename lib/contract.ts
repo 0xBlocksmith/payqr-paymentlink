@@ -311,6 +311,9 @@ export const LINK_ROUTER_ABI = parseAbi([
   "function cancel(bytes32 linkId, uint256 orderId, bytes signature)",
   "function linkAgent(bytes32 linkId) view returns (address)",
   "function orderCustomer(uint256 orderId) view returns (address)",
+  // Kept for good (unlike the integrator's orderToLink, deleted on complete and
+  // cancel): who placed each order, and on which link.
+  "function orders(uint256 orderId) view returns (address customer, bytes32 linkId)",
   "function markPaidDigest(bytes32 linkId, uint256 orderId) view returns (bytes32)",
   "function cancelDigest(bytes32 linkId, uint256 orderId) view returns (bytes32)",
   "event AgentRegistered(bytes32 indexed linkId, address indexed agent, address indexed merchant)",

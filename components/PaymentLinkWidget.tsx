@@ -11,7 +11,8 @@ import {
 } from "@p2pdotme/sdk/country";
 import type { CurrencyCode } from "@p2pdotme/sdk/country";
 import { getCustomerIdentity } from "../lib/customerRelayIdentity";
-import { getCustomerOrder, decryptPayoutAddress, markOrderPaid, cancelCustomerOrder, isStillConfirming } from "../lib/customerOrder";
+import { pixPayload } from "../lib/pixBrCode";
+import { getCustomerOrder, decryptPayoutAddress, markOrderPaid, cancelCustomerOrder, isStillConfirming, verifyLinkOrder, deviceClockSkewMs } from "../lib/customerOrder";
 import { currencyFromBytes32 } from "../lib/contract";
 import { countryForCurrency, fmtPayerFiat } from "../lib/countries";
 import { ACTIVE_CHAIN } from "../lib/chain";
@@ -104,7 +105,15 @@ function fmtAmount(usdc6: bigint, currencyCode: string): string {
   return fmtPayerFiat(countryForCurrency(currencyCode), Number(usdc6) / 1e6);
 }
 
-function upiUri(params: { upiId: string; merchantName: string; amountInr: string; orderId: string }) {
+/** PayQR's support thread, opened with the order number filled in. */
+function supportHref(orderId: string): string {
+  return `https://t.me/PayQRdotPRO/1819?text=${encodeURIComponent(`Hi, I need help with payment #${orderId}.`)}`;
+}
+
+/** Shown while a dispute is open on the order. */
+const REVIEW_NOTE = "Your payment is being reviewed by our support team. This page will update when it's done.";
+
+function upiUri(params:{ upiId: string; merchantName: string; amountInr: string; orderId: string }) {
   const q = new URLSearchParams({
     pa: params.upiId,
     pn: params.merchantName,
@@ -160,6 +169,12 @@ export function PaymentLinkWidget({
   // reload shows the true time left rather than restarting the clock. Set once,
   // as the widget sets its acceptedTimestamp once.
   const deadlineRef = useRef<number | null>(null);
+  // Chain time minus this device's time, when the device clock is badly off
+  // (deviceClockSkewMs); 0 on a correctly set phone.
+  const clockSkewRef = useRef(0);
+  useEffect(() => {
+    deviceClockSkewMs().then((skew) => { clockSkewRef.current = skew; });
+  }, []);
   const [copied, setCopied] = useState<string | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -175,6 +190,15 @@ export function PaymentLinkWidget({
   // see the value from the render that created it (always null), causing
   // decryptPayoutAddress to be re-invoked every poll instead of once.
   const decryptedUpiRef = useRef<string | null>(null);
+  // The final outcome already reported to the caller, so polling on through an
+  // open dispute does not report it again on every tick.
+  const reportedRef = useRef<"cancelled" | "completed" | null>(null);
+  // Whether this order is really on THIS link and placed with THIS browser's
+  // key (verifyLinkOrder). Payment details are shown only once it is "ok".
+  const [ownership, setOwnership] = useState<"checking" | "ok" | "mismatch">("checking");
+  const ownershipRef = useRef<"checking" | "ok" | "mismatch">("checking");
+  // The payment details could not be decrypted on this device.
+  const [decryptFailed, setDecryptFailed] = useState(false);
 
   const currency = currencyFromBytes32(currencyBytes32) || "INR";
 
@@ -195,16 +219,25 @@ export function PaymentLinkWidget({
         if (!alive) return;
         setOrder(o);
 
+        // Finished — but a dispute open on it can still change the outcome, so
+        // keep watching until it is resolved (the page says it will update).
+        const settledForGood = o.disputeStatus !== "open";
         if (o.status === "cancelled") {
           setPhase("cancelled");
-          onCancel?.(orderId!);
-          if (pollRef.current) clearInterval(pollRef.current);
+          if (reportedRef.current !== "cancelled") {
+            reportedRef.current = "cancelled";
+            onCancel?.(orderId!);
+          }
+          if (settledForGood && pollRef.current) clearInterval(pollRef.current);
           return;
         }
         if (o.status === "completed") {
           setPhase("completed");
-          onComplete?.(orderId!);
-          if (pollRef.current) clearInterval(pollRef.current);
+          if (reportedRef.current !== "completed") {
+            reportedRef.current = "completed";
+            onComplete?.(orderId!);
+          }
+          if (settledForGood && pollRef.current) clearInterval(pollRef.current);
           return;
         }
         if (o.status === "paid") {
@@ -216,7 +249,7 @@ export function PaymentLinkWidget({
           // deadline. As the widget: the first read decides it, and if
           // acceptedAt still reads 0 then, it counts from now.
           if (deadlineRef.current === null) {
-            const acceptedMs = o.acceptedAt > 0n ? Number(o.acceptedAt) * 1000 : Date.now();
+            const acceptedMs = o.acceptedAt > 0n ? Number(o.acceptedAt) * 1000 : Date.now() + clockSkewRef.current;
             deadlineRef.current = acceptedMs + AUTO_CANCEL_WINDOW_MS;
           }
           // Once the LOCAL countdown has already declared this expired, the
@@ -227,16 +260,35 @@ export function PaymentLinkWidget({
           // the customer's point of view; only cancelled/completed (handled
           // above) should ever move past it.
           setPhase((p) => (p === "cancelled" || p === "completed" || p === "expired" ? p : "accepted"));
+          // Before ANY payment details: is this order ours (review M1)? Checked
+          // once; a read failure just waits for the next tick.
+          if (ownershipRef.current !== "ok") {
+            const v = await verifyLinkOrder(orderId!, linkId);
+            if (!alive) return;
+            if (v === "mismatch") {
+              ownershipRef.current = "mismatch";
+              setOwnership("mismatch");
+              if (pollRef.current) clearInterval(pollRef.current);
+              return;
+            }
+            if (v === "unknown") return;
+            ownershipRef.current = "ok";
+            setOwnership("ok");
+          }
           if (o.encUpi && decryptedUpiRef.current === null) {
             decryptPayoutAddress(o.encUpi).then((upi) => {
               if (!alive) return;
+              if (upi === null) {
+                setDecryptFailed(true);
+                return;
+              }
               decryptedUpiRef.current = upi;
               setDecryptedUpi(upi);
             });
           }
           return;
         }
-        // still "placed" — keep showing "Finding a payment provider…"
+        // still "placed" — keep showing "Setting up your payment…"
       } catch {
         // transient read failure — keep polling, don't flip to an error state
         // on a single blip (mirrors the app's fail-open RPC discipline).
@@ -258,7 +310,7 @@ export function PaymentLinkWidget({
       if (deadlineRef.current === null) return;
       // The widget's CountdownRing: remaining ms, floored for display, expired
       // at exactly 0.
-      const remaining = Math.max(0, deadlineRef.current - Date.now());
+      const remaining = Math.max(0, deadlineRef.current - (Date.now() + clockSkewRef.current));
       if (remaining === 0) {
         clearInterval(tickRef.current);
         setSecondsLeft(0);
@@ -362,6 +414,14 @@ export function PaymentLinkWidget({
     currency === "INR" && decryptedUpi
       ? upiUri({ upiId: decryptedUpi, merchantName, amountInr: fiatUpi, orderId: orderId || "" })
       : decryptedUpi || "";
+  // Brazil: a real Pix BR Code with the amount and order id in it (review M2) —
+  // null when the key can't be made into one, and the key is shown to copy.
+  const pixCode =
+    currency === "BRL" && decryptedUpi
+      ? pixPayload(decryptedUpi, { amount: Number(fiat6) / 1e6, orderId: orderId || undefined, merchantName })
+      : null;
+  // A dispute is open on this order: support is reviewing it.
+  const underReview = order?.disputeStatus === "open";
 
   const railQr = sellerQrFor(currency, decryptedUpi);
   const compoundRows = compoundRowsFor(currency, decryptedUpi);
@@ -387,24 +447,56 @@ export function PaymentLinkWidget({
         {phase === "matching" && (
           <div className="pc-matching">
             <span className="pc-spinner" aria-hidden="true" />
-            <div className="pc-matching-h">Finding a payment provider…</div>
+            <div className="pc-matching-h">Setting up your payment…</div>
             <div className="pc-matching-sub">This usually takes a few seconds.</div>
           </div>
         )}
 
-        {phase === "accepted" && (
+        {ownership === "mismatch" && (
+          <div className="pc-expired">
+            <div className="pc-expired-h">Please don't pay</div>
+            <div className="pc-expired-sub">
+              We couldn't confirm this payment belongs to this link. Nothing has been charged.
+            </div>
+            <a
+              className="pc-expired-sub"
+              href={supportHref(orderId || "")}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Contact support ↗
+            </a>
+          </div>
+        )}
+
+        {phase === "accepted" && ownership !== "mismatch" && (
           <>
-            {!decryptedUpi ? (
+            {decryptFailed ? (
+              <div className="pc-expired">
+                <div className="pc-expired-h">Payment details unavailable</div>
+                <div className="pc-expired-sub">
+                  We couldn't open the payment details on this device. Please don't pay yet — contact support.
+                </div>
+                <a
+                  className="pc-expired-sub"
+                  href={supportHref(orderId || "")}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Contact support ↗
+                </a>
+              </div>
+            ) : !decryptedUpi || ownership !== "ok" ? (
               <div className="pc-matching">
                 <span className="pc-spinner" aria-hidden="true" />
-                <div className="pc-matching-sub">Decrypting payment details…</div>
+                <div className="pc-matching-sub">Getting payment details…</div>
               </div>
             ) : (
               <>
                 {currency === "INR" ? (
                   <IndiaPayMethods qrValue={qrValue} />
                 ) : currency === "BRL" ? (
-                  <BrazilPayMethod qrValue={qrValue} copied={copied} onCopy={copy} />
+                  <BrazilPayMethod pixCode={pixCode} copied={copied} onCopy={copy} />
                 ) : railQr ? (
                   <RailQrCard qrValue={railQr} />
                 ) : (
@@ -474,6 +566,7 @@ export function PaymentLinkWidget({
             whenSecs={Number(order?.completedAt || order?.paidAt || order?.placedAt || 0n)}
             payoutHandle={decryptedUpi}
             onNewPayment={onNewPayment}
+            underReview={underReview}
           />
         )}
 
@@ -498,7 +591,20 @@ export function PaymentLinkWidget({
             onCancel={handleCancel}
             busy={busy}
             onNewPayment={onNewPayment}
+            underReview={underReview}
           />
+        )}
+
+        {/* Under review by support (a dispute is open on this order) while the
+            payment is still being verified. The finished screens below are
+            full-screen and show the same notice inside their own card. */}
+        {underReview && phase === "paying" && (
+          <div className="pc-expired-sub" style={{ marginTop: 12 }}>
+            {REVIEW_NOTE}{" "}
+            <a href={supportHref(orderId || "")} target="_blank" rel="noopener noreferrer">
+              Contact support ↗
+            </a>
+          </div>
         )}
 
         {/* Errors outside the "accepted" panel (which shows its own): a cancel
@@ -692,6 +798,10 @@ export function PaymentLinkWidget({
         .pc-rcpt-full { position: fixed; inset: 0; z-index: 60; overflow-y: auto; background: var(--bg, #fff); }
         .pc-rcpt-share { width: 100%; margin-top: 16px; }
         .pc-rcpt-full .rcpt-help { margin: 12px 0 0; }
+        .pc-review-note {
+          margin-top: 12px; padding: 10px 12px; border-radius: 12px; text-align: center;
+          background: var(--pq-warn-soft); color: var(--pq-warn); font-size: 13px; line-height: 1.45;
+        }
         .pc-help-box { margin-top: 18px; padding: 14px; border-radius: 14px; background: var(--bg-soft); text-align: center; }
         .pc-help-h { font-size: 14px; font-weight: 700; color: var(--text); }
         .pc-help-sub { font-size: 12px; color: var(--muted); margin: 4px 0 12px; line-height: 1.45; }
@@ -735,20 +845,31 @@ function IndiaPayMethods({ qrValue }: { qrValue: string }) {
 }
 
 function BrazilPayMethod({
-  qrValue,
+  pixCode,
   copied,
   onCopy,
 }: {
-  qrValue: string;
+  /** A payable BR Code, or null when the key couldn't be made into one. */
+  pixCode: string | null;
   copied: string | null;
   onCopy: (label: string, value: string) => void;
 }) {
+  // No payable code: send the customer to the Pix key below, named as a key —
+  // never a raw key passed off as "Pix Copia e Cola".
+  if (!pixCode) {
+    return (
+      <div className="pc-bank-card">
+        <div className="pc-bank-h">Pay with Pix</div>
+        <div className="pc-bank-sub">Send the amount below to the Pix key shown, from your bank app.</div>
+      </div>
+    );
+  }
   return (
     <>
       <div className="pc-qr-card">
         <div className="pc-qr-label">Scan to pay</div>
         <div className="pc-qr-box">
-          <QRCodeSVG value={qrValue} size={196} {...PAYMENT_LINK_QR_STYLE} />
+          <QRCodeSVG value={pixCode} size={196} {...PAYMENT_LINK_QR_STYLE} />
         </div>
         <div className="pc-qr-hint">Scan this Pix QR in your bank app</div>
       </div>
@@ -756,7 +877,7 @@ function BrazilPayMethod({
         <div className="pc-apps-h">Or pay with Pix Copia e Cola</div>
         <button
           className={`pc-copy-code-btn${copied === "pix-code" ? " copied" : ""}`}
-          onClick={() => onCopy("pix-code", qrValue)}
+          onClick={() => onCopy("pix-code", pixCode)}
         >
           {copied === "pix-code" ? <CheckIcon /> : <CopyIcon />}
           {copied === "pix-code" ? "Code copied" : "Copy Pix code"}
@@ -833,18 +954,20 @@ function StatusStrip({ secondsLeft, urgent }: { secondsLeft: number; urgent: boo
 // how. Built from the order the widget already polls, so it needs no token, no
 // subgraph and no login, and it survives a reload the same way.
 function maskHandle(h: string): string {
-  if (!h || h === "Session changed") return "";
+  if (!h) return "";
   if (h.length <= 4) return h;
   const at = h.indexOf("@");
   return `${h.slice(0, 2)}•••${h.slice(at > 0 ? at : h.length - 2)}`;
 }
 
 function ReceiptPanel({
-  amount, merchantName, currency, orderId, usdc6, feeUsdc6, whenSecs, payoutHandle, onNewPayment,
+  amount, merchantName, currency, orderId, usdc6, feeUsdc6, whenSecs, payoutHandle, onNewPayment, underReview,
 }: {
   amount: string; merchantName: string; currency: string; orderId: string;
   usdc6: bigint; feeUsdc6: bigint; whenSecs: number; payoutHandle: string | null;
   onNewPayment?: () => void;
+  /** A dispute is open on this order. */
+  underReview?: boolean;
 }) {
   const country = countryForCurrency(currency);
   const captureRef = useRef<HTMLDivElement>(null);
@@ -895,6 +1018,7 @@ function ReceiptPanel({
           <div className="rcpt-shop">Paid to {merchantName}</div>
           <div className="rcpt-amount">{amount}</div>
           <div className="rcpt-amount-sub">You paid</div>
+          {underReview && <div className="pc-review-note">{REVIEW_NOTE}</div>}
 
           <div className="rcpt-rows">
             <div className="rcpt-row"><span>Paid to</span><b>{merchantName}</b></div>
@@ -902,11 +1026,11 @@ function ReceiptPanel({
               <div className="rcpt-row"><span>{country.payoutLabel}</span><b className="mono">{handle}</b></div>
             )}
             <div className="rcpt-row"><span>Via</span><b>{country.flag} {country.name} · {country.code}</b></div>
-            {usdc6 > 0n && <div className="rcpt-row"><span>Settled as</span><b>{usdc(usdc6)} USDC</b></div>}
-            {feeUsdc6 > 0n && <div className="rcpt-row"><span>Transaction fee</span><b>{usdc(feeUsdc6)} USDC</b></div>}
+            {/* No USDC rows: the payer paid in their own currency (the amount
+                above), and settlement detail is the merchant's, not theirs. */}
             {when && <div className="rcpt-row"><span>When</span><b>{when}</b></div>}
             <div className="rcpt-row"><span>Receipt no.</span><b>#{orderId}</b></div>
-            <div className="rcpt-row"><span>Status</span><b className="g">Completed</b></div>
+            <div className="rcpt-row"><span>Status</span>{underReview ? <b className="w">Under review</b> : <b className="g">Completed</b>}</div>
           </div>
           <p className="rcpt-foot">Save this receipt as proof of your payment.</p>
 
@@ -959,10 +1083,12 @@ function supportMessage(d: EndedDetails): { href: string; text: string } {
 // twin of the merchant's cancelled receipt at /receipt/[orderId], with the same
 // card as the success receipt and no beach scene behind it.
 function EndedReceipt({
-  details, expired, onPaid, onCancel, busy, onNewPayment,
+  details, expired, onPaid, onCancel, busy, onNewPayment, underReview,
 }: {
   details: EndedDetails; expired: boolean; busy: boolean;
   onPaid?: () => void; onCancel?: () => void; onNewPayment?: () => void;
+  /** A dispute is open on this order: the outcome may still change. */
+  underReview?: boolean;
 }) {
   const country = countryForCurrency(details.currency);
   const support = supportMessage(details);
@@ -981,19 +1107,22 @@ function EndedReceipt({
           <div className="rcpt-shop">Paid to {details.merchantName}</div>
           <div className="rcpt-amount">{details.amount}</div>
           <div className="rcpt-amount-sub">
-            {expired
-              // We can't know whether the customer paid after the window closed,
-              // so this never claims that no money moved.
-              ? "If you already paid, tap “I already paid” — don't pay again."
-              : "This payment did not go through"}
+            {underReview
+              ? "Please don't pay again."
+              : expired
+                // We can't know whether the customer paid after the window closed,
+                // so this never claims that no money moved.
+                ? "If you already paid, tap “I already paid” — don't pay again."
+                : "This payment did not go through"}
           </div>
+          {underReview && <div className="pc-review-note">{REVIEW_NOTE}</div>}
 
           <div className="rcpt-rows">
             <div className="rcpt-row"><span>Paid to</span><b>{details.merchantName}</b></div>
             <div className="rcpt-row"><span>Via</span><b>{country.flag} {country.name} · {country.code}</b></div>
             {when && <div className="rcpt-row"><span>When</span><b>{when}</b></div>}
             <div className="rcpt-row"><span>Receipt no.</span><b>#{details.orderId}</b></div>
-            <div className="rcpt-row"><span>Status</span><b className={expired ? "w" : "r"}>{details.status}</b></div>
+            <div className="rcpt-row"><span>Status</span>{underReview ? <b className="w">Under review</b> : <b className={expired ? "w" : "r"}>{details.status}</b>}</div>
           </div>
 
           <div className="pc-help-box" data-html2canvas-ignore="true">

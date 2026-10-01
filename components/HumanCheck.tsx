@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useRef } from "react";
+import { sha256 } from "viem";
 import { RELAYER_WORKER_URL } from "../lib/paymentLinks";
 
 /**
@@ -18,10 +19,22 @@ import { RELAYER_WORKER_URL } from "../lib/paymentLinks";
  * in the DOM yet and silently never produced a token.
  *
  * WHAT THE CUSTOMER EXPERIENCES
- * Nothing. At difficulty 18 this is roughly 260k hashes: tens of milliseconds
- * on a phone, inside the tap that was already going to take a network round
- * trip. Somebody scripting the endpoint pays it on every single request.
+ * At difficulty 18 this is about 260k hashes on average. It used to hash with
+ * the browser's async SubtleCrypto, one awaited call per try — measured at
+ * 0.4–1.3 s on a laptop and several seconds on a budget phone (review M6), on
+ * Pay, "I've paid" and Cancel alike. It now hashes synchronously (noble's
+ * SHA-256, via viem), about 14x faster, yielding to the page every few
+ * thousand tries. Somebody scripting the endpoint still pays it per request.
+ *
+ * The difficulty comes from the server, so it is CAPPED here: above
+ * MAX_DIFFICULTY a phone would grind for a minute or more, so the customer is
+ * told the service is busy instead. And a solve that runs past SOLVE_TIMEOUT_MS
+ * stops with a message rather than spinning forever.
  */
+
+/** Each extra bit doubles the work: 20 is ~1M tries, a few seconds on a phone. */
+const MAX_DIFFICULTY = 20;
+const SOLVE_TIMEOUT_MS = 30_000;
 
 /** Leading zero bits of a digest. Mirrors the server's check exactly — a
  *  disagreement here fails as "verification failed" with nothing to point at. */
@@ -69,20 +82,22 @@ export async function solveHumanCheck(signal?: AbortSignal): Promise<HumanSoluti
   if (!body.enabled || !body.challenge) return null;
 
   const difficulty = Number(body.difficulty ?? 18);
+  if (!Number.isFinite(difficulty) || difficulty > MAX_DIFFICULTY) {
+    throw new Error("Payments are very busy right now. Please try again in a minute.");
+  }
   const encoder = new TextEncoder();
+  const deadline = Date.now() + SOLVE_TIMEOUT_MS;
 
-  // Yield to the event loop periodically so the tap that triggered this does
-  // not freeze the page. A phone at difficulty 18 finishes inside one or two
-  // of these windows; the yield only matters if difficulty is raised sharply.
+  // Hash in short synchronous bursts, yielding between them so the tap that
+  // started this keeps the page responsive.
   for (let nonce = 0; ; nonce++) {
-    const digest = new Uint8Array(
-      await crypto.subtle.digest("SHA-256", encoder.encode(`${body.challenge}.${nonce}`))
-    );
+    const digest = sha256(encoder.encode(`${body.challenge}.${nonce}`), "bytes");
     if (leadingZeroBits(digest) >= difficulty) {
       return { challenge: body.challenge, nonce: String(nonce) };
     }
-    if (nonce % 2000 === 1999) {
+    if (nonce % 5000 === 4999) {
       if (signal?.aborted) throw new Error("Cancelled.");
+      if (Date.now() > deadline) throw new Error("This is taking longer than usual. Please try again.");
       await new Promise((r) => setTimeout(r, 0));
     }
   }

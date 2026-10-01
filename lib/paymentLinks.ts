@@ -5,7 +5,7 @@
  * ARCHITECTURE (matches payment-integrators PR #104 — LinkRouter +
  * PaymentLinksLib): a merchant creates a shareable link (createLink, one
  * merchant-signed transaction). A walletless customer opens /pay/[linkId],
- * and PayQR's backend relayer (a Cloudflare Worker — see ../../worker/)
+ * and PayQR's relayer (p2pdotme/payer-relayer, a Node service on Railway)
  * drives the payment through LinkRouter on the merchant's behalf.
  *
  * WHAT CHANGED FROM THE OLD (PRE-PR#104) DESIGN THIS FILE USED TO TARGET:
@@ -149,7 +149,12 @@ export async function fetchMerchantLinkIds(
  * a stale or bogus id costs a lookup and is then dropped, and the worker cannot
  * influence what a link claims to be.
  */
-export async function fetchIndexedMerchantLinkIds(owner: Address): Promise<Hex[]> {
+export async function fetchIndexedMerchantLinkIds(
+  owner: Address,
+  /** Filled with each fixed-price link's price, lowercased id → price, from the
+   *  same response — so the list shows prices on any device in one call. */
+  prices?: Map<string, LinkPrice>
+): Promise<Hex[]> {
   if (!RELAYER_WORKER_URL) return [];
   const out: Hex[] = [];
   let cursor: string | null = null;
@@ -162,7 +167,7 @@ export async function fetchIndexedMerchantLinkIds(owner: Address): Promise<Hex[]
     // ten-page ceiling below 1,000 links rather than the 2,000 intended.
     url.searchParams.set("limit", "200");
     if (cursor) url.searchParams.set("cursor", cursor);
-    let body: { linkIds?: string[]; cursor?: string | null };
+    let body: { linkIds?: string[]; cursor?: string | null; prices?: Record<string, unknown> };
     try {
       const res = await fetch(url.toString());
       if (!res.ok) break;
@@ -172,6 +177,12 @@ export async function fetchIndexedMerchantLinkIds(owner: Address): Promise<Hex[]
     }
     for (const id of body.linkIds ?? []) {
       if (/^0x[0-9a-fA-F]{64}$/.test(id)) out.push(id as Hex);
+    }
+    if (prices && body.prices && typeof body.prices === "object") {
+      for (const [id, p] of Object.entries(body.prices)) {
+        const price = asLinkPrice(p);
+        if (price && /^0x[0-9a-fA-F]{64}$/.test(id)) prices.set(id.toLowerCase(), price);
+      }
     }
     cursor = body.cursor ?? null;
     if (!cursor) break;
@@ -364,22 +375,19 @@ export function linkWalletTypedData(chainId: number, linkId: Hex, expiry: number
 // USDC on payment — so a "₹10" link, priced once at creation, then charged
 // ₹9.90 one day and ₹10.03 the next as the rate moved. To charge the SAME local
 // amount every time without a contract change, such a link is an open-amount
-// link on-chain (amount 0), and its price travels in its URL, signed by the
-// merchant. The pay page checks that signature against the link's on-chain
-// owner and prices the amount in USDC at the moment of payment, so the
-// customer's currency is fixed and the merchant's USDC moves with the rate.
+// link on-chain (amount 0), and its price is kept by the RELAYER: the merchant
+// signs it when the link's wallet is provisioned, and /api/pay charges it,
+// priced from the Diamond at the moment of placement, whatever the request
+// says. The customer's currency is fixed; the merchant's USDC moves with the
+// rate.
 //
-// Enforced by the pay page, not the contract or the relayer, which accept any
-// amount on an open-amount link: editing the URL breaks the signature, and
-// going around the page is no easier than on any open-amount link.
-
-export const FIXED_AMOUNT_PARAM = "fa"; // local currency, 6 decimals
-export const FIXED_SIG_PARAM = "fs";
-
-export type FixedAmount = { amount6: bigint; signature: Hex };
+// It used to travel in the link's URL, checked only by this page — and deleting
+// the query string made the link pay-anything (review H2). The relayer is the
+// only path to LinkRouter.place, so a price it holds cannot be gone around.
 
 /** What the merchant signs. Bound to the link and its currency, so a
- *  signature can't be moved to another link or read in another currency. */
+ *  signature can't be moved to another link or read in another currency. The
+ *  relayer verifies exactly this (payer-relayer src/fixedPrice.ts). */
 export function fixedAmountTypedData(chainId: number, linkId: Hex, amount6: bigint, currency: Hex) {
   return {
     domain: {
@@ -400,43 +408,101 @@ export function fixedAmountTypedData(chainId: number, linkId: Hex, amount6: bigi
   } as const;
 }
 
-export function withFixedAmount(url: string, fixed: FixedAmount): string {
-  const u = new URL(url);
-  u.searchParams.set(FIXED_AMOUNT_PARAM, fixed.amount6.toString());
-  u.searchParams.set(FIXED_SIG_PARAM, fixed.signature);
-  return u.toString();
+/** A price the merchant signed, sent with provisioning. */
+export type SignedLinkPrice = { amount6: bigint; currency: Hex; signature: Hex };
+
+/** A fixed-price link's price as the relayer holds it. */
+export type LinkPrice = { amount6: bigint; currency: Hex };
+
+function asLinkPrice(v: unknown): LinkPrice | null {
+  const p = v as { amount6?: unknown; currency?: unknown } | null;
+  if (!p || typeof p.amount6 !== "string" || !/^[1-9]\d{0,23}$/.test(p.amount6)) return null;
+  if (typeof p.currency !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(p.currency)) return null;
+  return { amount6: BigInt(p.amount6), currency: p.currency.toLowerCase() as Hex };
 }
 
-/** The fixed amount carried by a pay URL's query string: null when there is
- *  none, "malformed" when it is there but unusable — which the page must treat
- *  as a broken link, never as an open amount. */
-export function parseFixedAmount(search: string): FixedAmount | "malformed" | null {
-  const q = new URLSearchParams(search);
-  const a = q.get(FIXED_AMOUNT_PARAM);
-  const s = q.get(FIXED_SIG_PARAM);
-  if (a === null && s === null) return null;
-  if (!a || !s || !/^[1-9]\d{0,30}$/.test(a) || !/^0x(?:[0-9a-fA-F]{2})+$/.test(s)) return "malformed";
-  return { amount6: BigInt(a), signature: s as Hex };
-}
+let featuresOnce: Promise<Set<string>> | null = null;
 
-/** True when the link's on-chain owner signed this amount for this link.
- *  ERC-1271 aware — the merchant is a smart account — exactly as the relayer
- *  verifies the same merchant's LinkWallet signature (provision.ts). */
-export async function verifyFixedAmount(
-  // Only the one method: callers hold differently-parameterised viem clients.
-  publicClient: { verifyTypedData: (args: any) => Promise<boolean> },
-  chainId: number,
-  link: { linkId: Hex; owner: Address; currency: Hex },
-  fixed: FixedAmount
-): Promise<boolean> {
-  try {
-    return await publicClient.verifyTypedData({
-      address: link.owner,
-      ...fixedAmountTypedData(chainId, link.linkId, fixed.amount6, link.currency),
-      signature: fixed.signature,
+/**
+ * What the relayer supports beyond its original API (`features` on /health).
+ * Each new behaviour is used only when listed, so the app and the relayer can
+ * be deployed in either order — above all, a fixed local price is never sent
+ * to a relayer that would drop it and leave the link pay-anything.
+ * Remembered for the page's life; a failed read is retried next time.
+ */
+export function relayerFeatures(): Promise<Set<string>> {
+  if (!RELAYER_WORKER_URL) return Promise.resolve(new Set());
+  featuresOnce ??= fetch(`${RELAYER_WORKER_URL}/health`)
+    .then((r) => r.json())
+    .then((b: { features?: unknown }) => new Set(Array.isArray(b?.features) ? b.features.map(String) : []))
+    .catch(() => {
+      featuresOnce = null;
+      return new Set<string>();
     });
+  return featuresOnce;
+}
+
+/**
+ * A link's fixed price from the relayer: null when it has none (an open-amount
+ * link, or a relayer that predates fixed prices, whose unknown route is a 404).
+ * THROWS when the price can't be read — the page must then wait and retry, not
+ * show an open amount the relayer would not charge.
+ */
+export async function fetchLinkPrice(linkId: Hex): Promise<LinkPrice | null> {
+  if (!RELAYER_WORKER_URL) return null;
+  const res = await fetch(`${RELAYER_WORKER_URL}/api/links/${linkId}/price`);
+  if (res.status === 404) return null;
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(body?.error || "Could not load this link's price. Please try again.");
+  const price = asLinkPrice(body);
+  if (!price) throw new Error("Could not load this link's price. Please try again.");
+  return price;
+}
+
+// ─── One payment attempt, across a lost answer ─────────────────────────────
+//
+// /api/pay replays an attempt's first answer for its `idempotencyKey`. Kept
+// here per link and amount until the attempt is settled, so tapping Pay again
+// after a network drop — even after a reload — is the SAME attempt to the
+// relayer, not a second order (review: duplicate orders). A different amount
+// is a different purchase and gets a fresh key.
+const ATTEMPT_KEY_PREFIX = "payqr.linkAttempt:";
+const ATTEMPT_TTL_MS = 10 * 60 * 1000;
+
+export function attemptKeyFor(linkId: string, fiat6: bigint): string {
+  const slot = `${ATTEMPT_KEY_PREFIX}${linkId.toLowerCase()}`;
+  try {
+    const raw = localStorage.getItem(slot);
+    if (raw) {
+      const a = JSON.parse(raw) as { key?: unknown; fiat6?: unknown; at?: unknown };
+      if (
+        typeof a.key === "string" &&
+        /^[A-Za-z0-9_-]{16,64}$/.test(a.key) &&
+        a.fiat6 === fiat6.toString() &&
+        typeof a.at === "number" &&
+        Date.now() - a.at < ATTEMPT_TTL_MS
+      ) {
+        return a.key;
+      }
+    }
   } catch {
-    return false;
+    /* unreadable: start a fresh attempt */
+  }
+  const key = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
+  try {
+    localStorage.setItem(slot, JSON.stringify({ key, fiat6: fiat6.toString(), at: Date.now() }));
+  } catch {
+    /* best-effort: without it a reload starts a fresh attempt */
+  }
+  return key;
+}
+
+/** The attempt is settled — an order exists or is being followed up. */
+export function clearAttempt(linkId: string): void {
+  try {
+    localStorage.removeItem(`${ATTEMPT_KEY_PREFIX}${linkId.toLowerCase()}`);
+  } catch {
+    /* nothing to clear */
   }
 }
 
@@ -471,6 +537,10 @@ export async function provisionLinkWallet(params: {
   chainId: number;
   signTypedData: (typedData: ReturnType<typeof linkWalletTypedData>) => Promise<Hex>;
   signerAddress: Address;
+  /** A fixed local price for the link (see fixedAmountTypedData). Stored by
+   *  the relayer before the wallet exists; only send it when relayerFeatures()
+   *  lists "fixed-price". */
+  fixedPrice?: SignedLinkPrice;
 }): Promise<ProvisionedWallet> {
   if (!PAYMENT_LINKS_ENABLED) throw new Error("Payment Links isn't configured on this deployment.");
 
@@ -483,14 +553,32 @@ export async function provisionLinkWallet(params: {
   const res = await fetch(`${RELAYER_WORKER_URL}/api/links/${params.linkId}/wallet`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ signer: params.signerAddress, signature, expiry }),
+    body: JSON.stringify({
+      signer: params.signerAddress,
+      signature,
+      expiry,
+      ...(params.fixedPrice
+        ? {
+            fixedPrice: {
+              amount6: params.fixedPrice.amount6.toString(),
+              currency: params.fixedPrice.currency,
+              signature: params.fixedPrice.signature,
+            },
+          }
+        : {}),
+    }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}) as any);
     throw new Error(body?.error || "Could not prepare this payment link. Please try again.");
   }
-  const data = (await res.json()) as { linkId: Hex; account: Address; existing: boolean };
-  if (!data?.account) throw new Error("Malformed response from the payment relayer.");
+  const data = (await res.json()) as { linkId: Hex; account: Address; existing: boolean; fixedPrice?: boolean };
+  if (!data?.account) throw new Error("Something went wrong. Please try again.");
+  // The relayer says it kept the price. Without that the link would go live
+  // open-amount with nothing charging the price — so stop before it is created.
+  if (params.fixedPrice && data.fixedPrice !== true) {
+    throw new Error("The payment server couldn't save this link's price. Please try again later.");
+  }
   return { linkId: data.linkId, account: data.account, existing: Boolean(data.existing) };
 }
 
@@ -524,10 +612,6 @@ export async function fetchLink(
     uses: result[6],
     strikes: result[7],
   };
-}
-
-export function isLinkOwnerZero(link: PaymentLink): boolean {
-  return link.owner === "0x0000000000000000000000000000000000000000";
 }
 
 /** Same shape as chain.ts's linkBlockedReason on the worker, so the pay page
@@ -606,9 +690,16 @@ export function makeRelayerPlaceOrder({
   circleId,
   getIdentity,
   getHumanSolution,
+  fiatAmount6,
+  idempotencyKey,
 }: {
   linkId: Hex;
   publicClient: any;
+  /** The amount in the customer's currency, 6 decimals — what the relayer
+   *  charges on an open-amount link (a fixed-price link charges its own). */
+  fiatAmount6?: bigint;
+  /** One per payment attempt (attemptKeyFor), so a retry is not a second order. */
+  idempotencyKey?: string;
   /** Product-2 units, which for this integrator IS the 6-dec USDC amount
    *  exactly (unit price is one 6-dec unit) — the same identity /qr relies on.
    *  Ignored server-side for a fixed-amount link, which re-derives it from the
@@ -664,6 +755,10 @@ export function makeRelayerPlaceOrder({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         quantity: Number(quantity),
+        // The local amount, priced by the relayer at placement (it then
+        // ignores `quantity`, which stays for a relayer that predates this).
+        ...(fiatAmount6 !== undefined ? { fiatAmount6: fiatAmount6.toString() } : {}),
+        ...(idempotencyKey ? { idempotencyKey } : {}),
         pubKey,
         circleId,
         challenge: human?.challenge,
@@ -699,7 +794,7 @@ export function makeRelayerPlaceOrder({
       txHash: Hex;
       claimToken?: string;
     };
-    if (!orderId || !txHash) throw new Error("Malformed response from the payment relayer.");
+    if (!orderId || !txHash) throw new Error("Something went wrong. Please try again.");
 
     // Persist the claim token BEFORE the on-chain re-verification below. The
     // order already exists at this point — the worker only returns an orderId
@@ -749,7 +844,7 @@ export function makeRelayerPlaceOrder({
         // can still find it instead of stranding the customer on an order
         // that demonstrably exists.
         if (claimToken) storeLinkClaim(confirmedOrderId, claimToken);
-        throw new Error("Could not verify the order on-chain.");
+        throw new Error("We couldn't confirm your payment. Please try again.");
       }
     } catch (e: any) {
       // A reverted transaction or a genuine mismatch is fatal; a timeout on a
@@ -963,36 +1058,6 @@ export function rememberedLinks(merchant?: Address | string): Hex[] {
       : [];
   } catch {
     return [];
-  }
-}
-
-// A fixed local amount lives only in the link's URL (see fixedAmountTypedData),
-// so the list can show it and share the full URL only on the device that made
-// the link. Elsewhere the same link reads as an open amount.
-const FIXED_KEY_PREFIX = "payqr.linkFixed:"; // + lowercased linkId
-
-export function rememberFixedAmount(linkId: Hex, fixed: FixedAmount): void {
-  try {
-    localStorage.setItem(
-      FIXED_KEY_PREFIX + linkId.toLowerCase(),
-      JSON.stringify({ a: fixed.amount6.toString(), s: fixed.signature })
-    );
-  } catch {
-    /* storage unavailable: the list shows the link as an open amount */
-  }
-}
-
-export function rememberedFixedAmount(linkId: Hex): FixedAmount | null {
-  try {
-    const raw = localStorage.getItem(FIXED_KEY_PREFIX + linkId.toLowerCase());
-    if (!raw) return null;
-    const { a, s } = JSON.parse(raw) as { a?: unknown; s?: unknown };
-    const parsed = parseFixedAmount(
-      new URLSearchParams({ [FIXED_AMOUNT_PARAM]: String(a ?? ""), [FIXED_SIG_PARAM]: String(s ?? "") }).toString()
-    );
-    return parsed && parsed !== "malformed" ? parsed : null;
-  } catch {
-    return null;
   }
 }
 

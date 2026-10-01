@@ -7,9 +7,13 @@
 
 import { keccak256, stringToBytes, isAddress } from "viem";
 import { SUBGRAPH_URL } from "./p2p";
-import { ALL_CONTRACT_ADDRESSES } from "./contract";
+import { ALL_CONTRACT_ADDRESSES, currencyFromBytes32 } from "./contract";
 
 const ST = { 0: "matching", 1: "matching", 2: "matching", 3: "settled", 4: "cancelled" };
+/** p2p.me's dispute status on an order. A dispute can be opened on an order
+ *  that is already completed or cancelled (e.g. a customer who paid after the
+ *  window closed), so it is shown alongside the status, not instead of it. */
+const DISPUTE = { 0: "none", 1: "open", 2: "resolved" };
 
 /**
  * EVERY PayQR integrator, current and previous, lower-cased for the subgraph.
@@ -119,7 +123,7 @@ export async function fetchHistory(address, proxies?: string | string[]) {
         where: { userAddress_in: $users, orderId_in: $ids },
         orderBy: orderId,
         orderDirection: desc
-      ) { orderId status usdcAmount placedAt completedAt transactionHash }
+      ) { orderId status usdcAmount placedAt completedAt transactionHash userAddress disputeStatus }
     }`,
     { users: addrList(address, proxies), ids: [...scoped.keys()] },
     "fetchHistory"
@@ -136,6 +140,11 @@ export async function fetchHistory(address, proxies?: string | string[]) {
       placedAt: Number(o.placedAt),
       completedAt: o.completedAt ? Number(o.completedAt) : null,
       integrator: scoped!.get(String(o.orderId)) || null,
+      // A link sale is placed by the merchant's proxy; a counter sale by the
+      // merchant. p2p.me's support bridge serves only the order's own user, so
+      // its dispute chip cannot work on a link sale (review).
+      isLink: String(o.userAddress || "").toLowerCase() !== String(address).toLowerCase(),
+      dispute: DISPUTE[Number(o.disputeStatus)] || "none",
     };
   });
 }
@@ -195,7 +204,7 @@ export async function fetchOrder(orderId) {
     data = await querySubgraph(
       `query($id: String!) {
         orders_collection(first: 1, where: { orderId: $id }) {
-          orderId status usdcAmount fiatAmount actualUsdcAmount actualFiatAmount
+          orderId type status currency usdcAmount fiatAmount actualUsdcAmount actualFiatAmount
           userAddress placedAt completedAt transactionHash
         }
       }`,
@@ -221,6 +230,11 @@ export async function fetchOrder(orderId) {
     txHash: o.transactionHash || null,
     placedAt: Number(o.placedAt),
     completedAt: o.completedAt ? Number(o.completedAt) : null,
+    // From the chain, so the receipt never takes them from its URL (review H1):
+    // the currency the order was charged in, and whether it is a payment (BUY)
+    // or a cash-out (SELL).
+    currency: currencyFromBytes32(o.currency) || "",
+    kind: Number(o.type) === 1 ? "withdraw" : "buy",
   };
 }
 
@@ -264,6 +278,8 @@ export async function fetchWithdrawalOrder(orderId) {
     placedAt: ts,
     completedAt: ts,
     integrator: o.integrator?.id || null,
+    currency: "", // not on this table; the receipt then omits the payment rail
+    kind: "withdraw",
   };
 }
 
@@ -319,7 +335,7 @@ export async function fetchLinkOrders(proxies: string | string[]) {
         where: { userAddress_in: $users, orderId_in: $ids },
         orderBy: orderId,
         orderDirection: desc
-      ) { orderId status usdcAmount placedAt completedAt transactionHash }
+      ) { orderId status usdcAmount placedAt completedAt transactionHash currency disputeStatus }
     }`,
     { users, ids: [...integratorOf.keys()] },
     "fetchLinkOrders"
@@ -334,5 +350,10 @@ export async function fetchLinkOrders(proxies: string | string[]) {
     completedAt: o.completedAt ? Number(o.completedAt) : null,
     kind: "link",
     integrator: integratorOf.get(String(o.orderId)) || null,
+    // Straight from the order. The Payments tab used to look the currency up
+    // through orderToLink, which the contract deletes once an order settles —
+    // so the flag never appeared (review).
+    currency: currencyFromBytes32(o.currency) || "",
+    dispute: DISPUTE[Number(o.disputeStatus)] || "none",
   }));
 }

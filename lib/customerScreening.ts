@@ -138,10 +138,21 @@ export async function placeScreenedOrder(
 
   const activityLogId = screening?.activity_log_id ?? null;
   if (activityLogId !== null) {
-    // The order already exists; a failed link only loses the screening record.
-    void linkOrder(signer, config, activityLogId, orderId).catch((e) =>
-      console.warn(`[payqr:screening] could not link order ${orderId}`, e)
-    );
+    // The order already exists, so this never holds up the customer. But an
+    // order without its screening record is one no merchant accepts on mainnet,
+    // and this used to be a single attempt (review): retried, with a short
+    // backoff, before giving up.
+    void (async () => {
+      for (const wait of [0, 2_000, 6_000]) {
+        if (wait) await new Promise((r) => setTimeout(r, wait));
+        try {
+          await linkOrder(signer, config, activityLogId, orderId);
+          return;
+        } catch (e) {
+          console.warn(`[payqr:screening] could not link order ${orderId}`, e);
+        }
+      }
+    })();
   }
   return orderId;
 }

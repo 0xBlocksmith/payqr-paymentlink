@@ -484,18 +484,12 @@ export default function PosQr() {
   // payer address, timestamp) as on-chain-public, not confidential.
   function receiptUrl() {
     if (typeof window === "undefined" || !done || !done.token) return "";
-    const rcCountry = done.country || country;
+    // Order id + access token only. The receipt shows nothing from its URL —
+    // amount, currency and shop all come from the chain (review H1) — so the
+    // display hints this used to add (shop, fiat, cur, upi) are gone.
     const q = new URLSearchParams({
-      shop: shopLabel || "My Shop",
-      // decimals:2 — a ₹10.50 sale must not read "₹11" on the customer's receipt.
-      fiat: fmtFiat(rcCountry, done.fiat, { decimals: 2 }),
       token: done.token,
-      kind: "buy",                              // customer paid the merchant
-      ...(rcCountry?.code ? { cur: rcCountry.code } : {}),
-      // Masked payout handle — "which account did I pay?" on the customer's
-      // receipt. Already masked before it leaves this device (see upiMasked
-      // above); omitted entirely if this device couldn't decrypt it.
-      ...(upiMasked ? { upi: upiMasked } : {}),
+      kind: "buy", // which table the receipt looks in first
     });
     return `${window.location.origin}/receipt/${done.orderId}?${q.toString()}`;
   }

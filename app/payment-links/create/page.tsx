@@ -23,10 +23,9 @@ import {
   buildPayLinkUrl,
   rememberLink,
   fixedAmountTypedData,
-  withFixedAmount,
-  rememberFixedAmount,
+  relayerFeatures,
   PAYMENT_LINKS_ENABLED,
-  type FixedAmount,
+  type SignedLinkPrice,
 } from "../../../lib/paymentLinks";
 import { ACTIVE_CHAIN } from "../../../lib/chain";
 import { useT } from "../../../lib/i18n";
@@ -46,8 +45,8 @@ import { Icon } from "../../../components/Icons";
  *   2. ONE sponsored, merchant-signed BATCH transaction: createLink then
  *      registerAgent, in that order — registerAgent reads getLink to check
  *      ownership, so createLink must land first within the same batch.
- * No session key, no delegate, no funded relayer; the backend (a separate
- * Cloudflare Worker) only ever drives that link's own wallet later, when a
+ * No session key, no delegate, no funded relayer; the backend (the separate
+ * payer-relayer service) only ever drives that link's own wallet later, when a
  * customer pays — never anything created or funded here.
  */
 export default function CreatePaymentLink() {
@@ -157,8 +156,8 @@ export default function CreatePaymentLink() {
   const [amountMode, setAmountMode] = useState<"fixed" | "variable">("fixed");
   const [amountFiat, setAmountFiat] = useState("");
   /** Which unit the typed number is in. USDC is stored on-chain as the link's
-   *  fixed amount; a local-currency amount travels signed in the link's URL
-   *  and is priced at payment time (see fixedAmountTypedData). */
+   *  fixed amount; a local-currency amount is kept by the relayer, signed by
+   *  the merchant, and priced at payment time (see fixedAmountTypedData). */
   const [amountUnit, setAmountUnit] = useState<"fiat" | "usdc">("fiat");
 
   // The live price, held in state rather than fetched only at submit, so the
@@ -173,6 +172,16 @@ export default function CreatePaymentLink() {
       .catch(() => { if (alive) setPriceCfg(null); });
     return () => { alive = false; };
   }, [linkCurrency]);
+
+  // Whether the relayer can hold a fixed LOCAL price. Without it a local
+  // amount is fixed in USDC on-chain instead — safe, since the contract
+  // enforces it, but the customer's amount then moves slightly with the rate.
+  const [localPriceSupported, setLocalPriceSupported] = useState<boolean | null>(null);
+  useEffect(() => {
+    let alive = true;
+    relayerFeatures().then((f) => { if (alive) setLocalPriceSupported(f.has("fixed-price")); });
+    return () => { alive = false; };
+  }, []);
 
   /**
    * What the typed amount comes to in the OTHER unit, plus a warning when it is
@@ -192,8 +201,9 @@ export default function CreatePaymentLink() {
     }
     // A local amount is what the customer pays, always; the USDC it credits is
     // today's figure and moves with the rate (after p2p.me's small-order fee).
-    return amountUnit === "usdc"
-      ? `Customer pays ≈ ${fmtFiat(country, fiatForUsdc(usdc6, priceCfg))} today`
+    if (amountUnit === "usdc") return `Customer pays ≈ ${fmtFiat(country, fiatForUsdc(usdc6, priceCfg))} today`;
+    return localPriceSupported === false
+      ? `Customer pays ≈ ${fmtFiat(country, typed)} (can vary slightly with the rate) · you receive ${(Number(usdc6) / 1e6).toFixed(2)} USDC`
       : `Customer always pays ${fmtFiat(country, typed)} · you receive ≈ ${(Number(usdc6) / 1e6).toFixed(2)} USDC at today's rate`;
   })();
   const [description, setDescription] = useState("");
@@ -231,8 +241,8 @@ export default function CreatePaymentLink() {
       // submit time, not at whatever moment the merchant last typed.
       const cfg = amountMode === "fixed" ? await fetchPriceConfig(linkCurrency) : null;
       let amountUsdc6 = 0n;
-      // A fixed LOCAL amount: the link is open-amount on-chain, and this signed
-      // amount goes in its URL (see fixedAmountTypedData).
+      // A fixed LOCAL amount: the link is open-amount on-chain, and the relayer
+      // keeps this signed price and charges it (see fixedAmountTypedData).
       let fixedLocal6: bigint | null = null;
       if (amountMode === "fixed") {
         const typed = Number(amountFiat);
@@ -252,7 +262,12 @@ export default function CreatePaymentLink() {
         const usdc6 = amountUnit === "usdc" ? usdcForUsdcTarget(typed, cfg) : usdcForFiat(typed, cfg);
         if (usdc6 <= 0n) throw new Error("That amount is too small.");
         if (amountUnit === "usdc") amountUsdc6 = usdc6;
-        else fixedLocal6 = BigInt(Math.round(typed * 1e6));
+        // Asked now, not trusted from the page's first load: a local price sent
+        // to a relayer that can't keep it would leave the link pay-anything.
+        else if ((await relayerFeatures()).has("fixed-price")) fixedLocal6 = BigInt(Math.round(typed * 1e6));
+        // The relayer can't hold a local price: fix it in USDC on-chain, which
+        // the contract enforces.
+        else amountUsdc6 = usdc6;
         // Refuse here, in the merchant's own words, rather than letting
         // createLink revert ExceedsPerTxCap after they have signed.
         if (capUsdc6 !== null && usdc6 > capUsdc6) {
@@ -278,14 +293,14 @@ export default function CreatePaymentLink() {
         throw new Error("Wallet isn't ready yet. Please try again in a moment.");
       }
 
-      // Signed before the link exists — the signature only names the id — so a
-      // failure here leaves nothing half-made on-chain.
-      let fixed: FixedAmount | null = null;
+      // Signed before the link exists — the signature only names the id — and
+      // handed to the relayer with provisioning, which keeps it BEFORE the link
+      // is created: a failure there stops here with nothing made on-chain.
+      let fixedPrice: SignedLinkPrice | null = null;
       if (fixedLocal6 !== null) {
-        const signature = await signTypedData(
-          fixedAmountTypedData(ACTIVE_CHAIN.id, linkId, fixedLocal6, stringToHex(linkCurrency, { size: 32 }))
-        );
-        fixed = { amount6: fixedLocal6, signature };
+        const currency = stringToHex(linkCurrency, { size: 32 });
+        const signature = await signTypedData(fixedAmountTypedData(ACTIVE_CHAIN.id, linkId, fixedLocal6, currency));
+        fixedPrice = { amount6: fixedLocal6, currency, signature };
       }
 
       // Encrypt the description to the merchant's OWN relay key before it ever
@@ -313,55 +328,35 @@ export default function CreatePaymentLink() {
       // happen BEFORE createLink: registerAgent needs its address, and the
       // worker's own ordering contract requires createLink + registerAgent to
       // land in the SAME batch (see lib/paymentLinks.ts's provisionLinkWallet).
-      const { account: agent, existing } = await provisionLinkWallet({
+      const { account: agent } = await provisionLinkWallet({
         linkId,
         chainId: ACTIVE_CHAIN.id,
         signTypedData,
         signerAddress: address as `0x${string}`,
+        ...(fixedPrice ? { fixedPrice } : {}),
       });
 
-      // `existing: true` means the worker has already minted this exact
-      // linkId's wallet before (a retried provisioning call, not a fresh
-      // one) — registerAgent is safe to resend regardless, but createLink is
-      // NOT: if it already landed on-chain from that earlier attempt,
-      // resending it here reverts with LinkExists() and drags the whole
-      // batch down with it. Check on-chain rather than assume either way.
-      let createAlreadyLanded = false;
-      if (existing) {
-        try {
-          const existingLink = (await publicClient!.readContract({
-            address: CONTRACT_ADDRESS,
-            abi: INTEGRATOR_ABI,
-            functionName: "getLink",
-            args: [linkId],
-          } as any)) as readonly [`0x${string}`, bigint, `0x${string}`, bigint, number, number, number, number];
-          createAlreadyLanded = existingLink[0] !== "0x0000000000000000000000000000000000000000";
-        } catch {
-          // Read failure — fall through and attempt createLink as normal;
-          // if it truly already exists, LinkExists() surfaces below anyway.
-        }
-      }
-
       const registerData = buildRegisterAgentCalldata(linkId, agent);
-      const batch = createAlreadyLanded
-        ? [{ to: LINK_ROUTER_ADDRESS as `0x${string}`, data: registerData }]
-        : [
-            {
-              to: CONTRACT_ADDRESS,
-              data: buildCreateLinkCalldata({
-                linkId,
-                amountUsdc6,
-                currencyCode: linkCurrency,
-                maxUses: singleUse ? 1 : 0,
-                expiresAt,
-                encryptedConfig,
-              }),
-            },
-            { to: LINK_ROUTER_ADDRESS as `0x${string}`, data: registerData },
-          ];
+      // Every attempt draws a fresh salt, so the link id is new each time and
+      // createLink cannot already have landed from an earlier attempt — the
+      // "already created" branch that lived here could never run (review).
+      const batch = [
+        {
+          to: CONTRACT_ADDRESS,
+          data: buildCreateLinkCalldata({
+            linkId,
+            amountUsdc6,
+            currencyCode: linkCurrency,
+            maxUses: singleUse ? 1 : 0,
+            expiresAt,
+            encryptedConfig,
+          }),
+        },
+        { to: LINK_ROUTER_ADDRESS as `0x${string}`, data: registerData },
+      ];
 
       // 2 — ONE batched transaction: createLink then registerAgent, in that
-      // order (unless createLink already landed from a prior attempt, above).
+      // order.
       // registerAgent reads getLink to check ownership, so a link that
       // doesn't exist yet within the same batch makes it revert — never send
       // these as two separate transactions (see provisionLinkWallet's doc).
@@ -376,9 +371,9 @@ export default function CreatePaymentLink() {
       // own links vanish from their own list. Only the ID is stored; every
       // field still comes from getLink on-chain.
       rememberLink(address as `0x${string}`, linkId);
-      if (fixed) rememberFixedAmount(linkId, fixed);
 
-      const url = fixed ? withFixedAmount(buildPayLinkUrl(linkId), fixed) : buildPayLinkUrl(linkId);
+      // A plain URL: the price, if any, is the relayer's, not the link's.
+      const url = buildPayLinkUrl(linkId);
       setCreated({ linkId, url });
     } catch (e: any) {
       setError(friendlyError(e, e?.message || "Could not create the link. Please try again."));
