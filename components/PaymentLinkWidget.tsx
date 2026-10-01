@@ -397,7 +397,8 @@ export function PaymentLinkWidget({
           <EndedReceipt
             expired={phase === "expired"}
             details={{
-              amount: fiatDisplay,
+              // What the customer ordered, not the settled amount fiatDisplay prefers.
+              amount: order?.fiatAmount && order.fiatAmount > 0n ? fmtAmount(order.fiatAmount, currency) : fiatDisplay,
               merchantName,
               currency,
               orderId: orderId || "",
@@ -838,7 +839,7 @@ type EndedDetails = {
 // The support chat opens with everything the team needs to find this order, so
 // the customer doesn't have to type it out: order, amount, shop, rail, status
 // and the payment link it came from.
-function supportHref(d: EndedDetails): string {
+function supportMessage(d: EndedDetails): { href: string; text: string } {
   const when = d.whenSecs ? new Date(d.whenSecs * 1000).toLocaleString() : "";
   const details = [
     `Amount: ${d.amount}`,
@@ -849,7 +850,7 @@ function supportHref(d: EndedDetails): string {
     `Payment link: ${d.linkId}`,
   ];
   const text = `Hi, I need help with my payment #${d.orderId}.\n\n${details.join("\n")}`;
-  return `https://t.me/PayQRdotPRO?text=${encodeURIComponent(text)}`;
+  return { href: `https://t.me/PayQRdotPRO/1819?text=${encodeURIComponent(text)}`, text };
 }
 
 // Full-screen receipt for an order that did not complete — the customer-side
@@ -862,6 +863,7 @@ function EndedReceipt({
   onPaid?: () => void; onCancel?: () => void; onNewPayment?: () => void;
 }) {
   const country = countryForCurrency(details.currency);
+  const support = supportMessage(details);
   const when = details.whenSecs
     ? new Date(details.whenSecs * 1000).toLocaleString(undefined, {
         day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
@@ -895,9 +897,17 @@ function EndedReceipt({
           <div className="pc-help-box" data-html2canvas-ignore="true">
             <div className="pc-help-h">Need help with this order?</div>
             <div className="pc-help-sub">
-              Tap below to chat with PayQR support. Your order number, amount and shop are filled in for you.
+              Tap below to open PayQR support. Your order details are filled in and copied — if the chat opens empty, just paste them.
             </div>
-            <a className="btn pc-help-btn" href={supportHref(details)} target="_blank" rel="noopener noreferrer">
+            {/* The link carries the message as ?text=, but Telegram doesn't always
+                honour that on a group/thread link, so the details are also copied
+                to the clipboard on tap, ready to paste into the chat. */}
+            <a
+              className="btn pc-help-btn"
+              href={support.href}
+              target="_blank" rel="noopener noreferrer"
+              onClick={() => { navigator.clipboard?.writeText(support.text).catch(() => {}); }}
+            >
               Get help on this order ↗
             </a>
           </div>
