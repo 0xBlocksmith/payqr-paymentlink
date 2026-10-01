@@ -13,7 +13,7 @@ import type { CurrencyCode } from "@p2pdotme/sdk/country";
 import { getCustomerIdentity } from "../lib/customerRelayIdentity";
 import { getCustomerOrder, decryptPayoutAddress, markOrderPaid, cancelCustomerOrder, isStillConfirming } from "../lib/customerOrder";
 import { currencyFromBytes32 } from "../lib/contract";
-import { countryForCurrency, fmtFiat } from "../lib/countries";
+import { countryForCurrency, fmtPayerFiat } from "../lib/countries";
 import { ACTIVE_CHAIN } from "../lib/chain";
 import { fetchPriceConfig } from "../lib/pricing";
 import type { PriceConfig } from "../lib/pricing";
@@ -101,7 +101,7 @@ function fmtAmount(usdc6: bigint, currencyCode: string): string {
   // R$ 100.000. countryForCurrency resolves the right symbol and locale for any
   // currency the protocol settles, and degrades to the ISO code with neutral
   // grouping for one this app has no entry for, rather than to India's.
-  return fmtFiat(countryForCurrency(currencyCode), Number(usdc6) / 1e6);
+  return fmtPayerFiat(countryForCurrency(currencyCode), Number(usdc6) / 1e6);
 }
 
 function upiUri(params: { upiId: string; merchantName: string; amountInr: string; orderId: string }) {
@@ -485,7 +485,7 @@ export function PaymentLinkWidget({
               // fee — not the settled amount. Falls back to the chain figure plus
               // fee only when the quote wasn't recorded.
               amount: quotedFiat && quotedFiat > 0
-                ? fmtFiat(countryForCurrency(currency), quotedFiat)
+                ? fmtPayerFiat(countryForCurrency(currency), quotedFiat)
                 : payerTotal6 > 0n ? fmtAmount(payerTotal6, currency) : fiatDisplay,
               merchantName,
               currency,

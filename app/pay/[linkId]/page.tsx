@@ -7,7 +7,7 @@ import dynamic from "next/dynamic";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, PREV_CONTRACT_ADDRESSES, currencyFromBytes32 } from "../../../lib/contract";
 import { fetchPriceConfig, usdcForFiat, fiatForUsdc, minimumFiat } from "../../../lib/pricing";
 import { ACTIVE_CHAIN, RPC_URL } from "../../../lib/chain";
-import { countryForCurrency, fmtFiat } from "../../../lib/countries";
+import { countryForCurrency, fmtPayerFiat } from "../../../lib/countries";
 import {
   PAYMENT_LINKS_ENABLED,
   LinkStatus,
@@ -506,7 +506,7 @@ export default function PayLink() {
         const floor = minimumFiat(cfg);
         if (fiat < floor) {
           throw new Error(
-            `That amount is too small to pay — the minimum is ${country ? fmtFiat(country, Math.ceil(floor * 100) / 100) : Math.ceil(floor * 100) / 100}.`
+            `That amount is too small to pay — the minimum is ${country ? fmtPayerFiat(country, Math.ceil(floor * 100) / 100) : Math.ceil(floor * 100) / 100}.`
           );
         }
         quantity = usdcForFiat(fiat, cfg);
@@ -643,12 +643,12 @@ export default function PayLink() {
           ) : checkingFixed ? (
             <div className="pl-hero-amount">…</div>
           ) : (
-            <div className="pl-hero-amount">{country && fmtFiat(country, amountNum)}</div>
+            <div className="pl-hero-amount">{country && fmtPayerFiat(country, amountNum)}</div>
           )}
 
           {overCap && country && capFiat !== null && (
             <p className="pl-error">
-              This shop can accept up to {fmtFiat(country, capFiat)} in one payment.
+              This shop can accept up to {fmtPayerFiat(country, capFiat)} in one payment.
             </p>
           )}
 
@@ -675,12 +675,12 @@ export default function PayLink() {
               overCap ? (
                 "Amount too high"
               ) : amountNum > 0 && country ? (
-                `Pay ${fmtFiat(country, amountNum)}`
+                `Pay ${fmtPayerFiat(country, amountNum)}`
               ) : (
                 "Enter an amount"
               )
             ) : (
-              country ? `Pay ${fmtFiat(country, amountNum)}` : "Pay"
+              country ? `Pay ${fmtPayerFiat(country, amountNum)}` : "Pay"
             )}
           </button>
           <p className="pl-privacy">
