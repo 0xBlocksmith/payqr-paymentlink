@@ -17,7 +17,10 @@
  */
 import { NextResponse } from "next/server";
 
-export const runtime = "edge";
+// Deliberately NOT `runtime = "edge"`. Nothing here needs it — it reads a
+// small body, logs, and answers 204 — and on Netlify an edge route is built
+// and deployed as an Edge Function instead of an ordinary serverless one,
+// which is a second deploy-time path to go wrong for no gain.
 export const dynamic = "force-dynamic";
 
 /** Both report formats: the legacy report-uri body and the Reporting API's. */
