@@ -7,6 +7,7 @@ import { fetchOrder, fetchWithdrawalOrder, receiptToken } from "../../../lib/his
 import { fmtUsdc, ALL_CONTRACT_ADDRESSES, CROSS_VERSION_ABI } from "../../../lib/contract";
 import { fetchPriceConfig } from "../../../lib/pricing";
 import { ACTIVE_CHAIN, RPC_URL, EXPLORER_URL } from "../../../lib/chain";
+import { countryForCurrency, fmtFiat } from "../../../lib/countries";
 import { Icon, Logo } from "../../../components/Icons";
 
 // Read-only chain client (public receipt has no wallet — just reads). Use the
@@ -165,9 +166,9 @@ const SCAN = EXPLORER_URL;
 /**
  * PUBLIC customer receipt — no login. The merchant shares this link (or shows
  * the on-screen QR after a sale) so the person who just paid can verify the
- * transaction on-chain. The order itself is read from the subgraph; the shop
- * name + fiat amount the customer paid come from the link query (the chain only
- * records the USDC leg), and the order id / status / proof are trustless.
+ * transaction on-chain. Everything shown — amount, currency, status, shop name
+ * — is read from the chain and the subgraph, never from the link's query; the
+ * link only carries the order id and the access token.
  */
 export default function Receipt() {
   const { orderId } = useParams();
@@ -177,30 +178,18 @@ export default function Receipt() {
   // query as arbitrary text.
   const rawId = Array.isArray(orderId) ? orderId[0] : orderId;
   const safeId = typeof rawId === "string" && /^\d+$/.test(rawId) ? rawId : "";
-  // fiat comes from the link query — an UNVERIFIED display hint only. The
-  // trustworthy figures (USDC amount, status, order id) come from the chain
-  // below; we never let the URL override those. Sanitize to plain text and cap
-  // length so a crafted link can't inject markup or absurd strings. (The `shop`
-  // hint is deliberately NOT read for display — the on-chain name is the only
-  // shop label we trust; see the shopName derivation below.)
-  const clean = (s: string) => s.replace(/[<>]/g, "").slice(0, 40);
-  const fiat = clean(params.get("fiat") || "");   // display hint, e.g. "₹820"
-  // Masked payout handle (e.g. "sh•••@upi") — a display hint the merchant's own
-  // withdraw flow appends to their receipt link. Already masked before it leaves
-  // the merchant's device (the public receipt has no key to decrypt the on-chain
-  // handle anyway), so only a partial identifier is ever exposed on a shared link.
-  // Sanitized like every other hint; the • are kept, markup stripped.
-  const upiMasked = clean(params.get("upi") || "");
-  // Transaction KIND ("buy" = customer paid the merchant | "withdraw" = merchant
-  // cashed out to fiat/crypto). Display hint from the link so the receipt frames
-  // the right story; the on-chain amount/status stay the trustworthy figures.
+  // Everything SHOWN about the payment — amount, currency, payment rail, and
+  // whether it is a payment or a cash-out — comes from the chain (review H1).
+  // The link's ?fiat=, ?cur= and ?upi= used to be displayed, and ?fiat= even
+  // won over the on-chain amount, so anyone could turn a tiny real payment into
+  // a "✓ verified ₹50,000" receipt on the official domain. They are ignored now.
+  //
+  // ?kind= only says which table to look in first (a withdrawal lives in
+  // b2Borders, a payment in orders_collection); the framing follows the order
+  // found. "usdc" additionally marks a cash-out to the merchant's own wallet,
+  // which has no fiat rail — framing of their own withdrawal, never a payment.
   const kindRaw = (params.get("kind") || "buy").toLowerCase();
-  const kind = kindRaw === "withdraw" || kindRaw === "usdc" ? kindRaw : "buy";
-  const isWithdraw = kind === "withdraw" || kind === "usdc";
-  const isCryptoOut = kind === "usdc"; // USDC→own wallet (no fiat rail)
-  // Currency code ("INR"/"BRL"/"ARS") → drives the payment-rail label. Sanitize to
-  // 3–5 uppercase letters; empty if absent.
-  const curRaw = (params.get("cur") || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 5);
+  const hintWithdraw = kindRaw === "withdraw" || kindRaw === "usdc";
   // Only accept a well-formed 32-byte tx hash from the URL — otherwise a crafted
   // ?tx= could point the "Confirmation → View" link at an unrelated basescan
   // path and lend a real pending receipt forged credibility.
@@ -231,6 +220,11 @@ export default function Receipt() {
   // omits the fee row rather than guessing).
   const [feeUsdcRaw, setFeeUsdcRaw] = useState<bigint | null>(null);
 
+  // From the order itself, once loaded (see the note above the URL params).
+  const isWithdraw = order ? (order as any).kind === "withdraw" : hintWithdraw;
+  const isCryptoOut = isWithdraw && kindRaw === "usdc"; // USDC→own wallet (no fiat rail)
+  const cur: string = (order as any)?.currency || "";
+
   useEffect(() => {
     let on = true;
     setLoading(true); setOwnerState(null);
@@ -247,8 +241,8 @@ export default function Receipt() {
     // back to the other table if the primary misses — so a mis-hinted link still
     // resolves instead of falsely showing "not found".
     const lookup = async () => {
-      const primary = isWithdraw ? fetchWithdrawalOrder : fetchOrder;
-      const secondary = isWithdraw ? fetchOrder : fetchWithdrawalOrder;
+      const primary = hintWithdraw ? fetchWithdrawalOrder : fetchOrder;
+      const secondary = hintWithdraw ? fetchOrder : fetchWithdrawalOrder;
       return (await primary(safeId)) || (await secondary(safeId));
     };
     lookup().then((o: any) => {
@@ -270,7 +264,7 @@ export default function Receipt() {
       });
     });
     return () => { on = false; };
-  }, [safeId, accessToken, retry, isWithdraw]);
+  }, [safeId, accessToken, retry, hintWithdraw]);
 
   // Fee: a BUY order under the small-order threshold pays a flat fixed fee ON
   // TOP of the principal — the gap between what the customer ordered and what
@@ -279,15 +273,15 @@ export default function Receipt() {
   // reverse-engineering it from fiatAmount/amount (which would need the
   // exact historical buyPrice to invert correctly).
   useEffect(() => {
-    if (isWithdraw || !order?.amount || !curRaw) { setFeeUsdcRaw(null); return; }
+    if (isWithdraw || !order?.amount || !cur) { setFeeUsdcRaw(null); return; }
     let alive = true;
-    fetchPriceConfig(curRaw).then((cfg) => {
+    fetchPriceConfig(cur).then((cfg) => {
       if (!alive || !cfg) return;
       const principal = BigInt(order.amount);
       setFeeUsdcRaw(principal <= cfg.smallOrderThreshold ? cfg.smallOrderFixedFee : 0n);
     }).catch(() => { if (alive) setFeeUsdcRaw(null); });
     return () => { alive = false; };
-  }, [isWithdraw, order?.amount, curRaw]);
+  }, [isWithdraw, order?.amount, cur]);
 
   // The trustworthy shop name comes ONLY from the chain (verifiedShop). The URL
   // ?shop= hint is attacker-controllable in a crafted link, so we NEVER render it
@@ -305,7 +299,7 @@ export default function Receipt() {
   const txHash = order?.txHash || txParam;
 
   // ── Verification details the merchant uses to identify the transaction ──
-  const rail = railFor(curRaw);                 // { rail, country, flag } | null
+  const rail = railFor(cur);                    // { rail, country, flag } | null
   const payer = shortAddr(order?.userAddress);  // buyer/proxy on-chain address
   // Timestamp: completed time if we have it, else when it was placed.
   const whenTs = order?.completedAt || order?.placedAt || null;
@@ -409,25 +403,24 @@ export default function Receipt() {
                 net USDC. Vendors reported the old headline (order.amount, the
                 merchant's post-fee principal) reading as "what the customer paid",
                 which silently hid the fee and could disagree with what was actually
-                charged. Prefer the on-chain fiatAmount (trustworthy, subgraph-read,
-                includes any small-order fee); fall back to the ?fiat= link hint only
-                if the chain field isn't indexed yet. Withdrawals are unaffected —
+                charged. The on-chain fiatAmount (subgraph-read, includes any
+                small-order fee), never a link hint; until it is indexed the USDC
+                amount is shown instead. Withdrawals are unaffected —
                 there the USDC amount IS what the merchant receives, so it stays the
                 headline. */}
-            {!isWithdraw && (order.fiatAmount || fiat) ? (
+            {!isWithdraw && order.fiatAmount ? (
               <>
                 <div className="rcpt-amount">
-                  {order.fiatAmount ? fiat || `${(Number(order.fiatAmount) / 1e6).toFixed(2)}` : fiat}
+                  {cur
+                    ? fmtFiat(countryForCurrency(cur), Number(order.fiatAmount) / 1e6)
+                    : (Number(order.fiatAmount) / 1e6).toFixed(2)}
                 </div>
                 <div className="rcpt-amount-fiat">{fmtUsdc(order.amount)} USDC to merchant</div>
               </>
             ) : (
-              <>
-                <div className="rcpt-amount">
-                  {fmtUsdc(order.amount)} USDC
-                </div>
-                {fiat && <div className="rcpt-amount-fiat">{fiat}</div>}
-              </>
+              <div className="rcpt-amount">
+                {fmtUsdc(order.amount)} USDC
+              </div>
             )}
             <div className="rcpt-amount-sub">
               {isWithdraw
@@ -451,29 +444,9 @@ export default function Receipt() {
                     <span>{isCryptoOut ? "Sent to" : "Withdrawn to"}</span>
                     <b>{isCryptoOut ? "Your wallet" : (rail ? `${rail.rail} · ${rail.country}` : "Your account")}</b>
                   </div>
-                  {/* The specific payout handle (masked) so the merchant can confirm
-                      WHICH account received it. Only for a fiat cash-out, and only
-                      when the withdraw flow passed the masked hint. */}
-                  {!isCryptoOut && upiMasked && (
-                    <div className="rcpt-row">
-                      <span>{rail ? rail.rail : "Account"} ID</span>
-                      <b className="mono">{upiMasked}</b>
-                    </div>
-                  )}
                 </>
               ) : (
                 <>
-                  {/* The merchant's own payout handle (masked) — so the customer
-                      can confirm WHICH UPI/PIX account they actually paid, the
-                      same way a withdrawal receipt shows the merchant's own
-                      cash-out account. Only present when the merchant's device
-                      had its relay key to decrypt + mask it (see qr/page.tsx). */}
-                  {upiMasked && (
-                    <div className="rcpt-row">
-                      <span>Paid to {rail ? rail.rail : "account"}</span>
-                      <b className="mono">{upiMasked}</b>
-                    </div>
-                  )}
                   {payer && (
                     <div className="rcpt-row">
                       <span>Paid by (wallet)</span>

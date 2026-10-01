@@ -1,6 +1,6 @@
 # PayQR — Frontend Architecture
 
-_Last updated: 2026-09-15. Covers `main` + `feat/payment-links-pr104-alignment-v2`._
+_Last updated: 2026-10-01. The relayer is `p2pdotme/payer-relayer` (Node + Postgres on Railway); it was a Cloudflare Worker when this was first written._
 
 ## 1. What this repo is
 
@@ -10,12 +10,13 @@ Two other repos this app talks to:
 
 | Repo | What it is | How this app reaches it |
 |---|---|---|
-| `payment-integrators` | Solidity contracts (`MerchantTerminalIntegrator`, `LinkRouter`, `PaymentLinksLib`) + a Cloudflare Worker relayer | Direct RPC reads/writes to the contracts; HTTPS calls to the deployed Worker for Payment Links |
+| `payment-integrators` | Solidity contracts (`MerchantTerminalIntegrator`, `LinkRouter`, `PaymentLinksLib`) | Direct RPC reads/writes to the contracts |
+| `payer-relayer` | The Payment Links relayer — a Node service on Railway with Postgres | HTTPS calls from the browser (`NEXT_PUBLIC_RELAYER_WORKER_URL`) |
 | `@p2pdotme/sdk`, `@p2pdotme/widgets` | p2p.me's own npm packages (order SDK, `<Checkout>`/`<Cashout>` widgets) | npm dependency, used directly in components |
 
 ## 2. Stack
 
-- **Framework**: Next.js 14.2.15, App Router, client components (`"use client"`) almost everywhere — this is a PWA, not an SSR content site.
+- **Framework**: Next.js 14.2.35, App Router, client components (`"use client"`) almost everywhere — this is a PWA, not an SSR content site.
 - **Chain**: Base / Base Sepolia (`viem/chains`), selected via `NEXT_PUBLIC_CHAIN`.
 - **Wallet / identity**: thirdweb v5 — merchants authenticate via an in-app wallet (email/social/phone login) wrapped in a **ERC-4337 smart account** with sponsored gas (`smartAccount({ sponsorGas: true })`). Merchants hold 0 ETH; every write is a sponsored UserOperation.
 - **Chain reads**: `wagmi` (`useReadContract`, `usePublicClient`) for merchant-authenticated reads; a standalone `viem` `createPublicClient` for public, no-auth pages (`/pay/[linkId]`, `/receipt/[orderId]`).
@@ -51,9 +52,9 @@ This is aligned to `payment-integrators` **PR #104**, which replaced a funded re
         │ direct RPC reads/writes   │ direct RPC reads  │ HTTPS (fetch)
         ▼                           ▼                    ▼
 ┌───────────────────┐      ┌───────────────────┐  ┌─────────────────────┐
-│  Base / Base       │◄─────────────────────────┘  │  Cloudflare Worker   │
-│  Sepolia RPC        │                             │  (payment-integrators│
-│  (Alchemy)           │◄────────────────────────────│  /worker/)           │
+│  Base / Base       │◄─────────────────────────┘  │  payer-relayer       │
+│  Sepolia RPC        │                             │  (Node, on Railway)  │
+│  (Alchemy)           │◄────────────────────────────│                      │
 │                      │      writes as the link's   │  POST /api/pay/:id  │
 │  MerchantTerminal-   │      own AA wallet          │  POST /api/relay-tx │
 │  Integrator          │                             │  POST /api/links/   │
@@ -61,7 +62,7 @@ This is aligned to `payment-integrators` **PR #104**, which replaced a funded re
 └───────────────────┘      └───────────────────┘  └─────────────────────┘
 ```
 
-**Rule of thumb used throughout this app**: reads always go straight to chain (never trust a cache or a backend's word for balances/status); only *writes that need relaying* (because the caller has no wallet, or needs a sponsored/batched operation) go through the Worker.
+**Rule of thumb used throughout this app**: reads always go straight to chain (never trust a cache or a backend's word for balances/status); only *writes that need relaying* (because the caller has no wallet, or needs a sponsored/batched operation) go through the relayer.
 
 ## 5. Payment Links — full request flow
 
@@ -69,7 +70,7 @@ This is aligned to `payment-integrators` **PR #104**, which replaced a funded re
 
 Two on-chain-adjacent steps, both merchant-signed, both sponsored:
 
-1. **`provisionLinkWallet()`** (`lib/paymentLinks.ts`) — an off-chain HTTPS call to the Worker's `POST /api/links/:linkId/wallet`, authorized by an EIP-712 signature (`domain: "P2P Merchant Terminal Admin"`, type `LinkWallet{linkId,expiry}`) signed by the merchant's smart account. The Worker mints a **funds-free AA wallet** scoped to this one link and returns its address.
+1. **`provisionLinkWallet()`** (`lib/paymentLinks.ts`) — an off-chain HTTPS call to the relayer's `POST /api/links/:linkId/wallet`, authorized by an EIP-712 signature (`domain: "P2P Merchant Terminal Admin"`, type `LinkWallet{linkId,expiry}`) signed by the merchant's smart account. The relayer mints a **funds-free AA wallet** scoped to this one link and returns its address.
 2. **One batched transaction**: `createLink(linkId, amount, currency, expiresAt, maxUses, encryptedConfig)` on the integrator, immediately followed by `registerAgent(linkId, account)` on the LinkRouter — **in that exact order, in the same UserOperation** (`registerAgent` reads `getLink` to check ownership, so `createLink` must land first within the batch).
 
 `linkId` itself is computed client-side before either call: `computeLinkId(merchant, salt) = keccak256(abi.encode(merchant, salt))` — the contract no longer returns it.
@@ -80,24 +81,34 @@ Pure chain read, no backend call: `getLink(linkId)` off the integrator via a pub
 
 ### Step 3 — Customer taps Pay
 
-`makeRelayerPlaceOrder()` POSTs to the Worker's `/api/pay/:linkId` with `{quantity, pubKey, circleId, turnstileToken}`. The Worker re-reads the link fresh from chain (never trusts the request body for financial terms), simulates the call, then drives `LinkRouter.place(...)` **as the link's own AA wallet** — not a funded relayer. Response: `{orderId, txHash, claimToken}`.
+`makeRelayerPlaceOrder()` POSTs to the relayer's `/api/pay/:linkId` with `{fiatAmount6, quantity, pubKey, circleId, challenge, nonce, idempotencyKey}`:
+- `challenge`/`nonce` solve the relayer's proof-of-work human check (`components/HumanCheck.tsx`).
+- The relayer re-reads the link from chain and decides the amount itself: a link with a fixed price in the customer's currency charges the price the merchant signed at creation (stored by the relayer — review H2), an open-amount link charges the `fiatAmount6` the customer typed. Either is priced from the Diamond at placement, so the customer pays exactly what they were shown. `quantity` is only for older relayers.
+- `idempotencyKey` makes a retry after a lost answer the same attempt, not a second order.
+- `circleId` is routed through the p2p.me SDK to a circle with partners eligible for the amount (review M5).
 
-The frontend never trusts this response alone — it independently waits for the transaction receipt and decodes the `LinkOrderPlaced` event itself before treating the order as real.
+The relayer simulates the call, then drives `LinkRouter.place(...)` **as the link's own AA wallet** — not a funded relayer. Response: `{orderId, txHash, claimToken}`.
 
-`claimToken` is persisted in `localStorage`, keyed by `orderId` — it's what proves to the Worker, later, that a mark-paid/cancel request came from the same browser that placed the order.
+The frontend never trusts this response alone — it independently waits for the transaction receipt and decodes the `LinkOrderPlaced` event itself before treating the order as real. Before showing any payment details it also reads `LinkRouter.orders(orderId)` and requires the order to be on this link and placed with this browser's key (review M1).
+
+`claimToken` is persisted in `localStorage`, keyed by `orderId` — it's what proves to the relayer, later, that a mark-paid/cancel request came from the same browser that placed the order.
 
 ### Step 4 — LP accepts, customer pays fiat, customer confirms
 
 Once an LP (liquidity provider) accepts the order, its `encUpi` (payout address, ECIES-encrypted to the customer's relay pubkey) becomes readable on-chain. The customer decrypts it client-side (`lib/customerOrder.ts`), pays outside the system (UPI/PIX/bank transfer), then taps **"I've paid."**
 
-This triggers `markOrderPaid()`: the customer's browser signs an **EIP-712 `MarkPaid{linkId, orderId}`** digest (domain `"P2P LinkRouter"`, verifyingContract = `LINK_ROUTER_ADDRESS`) with their local relay key, and POSTs `{to, data, claimToken, signature}` to `/api/relay-tx`. The Worker forwards this to `LinkRouter.markPaid(...)`, which verifies the signature **on-chain** — the Worker itself can never advance or cancel a payment unilaterally; it only relays a signature it cannot forge.
+This triggers `markOrderPaid()`: the customer's browser signs an **EIP-712 `MarkPaid{linkId, orderId}`** digest (domain `"P2P LinkRouter"`, verifyingContract = `LINK_ROUTER_ADDRESS`) with their local relay key, and POSTs `{to, data, claimToken, signature}` to `/api/relay-tx`. The relayer forwards this to `LinkRouter.markPaid(...)`, which verifies the signature **on-chain** — the relayer itself can never advance or cancel a payment unilaterally; it only relays a signature it cannot forge.
 
 ### Why this design (from PR #104)
 
 No funded key exists anywhere on the payment path:
 - the link's AA wallet holds **zero balance** always
 - the customer's signing key **never leaves their browser**
-- a full compromise of the Worker cannot settle, withdraw, or redirect a payout — it can only relay signatures it doesn't hold
+- a full compromise of the relayer cannot settle, withdraw, or redirect a payout — it can only relay signatures it doesn't hold, and the pay page checks every order against `LinkRouter.orders` before showing where to pay
+
+### Disputes
+
+p2p.me opens and settles disputes; the integrator follows the result (`onOrderComplete` credits the merchant, `onOrderCancel` returns the link's use, and a false "I've paid" leaves a strike). The app shows a link order's dispute status from p2p.me's subgraph and contract — on the customer's page, the Payments tab and Transactions — with the PayQR support link. p2p.me's in-app dispute chip serves only an order's own user, which for a link order is the merchant's proxy, so it is shown for counter sales only.
 
 ## 6. Error handling
 
@@ -105,7 +116,7 @@ No funded key exists anywhere on the payment path:
 1. User-cancelled wallet prompt → `"Cancelled."`
 2. `P2PError` from the SDK (fraud screening rejection, no-eligible-merchant, etc.) → its own `userMessage`, verbatim
 3. A decodable Solidity custom error name → a curated human message (`ERROR_MESSAGES`)
-4. An undecodable 4-byte selector → looked up in a manually-maintained `ERROR_SIGNATURES` map (kept in sync with the Worker's own `REVERT_MESSAGES`)
+4. An undecodable 4-byte selector → looked up in a manually-maintained `ERROR_SIGNATURES` map (kept in sync with the relayer's own `REVERT_MESSAGES`)
 5. Otherwise → a generic fallback
 
 ## 7. Page-by-page
@@ -158,7 +169,7 @@ All config is `NEXT_PUBLIC_*` env vars (client-exposed by design — see `.env.e
 
 ## 9. Known gaps (as of this doc)
 
-- **pubKey format conflict** — **closed.** The Worker's `/api/pay` demanded the `04`-prefixed uncompressed SEC1 form (it derives the customer's signing address from the key, which needs the tag), while the SDK's `encryptPaymentAddress` — how the LP puts the payout handle on the order — re-adds `04` itself and so requires the unprefixed 128-char form. Sending the tagged form satisfied the Worker and left every order placeable and then permanently unpayable, because the LP could never deliver payment details. The Worker now normalises: it accepts either spelling, derives from the tagged form, and writes the **untagged** form on-chain. This repo sends what `createRelayIdentity()` produces, unchanged.
+- **pubKey format conflict** — **closed.** The relayer's `/api/pay` demanded the `04`-prefixed uncompressed SEC1 form (it derives the customer's signing address from the key, which needs the tag), while the SDK's `encryptPaymentAddress` — how the LP puts the payout handle on the order — re-adds `04` itself and so requires the unprefixed 128-char form. Sending the tagged form satisfied the relayer and left every order placeable and then permanently unpayable, because the LP could never deliver payment details. The relayer now normalises: it accepts either spelling, derives from the tagged form, and writes the **untagged** form on-chain. This repo sends what `createRelayIdentity()` produces, unchanged.
 - **`registerAgent` batching** — implemented (§5, Step 1). Previously the create-link flow only sent `createLink`, leaving every link permanently unpayable.
 - **Counter QRs (variable amount, unlimited uses)** are supported as of the ceiling changes in `payment-integrators` — see that repo's `docs/integrators/merchant-terminal.md` §4. On this side, `/pay/[linkId]` reads the merchant's live `perTxCap` for a variable link and refuses an over-cap amount **before** the relayer round-trip, since on a counter QR nothing else stands between the customer's typing and a revert.
 - **Link orders in Transactions** — a link sale is recorded on-chain with the merchant's **proxy** as the order's user (`relayerPlaceOrder` → `_placeOrder(merchant, userIsProxy: true, …)`), where a POS sale records the merchant. `lib/history.ts` now queries both addresses; keying on the merchant alone showed the balance rising with no row to explain it.

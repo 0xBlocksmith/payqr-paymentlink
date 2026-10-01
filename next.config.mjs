@@ -77,6 +77,66 @@ function checkEnv() {
 }
 
 /** @type {import('next').NextConfig} */
+/** The origin of a configured service URL, or "" when unset or malformed. */
+function originOf(url) {
+  try {
+    return url ? new URL(url).origin : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Where report-only violations are POSTed — app/api/csp-report/route.ts. */
+const CSP_REPORT_PATH = "/api/csp-report";
+
+/** The full policy, from this deployment's own services (see headers()). */
+function reportOnlyCsp() {
+  const services = [
+    process.env.NEXT_PUBLIC_RELAYER_WORKER_URL,
+    process.env.NEXT_PUBLIC_RPC_URL,
+    process.env.NEXT_PUBLIC_SUBGRAPH_URL,
+    process.env.NEXT_PUBLIC_FRAUD_ENGINE_API_URL,
+    process.env.NEXT_PUBLIC_SUPPORT_BRIDGE_URL,
+  ]
+    .map(originOf)
+    .filter(Boolean);
+  const ecosystem = originOf(process.env.NEXT_PUBLIC_ECOSYSTEM_URL) || "https://p2p.store";
+  const connect = [
+    "'self'",
+    ...services,
+    "https://*.thirdweb.com",
+    "wss://*.thirdweb.com",
+    "https://*.walletconnect.com",
+    "wss://*.walletconnect.com",
+    "https://*.walletconnect.org",
+    "wss://*.walletconnect.org",
+    "https://*.seon.io",
+    "https://*.fpjs.io",
+    "https://*.base.org",
+  ];
+  return [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://*.thirdweb.com https://*.seon.io",
+    `connect-src ${[...new Set(connect)].join(" ")}`,
+    "img-src 'self' data: blob: https:",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    `frame-src 'self' https://*.thirdweb.com ${ecosystem}`,
+    "worker-src 'self' blob:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    // Report-only is worth nothing if the reports only reach a console nobody
+    // has open (review item 5). report-uri is what Chrome and Safari still
+    // send today; report-to is the Reporting API successor, named by the
+    // Reporting-Endpoints header below. Both named, so neither browser is
+    // silent.
+    `report-uri ${CSP_REPORT_PATH}`,
+    "report-to csp-endpoint",
+  ].join("; ");
+}
+
 const nextConfig = {
   reactStrictMode: true,
   // The app now typechecks clean (npm run typecheck passes), so let the build
@@ -84,6 +144,12 @@ const nextConfig = {
   // of silently shipping. ESLint is still skipped (no lint config wired up).
   typescript: { ignoreBuildErrors: false },
   eslint: { ignoreDuringBuilds: true },
+  // The app uses no next/image, but Next.js still serves its image optimizer at
+  // /_next/image — and on 14.x that endpoint carries open advisories, two of
+  // them critical (remote code execution with AVIF, denial of service), fixed
+  // only in 15.5.x. Turning optimization off takes the endpoint out of play
+  // with no visible change. Revisit on the Next 15 upgrade.
+  images: { unoptimized: true },
   // Tree-shake barrel imports from the heavy wallet/UI deps so a page only pulls
   // the icons/helpers it actually uses instead of the whole package — cuts the
   // dev cold-compile module count and shrinks the production first-load bundle.
@@ -96,13 +162,29 @@ const nextConfig = {
       "qrcode.react",
     ],
   },
-  // Baseline security headers on every route. These are the safe, high-value
-  // ones that don't risk breaking the wallet/RPC/subgraph connections. A full
-  // Content-Security-Policy is intentionally NOT set here yet: this PWA talks to
-  // thirdweb, Alchemy RPC, the p2p subgraph, and flag CDNs, and an over-tight
-  // connect-src/script-src would silently break wallet init — it needs a tuned,
-  // tested policy (ideally nonce-based for the inline theme script). Tracked as
-  // a follow-up; clickjacking + sniffing + referrer leakage are covered below.
+  // Baseline security headers on every route.
+  //
+  // CONTENT SECURITY POLICY, IN TWO PARTS (review M7). Customer and merchant
+  // signing keys live in localStorage on this origin, so a policy that limits
+  // where script may send data matters. But this app talks to thirdweb, the RPC,
+  // the relayer, the subgraph, the fraud engine (with SEON and fingerprinting)
+  // and WalletConnect, and an over-tight connect-src or script-src silently
+  // breaks wallet login or a payment. So:
+  //   • ENFORCED: only the directives that cannot break a flow — no plugins, no
+  //     framing by other sites, no foreign <base>, forms post only here.
+  //   • REPORT-ONLY: the full policy, built from this deployment's own
+  //     services. Browsers log what it WOULD block, without blocking, and now
+  //     also POST each violation to /api/csp-report so the deployment's logs
+  //     show what real customer traffic hits. Run a full flow (login, create a
+  //     link, pay, withdraw), read the reports, add any host they name, then
+  //     move the policy to Content-Security-Policy.
+  //
+  // script-src still allows 'unsafe-inline', and that is the one directive
+  // this cannot tighten from here: Next.js inlines its own bootstrap and flight
+  // data on every page, so dropping it needs per-request nonces from
+  // middleware (with 'strict-dynamic' for thirdweb's and SEON's loaders) —
+  // a change that must be made and flow-tested on its own, not folded into
+  // this one. Left as a follow-up, as the review has it.
   async headers() {
     return [
       {
@@ -115,6 +197,13 @@ const nextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=(), payment=()",
           },
+          {
+            key: "Content-Security-Policy",
+            value: "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+          },
+          { key: "Content-Security-Policy-Report-Only", value: reportOnlyCsp() },
+          // Names the group `report-to` above points at.
+          { key: "Reporting-Endpoints", value: `csp-endpoint="${CSP_REPORT_PATH}"` },
         ],
       },
     ];

@@ -11,18 +11,21 @@ import { countryForCurrency, fmtPayerFiat } from "../../../lib/countries";
 import {
   PAYMENT_LINKS_ENABLED,
   LinkStatus,
-  isLinkOwnerZero,
   makeRelayerPlaceOrder,
   fetchLink,
   decodeLinkId,
   PaymentPendingError,
   getPendingPayment,
   resolvePendingPayment,
-  parseFixedAmount,
-  verifyFixedAmount,
+  fetchLinkPrice,
+  attemptKeyFor,
+  attemptScreening,
+  rememberAttemptScreening,
+  clearAttempt,
 } from "../../../lib/paymentLinks";
 import type { PaymentLink } from "../../../lib/paymentLinks";
 import { getCustomerIdentity } from "../../../lib/customerRelayIdentity";
+import { routeLinkCircle } from "../../../lib/customerOrder";
 import { placeScreenedOrder } from "../../../lib/customerScreening";
 import { resolveCircleId } from "../../../lib/p2p";
 import { useHumanCheck } from "../../../components/HumanCheck";
@@ -161,16 +164,18 @@ export default function PayLink() {
         const l = await fetchLink(reader, safeLinkId);
         if (!alive) return;
         setLink(l);
-        setState(isLinkOwnerZero(l) ? "notFound" : "verified");
+        // A link that does not exist reverts LinkNotFound (handled below) — it
+        // never comes back with an empty owner.
+        setState("verified");
       } catch (e) {
         if (!alive) return;
         if (!isDefinitiveError(e)) return setState("unverified");
         // Not on the current contract. Was it made on an earlier one?
         for (const prev of PREV_CONTRACT_ADDRESSES) {
           try {
-            const old = await fetchLink(reader, safeLinkId, prev);
+            await fetchLink(reader, safeLinkId, prev);
             if (!alive) return;
-            if (!isLinkOwnerZero(old)) return setState("retired");
+            return setState("retired");
           } catch {
             // Not there either — keep looking.
           }
@@ -222,41 +227,46 @@ export default function PayLink() {
     fetchPriceConfig(country.code).then(setPriceCfg);
   }, [link, country]);
 
-  // A fixed amount in the customer's own currency, carried in the URL and
-  // signed by the merchant (see fixedAmountTypedData). Only for a link that is
-  // open-amount on-chain; a USDC-fixed link ignores it. Present but not signed
-  // by this link's owner means the URL was changed — the page refuses it rather
-  // than falling back to an open amount the customer could type.
+  // A fixed amount in the customer's own currency, which the RELAYER keeps and
+  // charges (see fixedAmountTypedData) — so this page only shows it; editing
+  // the URL or the request changes nothing (review H2). Only for a link that is
+  // open-amount on-chain; a USDC-fixed link has its amount on-chain. When the
+  // price can't be read the page waits and offers a retry: showing an open
+  // amount instead would take an amount the relayer then would not charge.
   const [fixed, setFixed] = useState<
-    { status: "none" } | { status: "checking" } | { status: "valid"; amount: number } | { status: "invalid" }
+    | { status: "none" }
+    | { status: "loading" }
+    | { status: "fixed"; amount6: bigint }
+    | { status: "error"; message: string }
+    | { status: "outdated" }
   >({ status: "none" });
+  const [priceRetry, setPriceRetry] = useState(0);
   useEffect(() => {
     if (state !== "verified" || !link || link.amount !== 0n) {
       setFixed({ status: "none" });
       return;
     }
-    const parsed = parseFixedAmount(window.location.search);
-    if (parsed === null) {
-      setFixed({ status: "none" });
-      return;
-    }
-    if (parsed === "malformed") {
-      setFixed({ status: "invalid" });
-      return;
-    }
     let alive = true;
-    setFixed({ status: "checking" });
-    verifyFixedAmount(
-      reader,
-      ACTIVE_CHAIN.id,
-      { linkId: safeLinkId as `0x${string}`, owner: link.owner, currency: link.currency },
-      parsed
-    ).then((ok) => {
-      if (!alive) return;
-      setFixed(ok ? { status: "valid", amount: Number(parsed.amount6) / 1e6 } : { status: "invalid" });
-    });
+    setFixed({ status: "loading" });
+    fetchLinkPrice(safeLinkId as `0x${string}`)
+      .then((p) => {
+        if (!alive) return;
+        // A link from the short-lived version that carried its price in the
+        // URL (?fa=&fs=): the relayer never stored that price, so without this
+        // it would open as pay-anything. Ask for a new link instead.
+        if (!p && new URLSearchParams(window.location.search).has("fa")) setFixed({ status: "outdated" });
+        else if (!p) setFixed({ status: "none" });
+        // The relayer refuses a price in another currency at payment time; say
+        // so now rather than let the customer tap Pay into that refusal.
+        else if (p.currency.toLowerCase() !== link.currency.toLowerCase()) {
+          setFixed({ status: "error", message: "This payment link's price could not be verified. Please ask the merchant for a new link." });
+        } else setFixed({ status: "fixed", amount6: p.amount6 });
+      })
+      .catch((e: any) => {
+        if (alive) setFixed({ status: "error", message: e?.message || "Could not load this link's price. Please try again." });
+      });
     return () => { alive = false; };
-  }, [state, link, safeLinkId]);
+  }, [state, link, safeLinkId, priceRetry]);
 
   // Warm the customer's own (thirdweb-free) relay identity as soon as the
   // page is viable, so it's ready before they tap Pay.
@@ -284,6 +294,15 @@ export default function PayLink() {
     let alive = true;
     resolveCircleId(code)
       .then((id) => { if (alive && id !== null) setCircleId(id); })
+      .catch(() => {});
+    // Warm the SDK's routing too (routeLinkCircle in handlePay): its first call
+    // loads the partner data and took ~15 s on mainnet, later ones under 1 s.
+    // The answer is discarded — the real route is taken for the real amount.
+    reader
+      .readContract({ address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "proxyAddress", args: [link.owner] } as any)
+      .then((proxy) =>
+        routeLinkCircle({ currency: code, usdcAmount: 1_000000n, fiatAmount: 0n, user: proxy as `0x${string}` })
+      )
       .catch(() => {});
     return () => { alive = false; };
   }, [state, link]);
@@ -447,20 +466,27 @@ export default function PayLink() {
     );
   }
 
-  if (fixed.status === "invalid" && !inProgress) {
+  if (fixed.status === "outdated" && !inProgress) {
     return (
       <Centered>
-        <p className="pl-notice">
-          This payment link has been changed or isn't valid. Please ask the merchant for a new link.
-        </p>
+        <p className="pl-notice">This payment link is out of date. Please ask the merchant for a new link.</p>
+      </Centered>
+    );
+  }
+  if (fixed.status === "error" && !inProgress) {
+    return (
+      <Centered>
+        <p className="pl-notice">{fixed.message}</p>
+        <button className="pl-retry-btn" onClick={() => setPriceRetry((r) => r + 1)}>Try again</button>
       </Centered>
     );
   }
 
   const isVariable = l.amount === 0n;
-  // Open-amount on-chain, but the merchant fixed the local amount in the URL.
-  const fixedLocal = isVariable && fixed.status === "valid" ? fixed.amount : null;
-  const checkingFixed = isVariable && fixed.status === "checking";
+  // Open-amount on-chain, with a local price the relayer keeps and charges.
+  const fixedLocal6 = isVariable && fixed.status === "fixed" ? fixed.amount6 : null;
+  const fixedLocal = fixedLocal6 !== null ? Number(fixedLocal6) / 1e6 : null;
+  const checkingFixed = isVariable && fixed.status === "loading";
   const customerTypes = isVariable && fixedLocal === null && !checkingFixed;
   // USDC-fixed link: `l.amount` is 6-dec USDC-equivalent, not fiat — convert
   // back through the live price so the displayed number matches what the widget
@@ -512,17 +538,42 @@ export default function PayLink() {
         quantity = usdcForFiat(fiat, cfg);
         if (quantity <= 0n) throw new Error("That amount is too small.");
       }
+      // What the relayer charges, in the customer's currency: on an open-amount
+      // link it prices this at placement (a fixed-price link charges its own,
+      // whatever is sent). `quantity` above is only for a relayer that predates
+      // pricing, which ignores this.
+      const fiatAmount6 = isVariable
+        ? fixedLocal6 ?? BigInt(Math.round(Number(amountInput) * 1e6))
+        : undefined;
+      // The same attempt across a lost answer or a reload, so tapping Pay again
+      // cannot place a second order (review: duplicate orders).
+      const idempotencyKey = attemptKeyFor(safeLinkId, fiatAmount6 ?? l.amount);
 
-      // The offramp circle for this link's currency, resolved from the
-      // subgraph exactly like the merchant /qr flow does. The worker takes
-      // circleId from the request body and defaults it to 0 — which is not a
-      // real circle, so leaving it unset places every link order against a
-      // circle the protocol has no liquidity for.
-      // Prefer the value warmed while the customer was reading the page; fall
-      // back to resolving it here so a slow or failed prefetch costs latency,
-      // never the payment.
+      // The offramp circle. The relayer takes circleId from the request and
+      // defaults it to 0 — not a real circle — so it must be chosen here. It is
+      // ROUTED, as p2p.me's widget routes: to a circle with partners eligible
+      // for this amount (review M5), not simply the first one listed. Only when
+      // routing itself fails does it fall back to the currency's circle — warmed
+      // while the customer was reading the page, or resolved now.
       const linkCurrency = currencyFromBytes32(l.currency);
-      const circle = circleId ?? (linkCurrency ? await resolveCircleId(linkCurrency) : null);
+      let circle: bigint | null = null;
+      if (linkCurrency) {
+        const proxy = (await reader
+          .readContract({ address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "proxyAddress", args: [l.owner] } as any)
+          .catch(() => null)) as `0x${string}` | null;
+        const routed = proxy
+          ? await routeLinkCircle({
+              currency: linkCurrency,
+              usdcAmount: quantity,
+              fiatAmount: BigInt(Math.round(amountNum * 1e6)),
+              user: proxy,
+            })
+          : null;
+        if (routed === "none") {
+          throw new Error("Payments are busy right now. Please try again in a few minutes.");
+        }
+        circle = routed ?? circleId ?? (await resolveCircleId(linkCurrency));
+      }
       if (circle === null) throw new Error("This currency isn't available for payment right now.");
 
       const identity = await getCustomerIdentity();
@@ -533,6 +584,8 @@ export default function PayLink() {
         circleId: Number(circle),
         getIdentity: async () => identity,
         getHumanSolution,
+        fiatAmount6,
+        idempotencyKey,
       });
       // Screening runs BEFORE the order is placed, and places it itself on
       // approval — the fraud engine links its activity log to the order id, so
@@ -543,18 +596,29 @@ export default function PayLink() {
       // buy orders are not auto-approved. The customer waited on "Finding a
       // payment provider…" until the order expired, with nothing anywhere
       // saying why. When screening is unconfigured this is a passthrough.
+      const attemptFiat6 = fiatAmount6 ?? l.amount;
       const newOrderId = await placeScreenedOrder({
         place: async () => (await placeOrder()).orderId,
         fiatAmount: amountNum,
         usdcAmount: Number(quantity) / 1e6,
         currency: linkCurrency,
         merchant: l.owner,
+        // One screening per attempt, not per tap: /api/pay replays this
+        // attempt's first answer, so a second activity log would hit the fraud
+        // engine's one-order-in-flight rule and refuse a payment that already
+        // exists (review item 4).
+        alreadyScreened: attemptScreening(safeLinkId, attemptFiat6, idempotencyKey),
+        onScreened: (activityLogId) =>
+          rememberAttemptScreening(safeLinkId, attemptFiat6, idempotencyKey, activityLogId),
       });
+      clearAttempt(safeLinkId);
       // Set together with the order id so the saved order carries the quote.
       setQuotedFiat(amountNum > 0 ? amountNum : null);
       setOrderId(newOrderId);
     } catch (e: any) {
       if (e instanceof PaymentPendingError) {
+        // Settled as far as this page goes: the pending follow-up owns it now.
+        clearAttempt(safeLinkId);
         if (e.resumable) {
           // Keep the Pay button off and follow it up; the effect above
           // resolves the order and mounts the payment widget. The order id

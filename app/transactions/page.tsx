@@ -115,24 +115,14 @@ export default function Transactions() {
   // display hints only — the receipt re-reads the real shop name from chain.
   const receiptHref = useCallback((tx) => {
     if (!tx?.orderId || !tx?.txHash) return "";
-    const usdc = Number(tx.amount) / 1e6;
-    const fiat = rate && country ? usdc * rate.rate : null;
-    // kind → the receipt frames "payment received" vs "cash-out"; cur → the rail
-    // label (UPI/PIX/…). Both are display hints; the receipt still trusts on-chain
-    // amount/status. tx.kind is "withdraw" for fiat SELL, else a BUY payment.
+    // Order id + access token only: the receipt shows nothing from its URL
+    // (review H1). `kind` just says which table to look in first.
     const q = new URLSearchParams({
       token: receiptToken(String(tx.orderId), tx.txHash),
       kind: tx.kind === "withdraw" ? "withdraw" : "buy",
-      ...(country?.code ? { cur: country.code } : {}),
-      ...(country && fiat != null ? { fiat: fmtFiat(country, fiat, { decimals: 2 }) } : {}),
-      // Masked payout handle on FIAT withdrawal receipts only (which account it
-      // landed in). Already masked, so a shared link never exposes the full id.
-      ...(tx.kind === "withdraw" && upiMasked ? { upi: upiMasked } : {}),
     });
-    const shop = loadMerchantProfile(address)?.shopName;
-    if (shop) q.set("shop", shop);
     return `/receipt/${tx.orderId}?${q.toString()}`;
-  }, [rate, country, address, upiMasked]);
+  }, []);
 
   // The merchant's per-merchant proxy. Two different things are indexed under
   // it: fiat withdrawals (SELL orders), and — less obviously — every PAYMENT
@@ -211,8 +201,12 @@ export default function Transactions() {
   // Dispute Manager: batched live on-chain read for every visible PAYMENT row
   // (withdrawals aren't disputable orders, so they're excluded). One multicall
   // for the whole visible page rather than a call per row.
+  // Counter (POS) sales only: p2p.me's support bridge serves the order's own
+  // user, and a payment-link sale belongs to the merchant's proxy, so its chip
+  // could never work there (review). Link sales get their dispute status and
+  // PayQR support below instead.
   const disputableOrderIds = useMemo(
-    () => filtered.filter((t) => t.kind !== "withdraw").map((t) => t.orderId),
+    () => filtered.filter((t) => t.kind !== "withdraw" && !t.isLink).map((t) => t.orderId),
     [filtered]
   );
   const { rows: disputeRows } = useDisputeOrderStates(disputableOrderIds);
@@ -437,6 +431,18 @@ export default function Transactions() {
                       order={disputeRow.order}
                       signer={supportSigner}
                     />
+                  )}
+                  {!isWithdraw && tx.isLink && tx.dispute && tx.dispute !== "none" && (
+                    <div className="sub" style={{ margin: "4px 0 10px", fontSize: 12.5 }}>
+                      {tx.dispute === "open" ? "Payment under review by support · " : "Review by support finished · "}
+                      <a
+                        href={`https://t.me/PayQRdotPRO?text=${encodeURIComponent(`Hi, I need help with payment #${tx.orderId}.`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Contact support ↗
+                      </a>
+                    </div>
                   )}
                 </div>
               );

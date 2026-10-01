@@ -10,7 +10,7 @@ import { useMerchant } from "../../components/useMerchant";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, PREV_CONTRACT_ADDRESSES, CROSS_VERSION_ABI, isPrevContract, friendlyError, currencyFromBytes32 } from "../../lib/contract";
 import { useMerchantProxies } from "../../components/useMerchantProxies";
 import { countryForCurrency, fmtFiat } from "../../lib/countries";
-import { PAYMENT_LINKS_ENABLED, LinkStatus, fetchMerchantLinkIds, fetchIndexedMerchantLinkIds, fetchMerchantLinkEvents, fetchLink, buildPayLinkUrl, rememberedLinks, rememberedFixedAmount, withFixedAmount } from "../../lib/paymentLinks";
+import { PAYMENT_LINKS_ENABLED, LinkStatus, fetchMerchantLinkIds, fetchIndexedMerchantLinkIds, fetchMerchantLinkEvents, fetchLink, buildPayLinkUrl, rememberedLinks, type LinkPrice } from "../../lib/paymentLinks";
 import { fetchPriceConfig, fiatForUsdc, type PriceConfig } from "../../lib/pricing";
 import { composePosterDataUrl } from "../../components/PaymentLinkPoster";
 import { fetchLinkOrders, receiptToken } from "../../lib/history";
@@ -71,6 +71,9 @@ export default function PaymentLinksList() {
   const publicClient = usePublicClient();
 
   const [links, setLinks] = useState<LinkRow[] | null>(null);
+  // Each fixed-price link's price, from the relayer's link index — so it shows
+  // on every device, not only the one that created the link.
+  const [linkPrices, setLinkPrices] = useState<Map<string, LinkPrice>>(new Map());
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState<string | null>(null);
   const [qrFor, setQrFor] = useState<string | null>(null);
@@ -110,49 +113,6 @@ export default function PaymentLinksList() {
     if (ready && isRegistered === false) router.replace("/onboarding");
   }, [ready, isRegistered, router]);
 
-  /**
-   * Which currency each payment was taken in.
-   *
-   * The subgraph reports the USDC that settled, not the fiat the customer
-   * actually handed over — so a row on its own cannot say whether a sale was
-   * rupees or reais. Now that a merchant can issue links in several currencies,
-   * that is the first thing they want to know about a payment.
-   *
-   * The contract already records the mapping: `orderToLink(orderId)` gives the
-   * link, and the link carries its currency. One read per payment, and only for
-   * settled ones.
-   */
-  const [orderCurrency, setOrderCurrency] = useState<Record<string, string>>({});
-  useEffect(() => {
-    if (!publicClient || !orders?.length || !links?.length) return;
-    const byLink = new Map(links.map((l) => [`${l.contract.toLowerCase()}:${l.linkId.toLowerCase()}`, l.currency]));
-    let alive = true;
-    (async () => {
-      const found: Record<string, string> = {};
-      await Promise.all(
-        orders
-          .filter((o) => o.status === "settled")
-          .map(async (o) => {
-            try {
-              // orderToLink lives on the integrator the order went through.
-              const contract = (o.integrator || CONTRACT_ADDRESS) as `0x${string}`;
-              const linkId = (await publicClient.readContract({
-                address: contract,
-                abi: CROSS_VERSION_ABI,
-                functionName: "orderToLink",
-                args: [BigInt(o.orderId)],
-              } as any)) as string;
-              const code = byLink.get(`${contract.toLowerCase()}:${String(linkId).toLowerCase()}`);
-              if (code) found[o.orderId] = code;
-            } catch {
-              // Purely decorative — a failed read just means no flag on that row.
-            }
-          })
-      );
-      if (alive) setOrderCurrency(found);
-    })();
-    return () => { alive = false; };
-  }, [publicClient, orders, links]);
 
   const load = useCallback(async () => {
     if (!address || !publicClient) return;
@@ -180,10 +140,12 @@ export default function PaymentLinksList() {
       // id that was revoked elsewhere still reads as revoked, and one that
       // never existed resolves to a zero owner and is dropped.
       const discovered = new Set<`0x${string}`>(rememberedLinks(address));
+      const prices = new Map<string, LinkPrice>();
       const [onChainIds, indexedIds] = await Promise.all([
         fetchMerchantLinkIds(publicClient, address).catch(() => [] as `0x${string}`[]),
-        fetchIndexedMerchantLinkIds(address).catch(() => [] as `0x${string}`[]),
+        fetchIndexedMerchantLinkIds(address, prices).catch(() => [] as `0x${string}`[]),
       ]);
+      setLinkPrices(prices);
       for (const id of onChainIds) discovered.add(id);
       for (const id of indexedIds) discovered.add(id);
       // The scan is the expensive one — hundreds of sequential eth_getLogs on a
@@ -582,10 +544,9 @@ ${url}`;
 
         {liveLinks.map((l) => {
           const country = countryForCurrency(l.currency);
-          // A fixed local amount lives in the link's signed URL, known only on
-          // the device that made it (see rememberFixedAmount).
-          const fixedLocal = l.amount === 0n ? rememberedFixedAmount(l.linkId) : null;
-          const url = fixedLocal ? withFixedAmount(buildPayLinkUrl(l.linkId), fixedLocal) : buildPayLinkUrl(l.linkId);
+          // A fixed local price, held and charged by the relayer.
+          const fixedLocal = l.amount === 0n ? linkPrices.get(l.linkId.toLowerCase()) ?? null : null;
+          const url = buildPayLinkUrl(l.linkId);
           const isActive = l.status === LinkStatus.ACTIVE;
           const expired = l.expiresAt !== 0n && BigInt(Math.floor(Date.now() / 1000)) > l.expiresAt;
           // maxUses 0 means unlimited, so it can never be exhausted — a counter
@@ -766,15 +727,26 @@ ${url}`;
                   {/* The flag names the currency the CUSTOMER paid in; the USDC
                       is what actually settled. Both matter and they are not the
                       same number, so neither is dropped. */}
-                  {orderCurrency[o.orderId] && (
-                    <span style={{ marginRight: 8 }} title={orderCurrency[o.orderId]}>
-                      {countryForCurrency(orderCurrency[o.orderId]).flag}
+                  {/* The currency the customer paid in, read with the order. */}
+                  {o.currency && (
+                    <span style={{ marginRight: 8 }} title={o.currency}>
+                      {countryForCurrency(o.currency).flag}
                     </span>
                   )}
                   {(Number(o.amount) / 1e6).toFixed(2)} USDC
                 </div>
                 <div className="sub" style={{ color: "var(--ok, #0f9d6f)", fontWeight: 600 }}>Paid</div>
               </div>
+              {/* A dispute can be opened even after a payment settled. The
+                  receipt has the support link for it. */}
+              {o.dispute === "open" && (
+                <div className="sub" style={{ marginTop: 4, color: "var(--warn, #b45309)", fontWeight: 600 }}>
+                  Payment under review by support
+                </div>
+              )}
+              {o.dispute === "resolved" && (
+                <div className="sub" style={{ marginTop: 4, opacity: 0.8 }}>Review by support finished</div>
+              )}
               <div className="sub" style={{ marginTop: 4, opacity: 0.8 }}>
                 Order #{o.orderId} ·{" "}
                 {new Date((o.completedAt || o.placedAt) * 1000).toLocaleString()}
