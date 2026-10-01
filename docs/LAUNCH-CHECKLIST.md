@@ -45,22 +45,34 @@ To list them (read-only; changes nothing, needs no key):
 
 ```sh
 RPC_URL=https://base-mainnet.<keyed-provider>/... \
-LINK_ROUTER_ADDRESS=0x... \
+INTEGRATOR_ADDRESS=0xA012B6D5D6d74224C3B046780965D5EC7AAB20a5 \
 RELAYER_URL=https://<relayer>/ \
-FROM_BLOCK=<LinkRouter deployment block> \
+FROM_BLOCK=<integrator deployment block> \
 node scripts/audit-open-amount-links.mjs
 ```
 
 A **keyed** RPC is required — public Base RPCs refuse historical `getLogs`,
 which is what blocked this during review.
 
+The address is the **integrator**, not the LinkRouter. `LinkCreated`,
+`LinkRevoked`, `getLink` and `revokeLink` all live on the integrator; the
+LinkRouter has none of them and reads links back through `integrator.getLink`.
+Pointed at the Router the scan finds nothing and says "nothing to revoke",
+which is why the script now checks that its target answers `getLink` before it
+scans, and treats finding no `LinkCreated` events at all as a failure. Both
+exit non-zero rather than printing an all-clear.
+
 Read the list before acting on it. It is every live link that accepts any
 amount, so genuinely-intended Counter QRs are in it too. Revoke with
-`revokeLink(bytes32)` on the LinkRouter, from each link's own owner.
+`revokeLink(bytes32)` on the **integrator**, from each link's own owner.
 
 ## 4. One live check of each, on mainnet
 
 - A fixed ₹ link: the placed order's on-chain `fiatAmount` equals the price.
+  Allow for the small-order fee when comparing. On recent mainnet INR orders
+  `fiatAmount` is exactly `usdcAmount × buyPrice`, with the fee not in it,
+  while the customer is charged `(principal + fee) × buyPrice` — so on a small
+  order the two differ by the fee, and that is expected, not a pricing bug.
 - A BRL link: scan the Pix QR with a real bank app; amount and txid are filled.
 - Tap Pay, cut the network, tap Pay again: the same order comes back, one
   order exists, and the fraud engine saw one screening — not two.
