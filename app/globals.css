@@ -2236,6 +2236,14 @@ body {
 .pl-done-url {
   font-size: 12px; color: var(--muted); margin-top: 6px; word-break: break-all;
   max-width: 320px;
+  display: flex; align-items: flex-start; justify-content: center; gap: 8px;
 }
+.pl-done-copy {
+  flex: none; border: none; cursor: pointer; width: 26px; height: 26px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--bg-soft); color: var(--accent);
+}
+.pl-done-copy:hover { background: var(--accent); color: #fff; }
+.pl-done-copy.copied { background: var(--mint); color: #fff; }
 .pl-done-actions { display: flex; gap: 10px; width: 100%; max-width: 320px; margin-top: 18px; }
 .pl-done-actions .btn { flex: 1; }

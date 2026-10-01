@@ -393,11 +393,24 @@ export function PaymentLinkWidget({
           />
         )}
 
-        {phase === "expired" && (
-          <ExpiredPanel orderId={orderId || ""} onPaid={handleMarkPaid} onCancel={handleCancel} busy={busy} />
+        {(phase === "expired" || phase === "cancelled") && (
+          <EndedReceipt
+            expired={phase === "expired"}
+            details={{
+              amount: fiatDisplay,
+              merchantName,
+              currency,
+              orderId: orderId || "",
+              linkId,
+              whenSecs: Number(order?.placedAt || 0n),
+              status: phase === "expired" ? "Payment window ended" : "Cancelled",
+            }}
+            onPaid={handleMarkPaid}
+            onCancel={handleCancel}
+            busy={busy}
+            onNewPayment={onNewPayment}
+          />
         )}
-
-        {phase === "cancelled" && <CancelledPanel onNewPayment={onNewPayment} />}
 
         {/* Errors outside the "accepted" panel (which shows its own): a cancel
             refused on the expired screen — busy, rate-limited, network — used
@@ -590,6 +603,10 @@ export function PaymentLinkWidget({
         .pc-rcpt-full { position: fixed; inset: 0; z-index: 60; overflow-y: auto; background: var(--bg, #fff); }
         .pc-rcpt-share { width: 100%; margin-top: 16px; }
         .pc-rcpt-full .rcpt-help { margin: 12px 0 0; }
+        .pc-help-box { margin-top: 18px; padding: 14px; border-radius: 14px; background: var(--bg-soft); text-align: center; }
+        .pc-help-h { font-size: 14px; font-weight: 700; color: var(--text); }
+        .pc-help-sub { font-size: 12px; color: var(--muted); margin: 4px 0 12px; line-height: 1.45; }
+        .pc-help-btn { display: block; width: 100%; text-align: center; text-decoration: none; box-sizing: border-box; }
 
         .pc-expired-ico {
           width: 76px; height: 76px; border-radius: 50%; background: var(--pq-danger-soft); color: var(--pq-danger);
@@ -813,39 +830,95 @@ function ReceiptPanel({
   );
 }
 
-// We can't know here whether the customer paid after the window closed, so this
-// panel never claims that no money moved: it offers "I already paid" (the order
-// may still be live on-chain) and a support route, besides cancelling.
-function ExpiredPanel({
-  orderId, onPaid, onCancel, busy,
-}: { orderId: string; onPaid: () => void; onCancel: () => void; busy: boolean }) {
-  return (
-    <div className="pc-expired">
-      <div className="pc-expired-ico"><ClockIcon /></div>
-      <div className="pc-expired-h">Payment window ended</div>
-      <div className="pc-expired-sub">
-        If you already paid, tap "I already paid" — don't pay again. Otherwise you can cancel this order.
-      </div>
-      <button className="pc-retry-btn" onClick={onPaid} disabled={busy}>{busy ? "Working…" : "I already paid"}</button>
-      <button className="pc-cancel-btn" onClick={onCancel} disabled={busy}>Cancel order</button>
-      <a
-        className="pc-expired-sub"
-        href={`https://t.me/PayQRdotPRO?text=${encodeURIComponent(`Hi, I need help with payment #${orderId}.`)}`}
-        target="_blank" rel="noopener noreferrer"
-      >
-        Need help? Contact support ↗
-      </a>
-    </div>
-  );
+type EndedDetails = {
+  amount: string; merchantName: string; currency: string; orderId: string;
+  linkId: string; whenSecs: number; status: "Cancelled" | "Payment window ended";
+};
+
+// The support chat opens with everything the team needs to find this order, so
+// the customer doesn't have to type it out: order, amount, shop, rail, status
+// and the payment link it came from.
+function supportHref(d: EndedDetails): string {
+  const when = d.whenSecs ? new Date(d.whenSecs * 1000).toLocaleString() : "";
+  const details = [
+    `Amount: ${d.amount}`,
+    `Paid to: ${d.merchantName}`,
+    `Currency: ${d.currency}`,
+    `Order status: ${d.status}`,
+    ...(when ? [`Placed: ${when}`] : []),
+    `Payment link: ${d.linkId}`,
+  ];
+  const text = `Hi, I need help with my payment #${d.orderId}.\n\n${details.join("\n")}`;
+  return `https://t.me/PayQRdotPRO?text=${encodeURIComponent(text)}`;
 }
 
-function CancelledPanel({ onNewPayment }: { onNewPayment?: () => void }) {
+// Full-screen receipt for an order that did not complete — the customer-side
+// twin of the merchant's cancelled receipt at /receipt/[orderId], with the same
+// card as the success receipt and no beach scene behind it.
+function EndedReceipt({
+  details, expired, onPaid, onCancel, busy, onNewPayment,
+}: {
+  details: EndedDetails; expired: boolean; busy: boolean;
+  onPaid?: () => void; onCancel?: () => void; onNewPayment?: () => void;
+}) {
+  const country = countryForCurrency(details.currency);
+  const when = details.whenSecs
+    ? new Date(details.whenSecs * 1000).toLocaleString(undefined, {
+        day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
+      })
+    : "";
   return (
-    <div className="pc-expired">
-      <div className="pc-expired-ico"><XIcon /></div>
-      <div className="pc-expired-h">Order cancelled</div>
-      <div className="pc-expired-sub">This order was cancelled.</div>
-      {onNewPayment && <button className="pc-retry-btn" onClick={onNewPayment}>New payment</button>}
+    <div className="pc-rcpt-full">
+      <div className="rcpt-screen">
+        <div className="rcpt-card">
+          <div className="brand rcpt-brand"><Logo size={24} className="brand-mark" /> PayQR</div>
+          <div className={`rcpt-tick ${expired ? "wait" : "bad"}`}>{expired ? <ClockIcon /> : <XIcon />}</div>
+          <div className="rcpt-status">{expired ? "Payment window ended" : "Payment cancelled"}</div>
+          <div className="rcpt-shop">Paid to {details.merchantName}</div>
+          <div className="rcpt-amount">{details.amount}</div>
+          <div className="rcpt-amount-sub">
+            {expired
+              // We can't know whether the customer paid after the window closed,
+              // so this never claims that no money moved.
+              ? "If you already paid, tap “I already paid” — don't pay again."
+              : "This payment did not go through"}
+          </div>
+
+          <div className="rcpt-rows">
+            <div className="rcpt-row"><span>Paid to</span><b>{details.merchantName}</b></div>
+            <div className="rcpt-row"><span>Via</span><b>{country.flag} {country.name} · {country.code}</b></div>
+            {when && <div className="rcpt-row"><span>When</span><b>{when}</b></div>}
+            <div className="rcpt-row"><span>Receipt no.</span><b>#{details.orderId}</b></div>
+            <div className="rcpt-row"><span>Status</span><b className={expired ? "w" : "r"}>{details.status}</b></div>
+          </div>
+
+          <div className="pc-help-box" data-html2canvas-ignore="true">
+            <div className="pc-help-h">Need help with this order?</div>
+            <div className="pc-help-sub">
+              Tap below to chat with PayQR support. Your order number, amount and shop are filled in for you.
+            </div>
+            <a className="btn pc-help-btn" href={supportHref(details)} target="_blank" rel="noopener noreferrer">
+              Get help on this order ↗
+            </a>
+          </div>
+
+          {expired && onPaid && (
+            <button className="btn pc-rcpt-share" data-html2canvas-ignore="true" onClick={onPaid} disabled={busy}>
+              {busy ? "Working…" : "I already paid"}
+            </button>
+          )}
+          {expired && onCancel && (
+            <button className="btn ghost pc-rcpt-share" data-html2canvas-ignore="true" onClick={onCancel} disabled={busy}>
+              Cancel order
+            </button>
+          )}
+          {!expired && onNewPayment && (
+            <button className="btn ghost pc-rcpt-share" data-html2canvas-ignore="true" onClick={onNewPayment}>
+              New payment
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
