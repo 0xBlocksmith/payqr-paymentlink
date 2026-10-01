@@ -8,6 +8,8 @@ import { getCustomerOrder, decryptPayoutAddress, markOrderPaid, cancelCustomerOr
 import { currencyFromBytes32 } from "../lib/contract";
 import { countryForCurrency, fmtFiat } from "../lib/countries";
 import { ACTIVE_CHAIN } from "../lib/chain";
+import { fetchPriceConfig } from "../lib/pricing";
+import type { PriceConfig } from "../lib/pricing";
 import { PAYMENT_LINK_QR_STYLE } from "./PaymentLinkQR";
 import { Logo } from "./Icons";
 import type { Hex } from "viem";
@@ -57,6 +59,8 @@ type PaymentLinkWidgetProps = {
   linkId: Hex;
   merchantName?: string;
   currencyBytes32: Hex;
+  /** The fiat amount the payer was quoted when they placed the order. */
+  quotedFiat?: number | null;
   onOrderId?: (orderId: string) => void;
   onComplete?: (orderId: string) => void;
   onCancel?: (orderId?: string) => void;
@@ -108,6 +112,7 @@ export function PaymentLinkWidget({
   linkId,
   merchantName = "the merchant",
   currencyBytes32,
+  quotedFiat,
   orderId,
   onOrderId,
   onComplete,
@@ -130,6 +135,8 @@ export function PaymentLinkWidget({
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
   const [warningMsg, setWarningMsg] = useState("");
+  // Fee schedule, only read once an order has ended (see payerTotal6 below).
+  const [feeCfg, setFeeCfg] = useState<PriceConfig | null>(null);
   const pollRef = useRef<any>(null);
   const tickRef = useRef<any>(null);
   // Mirrors decryptedUpi for the poll's tick() closure below — tick() is
@@ -237,6 +244,13 @@ export function PaymentLinkWidget({
   }, [phase]);
 
   useEffect(() => {
+    if (phase !== "expired" && phase !== "cancelled") return;
+    let alive = true;
+    fetchPriceConfig(currency).then((c) => { if (alive) setFeeCfg(c); }).catch(() => {});
+    return () => { alive = false; };
+  }, [phase, currency]);
+
+  useEffect(() => {
     if (copied === null) return;
     const t = setTimeout(() => setCopied(null), 1500);
     return () => clearTimeout(t);
@@ -293,6 +307,22 @@ export function PaymentLinkWidget({
 
   const fiat6 = order?.actualFiatAmount && order.actualFiatAmount > 0n ? order.actualFiatAmount : order?.fiatAmount ?? 0n;
   const fiatDisplay = fmtAmount(fiat6, currency);
+
+  // FALLBACK for the cancelled/expired screens, used only when the amount the
+  // payer was quoted wasn't recorded (see quotedFiat). The order's fiatAmount is
+  // the USDC leg at the buy price; the small-order fee is added on top of it
+  // (lib/pricing.ts: total = (usdc + fee) × price). Uses the fee the order
+  // recorded, else the on-chain schedule; never the settled amount, which is the
+  // merchant's side. Not guaranteed to equal the quote (e.g. a partial fill).
+  const payerTotal6 = (() => {
+    const fiat = order?.fiatAmount ?? 0n;
+    const usdc = order?.usdcAmount ?? 0n;
+    if (fiat <= 0n) return 0n;
+    if (usdc <= 0n) return fiat;
+    const recorded = order?.fixedFeePaid ?? 0n;
+    const fee = recorded > 0n ? recorded : feeCfg && usdc <= feeCfg.smallOrderThreshold ? feeCfg.smallOrderFixedFee : 0n;
+    return fiat + (fee * fiat) / usdc;
+  })();
   // Paise included, as p2p.me's widget writes it (`am=${fiatDisplay}`, two
   // decimals). This was rounded to whole rupees, so a ₹99.99 order put ₹100 in
   // the UPI QR — the customer paid a different amount from the one owed.
@@ -397,8 +427,12 @@ export function PaymentLinkWidget({
           <EndedReceipt
             expired={phase === "expired"}
             details={{
-              // What the customer ordered, not the settled amount fiatDisplay prefers.
-              amount: order?.fiatAmount && order.fiatAmount > 0n ? fmtAmount(order.fiatAmount, currency) : fiatDisplay,
+              // What the payer was quoted ("Pay ₹10.02"), which already covers any
+              // fee — not the settled amount. Falls back to the chain figure plus
+              // fee only when the quote wasn't recorded.
+              amount: quotedFiat && quotedFiat > 0
+                ? fmtFiat(countryForCurrency(currency), quotedFiat)
+                : payerTotal6 > 0n ? fmtAmount(payerTotal6, currency) : fiatDisplay,
               merchantName,
               currency,
               orderId: orderId || "",

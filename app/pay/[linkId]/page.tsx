@@ -82,7 +82,9 @@ const ORDER_LIVE_TTL_MS = 30 * 60 * 1000; // matching wait + the 5-minute pay wi
 // right after paying). Beyond that, reopening the link shows the pay page again;
 // the receipt itself is still reachable from the merchant's shared receipt link.
 const ORDER_DONE_TTL_MS = 5 * 60 * 1000;
-type StoredOrder = { orderId: string; at: number; done?: boolean };
+// `fiat` is the amount the payer was quoted ("Pay ₹10.02") when the order was
+// placed, so the cancelled/expired screens can show exactly that after a reload.
+type StoredOrder = { orderId: string; at: number; done?: boolean; fiat?: number };
 
 function orderKey(linkId: string) { return `${ORDER_KEY_PREFIX}${linkId.toLowerCase()}`; }
 function saveStoredOrder(linkId: string, o: StoredOrder) {
@@ -132,6 +134,9 @@ export default function PayLink() {
   const [preparing, setPreparing] = useState(false);
   const [prepareError, setPrepareError] = useState("");
   const [orderId, setOrderId] = useState<string | null>(null);
+  // The fiat amount the payer was shown when they tapped Pay (null if unknown,
+  // e.g. an order placed before this was recorded).
+  const [quotedFiat, setQuotedFiat] = useState<number | null>(null);
   // A payment sent but still confirming (see resolvePendingPayment). While
   // set, the Pay button stays off: paying again would place a second order.
   const [confirming, setConfirming] = useState(false);
@@ -326,7 +331,10 @@ export default function PayLink() {
   useEffect(() => {
     if (!safeLinkId) return;
     const stored = loadStoredOrder(safeLinkId);
-    if (stored) setOrderId(stored.orderId);
+    if (stored) {
+      setOrderId(stored.orderId);
+      setQuotedFiat(typeof stored.fiat === "number" && stored.fiat > 0 ? stored.fiat : null);
+    }
   }, [safeLinkId]);
 
   // Remember a freshly placed (or freshly resolved) order. `at` is only set the
@@ -334,7 +342,8 @@ export default function PayLink() {
   useEffect(() => {
     if (!safeLinkId || !orderId) return;
     if (loadStoredOrder(safeLinkId)?.orderId === orderId) return;
-    saveStoredOrder(safeLinkId, { orderId, at: Date.now() });
+    saveStoredOrder(safeLinkId, { orderId, at: Date.now(), ...(quotedFiat ? { fiat: quotedFiat } : {}) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [safeLinkId, orderId]);
 
   // Resume a payment that was still confirming when the page was left or
@@ -541,12 +550,16 @@ export default function PayLink() {
         currency: linkCurrency,
         merchant: l.owner,
       });
+      // Set together with the order id so the saved order carries the quote.
+      setQuotedFiat(amountNum > 0 ? amountNum : null);
       setOrderId(newOrderId);
     } catch (e: any) {
       if (e instanceof PaymentPendingError) {
         if (e.resumable) {
           // Keep the Pay button off and follow it up; the effect above
-          // resolves the order and mounts the payment widget.
+          // resolves the order and mounts the payment widget. The order id
+          // arrives later, so record the quote now.
+          setQuotedFiat(amountNum > 0 ? amountNum : null);
           setConfirming(true);
         } else {
           setStuckReference(e.reference);
@@ -582,6 +595,7 @@ export default function PayLink() {
           linkId={safeLinkId as `0x${string}`}
           merchantName={merchantLabel}
           currencyBytes32={l.currency}
+          quotedFiat={quotedFiat}
           orderId={orderId}
           onError={() => {}}
           onComplete={(id) => {
@@ -593,6 +607,7 @@ export default function PayLink() {
           // says cancelled/completed or its TTL passes.
           onNewPayment={() => {
             clearStoredOrder(safeLinkId);
+            setQuotedFiat(null);
             setOrderId(null);
             setPrepareError("");
           }}
