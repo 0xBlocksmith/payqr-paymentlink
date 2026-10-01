@@ -47,7 +47,7 @@ const CheckoutWidget = dynamic(
 );
 
 // Quick-amount presets per country (local fiat).
-const QUICK = { INR: [10, 20, 50], BRL: [5, 10, 20], ARS: [500, 1000, 2000] };
+const QUICK = { INR: [10, 20, 50], BRL: [5, 10, 20], ARS: [500, 1000, 2000], VEN: [100, 200, 500] };
 // Quick-amount presets when charging directly in USDC.
 const QUICK_USDC = [1, 5, 10];
 
@@ -741,7 +741,7 @@ export default function PosQr() {
                   <button className={`cur-pick-btn ${pickOpen ? "on" : ""}`} disabled={busy}
                     onClick={() => setPickOpen((o) => !o)}>
                     <span className="cur-pick-label">{t("qr.chargeIn")}</span>
-                    <img className="cur-flag" src={`https://flagcdn.com/w40/${({india:"in",brazil:"br",argentina:"ar"})[country.id] || "un"}.png`} alt="" />
+                    <img className="cur-flag" src={`https://flagcdn.com/w40/${({india:"in",brazil:"br",argentina:"ar",venezuela:"ve"})[country.id] || "un"}.png`} alt="" />
                     <b>{country.code}</b><span className="cur-car">▾</span>
                   </button>
                   {pickOpen && (
@@ -749,7 +749,7 @@ export default function PosQr() {
                       {payOpts.map((c) => (
                         <button key={c.id} className={`cur-pick-item ${c.id === country.id ? "sel" : ""}`}
                           onClick={() => { setCountry(c); setAmt(""); setError(""); setPickOpen(false); }}>
-                          <img className="cur-flag" src={`https://flagcdn.com/w40/${({india:"in",brazil:"br",argentina:"ar"})[c.id] || "un"}.png`} alt="" />
+                          <img className="cur-flag" src={`https://flagcdn.com/w40/${({india:"in",brazil:"br",argentina:"ar",venezuela:"ve"})[c.id] || "un"}.png`} alt="" />
                           <span className="cur-pick-txt">{c.name}<small>{c.fiat} · {fmtSymbolCode(c)}</small></span>
                           {c.id === country.id && <span className="cur-chk">✓</span>}
                         </button>

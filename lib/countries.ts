@@ -53,23 +53,30 @@ export const COUNTRIES: Country[] = [
     id: "venezuela",
     flag: "🇻🇪",
     name: "Venezuela",
-    code: "VES",
-    // "Bs." with a trailing space, for the same reason ARS carries one: the
-    // concatenation sites write `${symbol}${amount}` directly, and "Bs.500"
-    // reads worse than "Bs. 500".
-    symbol: "Bs. ",
-    // Pago Móvil is the everyday rail — a transfer addressed by phone number,
-    // national ID and bank code rather than an account number. There is no QR
-    // or deep-link standard for it, so the pay page shows the bank-transfer
-    // card and a copyable payout handle, which is the correct treatment (see
-    // PaymentLinkWidget's rail selection).
+    // The p2p.me protocol keys Venezuela's circle/price as "VEN" (its SDK's
+    // CURRENCY.VEN), NOT the ISO "VES" — the on-chain bytes32 must match or no
+    // circle/price is ever found. Same reason the SDK uses "MEX" for Mexico.
+    code: "VEN",
+    // Trailing space for the same reason as ARS: "Bs 500", not "Bs500".
+    symbol: "Bs ",
     fiat: "Pago Móvil",
-    payoutLabel: "Pago Móvil",
-    payoutPlaceholder: "0412-1234567 / C.I.",
-    validatePayout: (v) => v.trim().length >= 3,
+    payoutLabel: "Pago Móvil (phone|Cédula/RIF|bank)",
+    payoutPlaceholder: "04121234567|V12345678|Banesco",
+    validatePayout: isPagoMovil,
     locale: "es-VE",
   },
 ];
+
+/** Pago Móvil payout handle in the p2p.me SDK's compound "phone|RIF|bank" form
+ *  (the same shape its Cashout widget packs), so a saved handle round-trips. */
+function isPagoMovil(v: string): boolean {
+  const parts = v.split("|");
+  if (parts.length !== 3) return false;
+  const phone = parts[0].replace(/\D/g, "");
+  return /^0?4\d{9}$/.test(phone) &&
+    /^[VEJGRP]\d+$/.test(parts[1].trim().toUpperCase()) &&
+    parts[2].trim().length > 0;
+}
 
 export const DEFAULT_COUNTRY: Country = COUNTRIES[0];
 

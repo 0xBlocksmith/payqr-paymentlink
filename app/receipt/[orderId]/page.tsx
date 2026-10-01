@@ -22,6 +22,7 @@ const RAIL: Record<string, { rail: string; country: string; flag: string }> = {
   INR: { rail: "UPI", country: "India", flag: "🇮🇳" },
   BRL: { rail: "PIX", country: "Brazil", flag: "🇧🇷" },
   ARS: { rail: "Transfers 3.0", country: "Argentina", flag: "🇦🇷" },
+  VEN: { rail: "Pago Móvil", country: "Venezuela", flag: "🇻🇪" },
 };
 function railFor(code: string) {
   return RAIL[code] || (code ? { rail: "Bank transfer", country: code, flag: "🏦" } : null);
