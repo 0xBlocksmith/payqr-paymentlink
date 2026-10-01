@@ -35,8 +35,29 @@ describe("fetchLinkPrice", () => {
 
   it("returns null for a link with no fixed price", async () => {
     const { fetchLinkPrice } = await load();
-    stubFetch(() => json({ error: "Not found" }, 404));
+    // A 404 from a relayer that CAN hold prices means this link has none.
+    stubFetch((url) =>
+      url.endsWith("/health") ? json({ features: ["fixed-price"] }) : json({ error: "Not found" }, 404)
+    );
     expect(await fetchLinkPrice(LINK)).toBeNull();
+  });
+
+  it("refuses to read a 404 as 'no price' from a relayer that predates fixed prices", async () => {
+    const { fetchLinkPrice } = await load();
+    // Rolling the relayer back to one without the route answers 404 to every
+    // link, including the fixed-price ones. Reading that as "no price" would
+    // reopen them for any amount (review item 3).
+    stubFetch((url) => (url.endsWith("/health") ? json({ ok: true }) : json({ error: "Not found" }, 404)));
+    await expect(fetchLinkPrice(LINK)).rejects.toThrow("can't be opened right now");
+  });
+
+  it("refuses the same way when /health itself can't be read", async () => {
+    const { fetchLinkPrice } = await load();
+    stubFetch((url) => {
+      if (url.endsWith("/health")) throw new TypeError("Failed to fetch");
+      return json({ error: "Not found" }, 404);
+    });
+    await expect(fetchLinkPrice(LINK)).rejects.toThrow("can't be opened right now");
   });
 
   it("throws, never falls back to open amount, when the price can't be read", async () => {
@@ -130,6 +151,57 @@ describe("attemptKeyFor", () => {
     expect(attemptKeyFor(LINK, 1n)).toMatch(/^[0-9a-f]{32}$/);
     vi.stubGlobal("localStorage", undefined);
     expect(attemptKeyFor(LINK, 1n)).toMatch(/^[0-9a-f]{32}$/);
+  });
+});
+
+describe("attemptScreening", () => {
+  it("is empty until the attempt has been screened", async () => {
+    const { attemptKeyFor, attemptScreening } = await load();
+    const key = attemptKeyFor(LINK, 10_000_000n);
+    expect(attemptScreening(LINK, 10_000_000n, key)).toBeNull();
+  });
+
+  it("is remembered for a retry of the SAME attempt", async () => {
+    const { attemptKeyFor, attemptScreening, rememberAttemptScreening } = await load();
+    const key = attemptKeyFor(LINK, 10_000_000n);
+    rememberAttemptScreening(LINK, 10_000_000n, key, 4242);
+    // The retry gets the same key, so it must not screen again.
+    expect(attemptKeyFor(LINK, 10_000_000n)).toBe(key);
+    expect(attemptScreening(LINK, 10_000_000n, key)).toEqual({ activityLogId: 4242 });
+  });
+
+  it("remembers a fail-open too, so a retry does not screen again", async () => {
+    const { attemptKeyFor, attemptScreening, rememberAttemptScreening } = await load();
+    const key = attemptKeyFor(LINK, 10_000_000n);
+    rememberAttemptScreening(LINK, 10_000_000n, key, null);
+    expect(attemptScreening(LINK, 10_000_000n, key)).toEqual({ activityLogId: null });
+  });
+
+  it("does not carry to another attempt, amount or settled purchase", async () => {
+    const { attemptKeyFor, attemptScreening, rememberAttemptScreening, clearAttempt } = await load();
+    const key = attemptKeyFor(LINK, 10_000_000n);
+    rememberAttemptScreening(LINK, 10_000_000n, key, 1);
+    expect(attemptScreening(LINK, 10_000_000n, "0123456789abcdef")).toBeNull();
+    expect(attemptScreening(LINK, 20_000_000n, key)).toBeNull();
+    clearAttempt(LINK);
+    expect(attemptScreening(LINK, 10_000_000n, key)).toBeNull();
+    // A fresh purchase screens from scratch.
+    const next = attemptKeyFor(LINK, 10_000_000n);
+    expect(attemptScreening(LINK, 10_000_000n, next)).toBeNull();
+  });
+
+  it("writes nothing for an attempt that is not the live one", async () => {
+    const { attemptKeyFor, attemptScreening, rememberAttemptScreening } = await load();
+    const key = attemptKeyFor(LINK, 10_000_000n);
+    rememberAttemptScreening(LINK, 10_000_000n, "0123456789abcdef", 7);
+    expect(attemptScreening(LINK, 10_000_000n, key)).toBeNull();
+  });
+
+  it("survives unreadable storage", async () => {
+    const { attemptScreening, rememberAttemptScreening } = await load();
+    vi.stubGlobal("localStorage", undefined);
+    expect(() => rememberAttemptScreening(LINK, 1n, "0123456789abcdef", 1)).not.toThrow();
+    expect(attemptScreening(LINK, 1n, "0123456789abcdef")).toBeNull();
   });
 });
 

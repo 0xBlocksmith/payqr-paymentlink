@@ -443,15 +443,27 @@ export function relayerFeatures(): Promise<Set<string>> {
 }
 
 /**
- * A link's fixed price from the relayer: null when it has none (an open-amount
- * link, or a relayer that predates fixed prices, whose unknown route is a 404).
- * THROWS when the price can't be read — the page must then wait and retry, not
- * show an open amount the relayer would not charge.
+ * A link's fixed price from the relayer: null when it genuinely has none (an
+ * open-amount link). THROWS when the price can't be read — the page must then
+ * wait and retry, not show an open amount the relayer would not charge.
+ *
+ * A 404 ALONE DOES NOT MEAN "no price". A relayer that predates fixed prices
+ * answers 404 to this route because the route is unknown to it, not because
+ * the link is open-amount — so once fixed-price links exist, reading a bare
+ * 404 as "no price" turns every one of them back into pay-anything the moment
+ * the relayer is rolled back (review item 3). The relayer says which it is:
+ * /health lists "fixed-price" when it can hold prices at all. Without that
+ * feature a 404 is unreadable, and the page waits rather than opening the
+ * link for any amount. payer-relayer with fixed prices is the minimum version
+ * from the first fixed-price link onwards; this is what enforces it.
  */
 export async function fetchLinkPrice(linkId: Hex): Promise<LinkPrice | null> {
   if (!RELAYER_WORKER_URL) return null;
   const res = await fetch(`${RELAYER_WORKER_URL}/api/links/${linkId}/price`);
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    if ((await relayerFeatures()).has("fixed-price")) return null;
+    throw new Error("This payment link can't be opened right now. Please try again in a few minutes.");
+  }
   const body = await res.json().catch(() => null);
   if (!res.ok) throw new Error(body?.error || "Could not load this link's price. Please try again.");
   const price = asLinkPrice(body);
@@ -469,32 +481,83 @@ export async function fetchLinkPrice(linkId: Hex): Promise<LinkPrice | null> {
 const ATTEMPT_KEY_PREFIX = "payqr.linkAttempt:";
 const ATTEMPT_TTL_MS = 10 * 60 * 1000;
 
-export function attemptKeyFor(linkId: string, fiat6: bigint): string {
-  const slot = `${ATTEMPT_KEY_PREFIX}${linkId.toLowerCase()}`;
+function attemptSlot(linkId: string): string {
+  return `${ATTEMPT_KEY_PREFIX}${linkId.toLowerCase()}`;
+}
+
+/** The stored attempt for this link, when it is still live and for this amount. */
+function liveAttempt(linkId: string, fiat6: bigint): StoredAttempt | null {
   try {
-    const raw = localStorage.getItem(slot);
-    if (raw) {
-      const a = JSON.parse(raw) as { key?: unknown; fiat6?: unknown; at?: unknown };
-      if (
-        typeof a.key === "string" &&
-        /^[A-Za-z0-9_-]{16,64}$/.test(a.key) &&
-        a.fiat6 === fiat6.toString() &&
-        typeof a.at === "number" &&
-        Date.now() - a.at < ATTEMPT_TTL_MS
-      ) {
-        return a.key;
-      }
+    const raw = localStorage.getItem(attemptSlot(linkId));
+    if (!raw) return null;
+    const a = JSON.parse(raw) as StoredAttempt;
+    if (
+      typeof a?.key === "string" &&
+      /^[A-Za-z0-9_-]{16,64}$/.test(a.key) &&
+      a.fiat6 === fiat6.toString() &&
+      typeof a.at === "number" &&
+      Date.now() - a.at < ATTEMPT_TTL_MS
+    ) {
+      return a;
     }
   } catch {
     /* unreadable: start a fresh attempt */
   }
+  return null;
+}
+
+type StoredAttempt = {
+  key: string;
+  fiat6: string;
+  at: number;
+  /** Set once this attempt has been through screening — see screeningFor. */
+  screened?: { activityLogId: number | null };
+};
+
+export function attemptKeyFor(linkId: string, fiat6: bigint): string {
+  const slot = attemptSlot(linkId);
+  const live = liveAttempt(linkId, fiat6);
+  if (live) return live.key;
   const key = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join("");
   try {
-    localStorage.setItem(slot, JSON.stringify({ key, fiat6: fiat6.toString(), at: Date.now() }));
+    localStorage.setItem(slot, JSON.stringify({ key, fiat6: fiat6.toString(), at: Date.now() } satisfies StoredAttempt));
   } catch {
     /* best-effort: without it a reload starts a fresh attempt */
   }
   return key;
+}
+
+// An attempt is screened ONCE, not once per tap.
+//
+// /api/pay replays the first answer for an attempt key, so a retry does not
+// place a second order — but the page ran screening before every call, and the
+// fraud engine does not know the two taps are one purchase. It sees a second
+// B2B activity log while the first one is still in flight for that wallet, and
+// its one-order-in-flight rule rejects it. The customer is then told their
+// payment was rejected while their order exists and is waiting for a partner
+// (review item 4).
+//
+// So the outcome is remembered against the attempt key. A retry reuses it and
+// goes straight to /api/pay, which replays the original order. A fail-open
+// (the engine was unreachable) is remembered too, as { activityLogId: null }:
+// that attempt may already have placed an order, so re-screening it carries
+// the same risk with none of the benefit.
+
+/** The screening this attempt already passed, or null if it has not been screened. */
+export function attemptScreening(linkId: string, fiat6: bigint, key: string): { activityLogId: number | null } | null {
+  const live = liveAttempt(linkId, fiat6);
+  return live && live.key === key ? live.screened ?? null : null;
+}
+
+/** Remember that this attempt has been screened, so a retry does not repeat it. */
+export function rememberAttemptScreening(linkId: string, fiat6: bigint, key: string, activityLogId: number | null): void {
+  const live = liveAttempt(linkId, fiat6);
+  if (!live || live.key !== key) return;
+  try {
+    localStorage.setItem(attemptSlot(linkId), JSON.stringify({ ...live, screened: { activityLogId } } satisfies StoredAttempt));
+  } catch {
+    /* best-effort: without it a retry screens again */
+  }
 }
 
 /** The attempt is settled — an order exists or is being followed up. */

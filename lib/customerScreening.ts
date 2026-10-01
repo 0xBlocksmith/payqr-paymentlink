@@ -84,16 +84,35 @@ type OrderDetails = {
  * @param place Places the order and resolves to its id — the relayer path in
  *        lib/paymentLinks.ts. Called only if screening does not refuse it, and
  *        at most once.
+ * @param alreadyScreened The screening this payment attempt has ALREADY been
+ *        through, when the customer is retrying one (see attemptScreening).
+ *        Screening is per purchase, not per tap: the relayer replays the first
+ *        answer for the attempt, so a second activity log would only trip the
+ *        engine's one-order-in-flight rule and tell the customer their payment
+ *        was rejected while their order exists (review item 4). Its
+ *        activity_log_id is reused to link the order.
+ * @param onScreened Called with the activity log id (null when the engine was
+ *        unreachable and this failed open) as soon as screening is done and
+ *        before the order is placed — so an answer lost on the way back still
+ *        leaves the retry knowing this attempt was screened.
  * @returns the order id.
  * @throws ScreeningRejected when the engine refuses the order.
  */
 export async function placeScreenedOrder(
-  params: OrderDetails & { place: () => Promise<string> }
+  params: OrderDetails & {
+    place: () => Promise<string>;
+    alreadyScreened?: { activityLogId: number | null } | null;
+    onScreened?: (activityLogId: number | null) => void;
+  }
 ): Promise<string> {
   // Not configured: place exactly as before. This is the whole of the
   // behaviour change for a deployment without credentials.
   if (!SCREENING_CONFIG) return params.place();
   const config = SCREENING_CONFIG;
+
+  if (params.alreadyScreened) {
+    return placeAndLink(params, config, params.alreadyScreened.activityLogId);
+  }
 
   const account = await getCustomerSigner();
   const signer: FraudEngineSigner = {
@@ -131,13 +150,35 @@ export async function placeScreenedOrder(
     );
   }
 
+  const activityLogId = screening?.activity_log_id ?? null;
+  // Before the order, not after: if the answer to place() is lost on the way
+  // back, the retry must still know this attempt has been screened.
+  params.onScreened?.(activityLogId);
+
+  return placeAndLink(params, config, activityLogId);
+}
+
+/**
+ * Place the order, then attach the screening record to it. Shared by a first
+ * attempt and a retry, which brings its own already-approved activity log id.
+ */
+async function placeAndLink(
+  params: OrderDetails & { place: () => Promise<string> },
+  config: ScreeningCredentials,
+  activityLogId: number | null
+): Promise<string> {
   // Called once, outside any retry: if it fails, its own error goes to the page
   // unchanged — a relayer refusal or a payment still confirming must never be
   // answered by placing again.
   const orderId = await params.place();
 
-  const activityLogId = screening?.activity_log_id ?? null;
   if (activityLogId !== null) {
+    const account = await getCustomerSigner();
+    const signer: FraudEngineSigner = {
+      address: account.address,
+      signerAddress: account.address,
+      signMessage: (message: string) => account.signMessage({ message }),
+    };
     // The order already exists, so this never holds up the customer. But an
     // order without its screening record is one no merchant accepts on mainnet,
     // and this used to be a single attempt (review): retried, with a short

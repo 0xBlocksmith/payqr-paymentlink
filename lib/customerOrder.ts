@@ -86,6 +86,16 @@ export async function decryptPayoutAddress(encUpi: string): Promise<string | nul
  * of placing an order nobody will accept. null means routing itself failed (a
  * subgraph or RPC hiccup); the caller falls back to the currency's circle.
  * `user` is who the order belongs to on-chain: the merchant's proxy.
+ *
+ * ONLY "no eligible circles" is "none". placeOrder.prepare wraps EVERY
+ * selectCircle failure in the one code CIRCLE_SELECTION_FAILED — a subgraph
+ * request that failed and a genuinely empty partner list arrive identically at
+ * this level. Reading that code as "none" turned any routing hiccup into
+ * "Payments are busy right now" and refused a payment the warmed circle could
+ * have taken (review item 1). The real answer is one level down, on the
+ * wrapped cause: NO_ELIGIBLE_CIRCLES is the only one that means nobody can
+ * take it. Everything else (SUBGRAPH_REQUEST_FAILED, VALIDATION_ERROR, …) is
+ * our side failing, and falls back.
  */
 export async function routeLinkCircle(p: {
   currency: string;
@@ -103,7 +113,12 @@ export async function routeLinkCircle(p: {
       recipientAddr: p.user,
       preferredPaymentChannelConfigId: 0n,
     } as any);
-    if (prepared.isErr()) return prepared.error.code === "CIRCLE_SELECTION_FAILED" ? "none" : null;
+    if (prepared.isErr()) {
+      const cause = (prepared.error as { cause?: { code?: unknown } }).cause;
+      if (prepared.error.code === "CIRCLE_SELECTION_FAILED" && cause?.code === "NO_ELIGIBLE_CIRCLES") return "none";
+      console.warn("[payqr:routing] circle routing failed; falling back to the currency's circle", prepared.error);
+      return null;
+    }
     return prepared.value.meta?.circleId ?? null;
   } catch {
     return null;

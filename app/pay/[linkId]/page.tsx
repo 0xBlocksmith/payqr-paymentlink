@@ -19,6 +19,8 @@ import {
   resolvePendingPayment,
   fetchLinkPrice,
   attemptKeyFor,
+  attemptScreening,
+  rememberAttemptScreening,
   clearAttempt,
 } from "../../../lib/paymentLinks";
 import type { PaymentLink } from "../../../lib/paymentLinks";
@@ -594,12 +596,20 @@ export default function PayLink() {
       // buy orders are not auto-approved. The customer waited on "Finding a
       // payment provider…" until the order expired, with nothing anywhere
       // saying why. When screening is unconfigured this is a passthrough.
+      const attemptFiat6 = fiatAmount6 ?? l.amount;
       const newOrderId = await placeScreenedOrder({
         place: async () => (await placeOrder()).orderId,
         fiatAmount: amountNum,
         usdcAmount: Number(quantity) / 1e6,
         currency: linkCurrency,
         merchant: l.owner,
+        // One screening per attempt, not per tap: /api/pay replays this
+        // attempt's first answer, so a second activity log would hit the fraud
+        // engine's one-order-in-flight rule and refuse a payment that already
+        // exists (review item 4).
+        alreadyScreened: attemptScreening(safeLinkId, attemptFiat6, idempotencyKey),
+        onScreened: (activityLogId) =>
+          rememberAttemptScreening(safeLinkId, attemptFiat6, idempotencyKey, activityLogId),
       });
       clearAttempt(safeLinkId);
       // Set together with the order id so the saved order carries the quote.

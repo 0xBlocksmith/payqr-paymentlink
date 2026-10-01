@@ -86,6 +86,9 @@ function originOf(url) {
   }
 }
 
+/** Where report-only violations are POSTed — app/api/csp-report/route.ts. */
+const CSP_REPORT_PATH = "/api/csp-report";
+
 /** The full policy, from this deployment's own services (see headers()). */
 function reportOnlyCsp() {
   const services = [
@@ -124,6 +127,13 @@ function reportOnlyCsp() {
     "base-uri 'self'",
     "frame-ancestors 'none'",
     "form-action 'self'",
+    // Report-only is worth nothing if the reports only reach a console nobody
+    // has open (review item 5). report-uri is what Chrome and Safari still
+    // send today; report-to is the Reporting API successor, named by the
+    // Reporting-Endpoints header below. Both named, so neither browser is
+    // silent.
+    `report-uri ${CSP_REPORT_PATH}`,
+    "report-to csp-endpoint",
   ].join("; ");
 }
 
@@ -163,9 +173,18 @@ const nextConfig = {
   //   • ENFORCED: only the directives that cannot break a flow — no plugins, no
   //     framing by other sites, no foreign <base>, forms post only here.
   //   • REPORT-ONLY: the full policy, built from this deployment's own
-  //     services. Browsers log what it WOULD block, without blocking. Run a full
-  //     flow (login, create a link, pay, withdraw) with the console open, add any
-  //     host it reports, then move it to Content-Security-Policy.
+  //     services. Browsers log what it WOULD block, without blocking, and now
+  //     also POST each violation to /api/csp-report so the deployment's logs
+  //     show what real customer traffic hits. Run a full flow (login, create a
+  //     link, pay, withdraw), read the reports, add any host they name, then
+  //     move the policy to Content-Security-Policy.
+  //
+  // script-src still allows 'unsafe-inline', and that is the one directive
+  // this cannot tighten from here: Next.js inlines its own bootstrap and flight
+  // data on every page, so dropping it needs per-request nonces from
+  // middleware (with 'strict-dynamic' for thirdweb's and SEON's loaders) —
+  // a change that must be made and flow-tested on its own, not folded into
+  // this one. Left as a follow-up, as the review has it.
   async headers() {
     return [
       {
@@ -183,6 +202,8 @@ const nextConfig = {
             value: "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
           },
           { key: "Content-Security-Policy-Report-Only", value: reportOnlyCsp() },
+          // Names the group `report-to` above points at.
+          { key: "Reporting-Endpoints", value: `csp-endpoint="${CSP_REPORT_PATH}"` },
         ],
       },
     ];
