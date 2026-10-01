@@ -3,13 +3,12 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { usePublicClient, useReadContract } from "wagmi";
-import { encodeFunctionData } from "viem";
+import { encodeFunctionData, stringToHex } from "viem";
 import { useMerchant } from "../../components/useMerchant";
 import { Icon, Logo } from "../../components/Icons";
 import { Splash } from "../../components/Splash";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError } from "../../lib/contract";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
-import { encryptPayout, PAYOUT_PLACEHOLDER } from "../../lib/payoutCrypto";
 import { loadCountry, prefsSet } from "../../lib/countries";
 import { codeToHex } from "../../lib/p2p";
 import { STATIC_STALE_MS } from "../../lib/cache";
@@ -19,10 +18,11 @@ import { STATIC_STALE_MS } from "../../lib/cache";
  * alone → registered ON-CHAIN via registerMerchant (encPayoutId, shopName).
  * The payout handle (UPI/PIX/CBU) is added later from Settings, where it's
  * CLIENT-SIDE ENCRYPTED (encryptPayout) before it touches the chain — the
- * contract only ever stores opaque `bytes`. registerMerchant reverts on empty
- * encPayoutId bytes, so we register with an encrypted PAYOUT_PLACEHOLDER
- * sentinel instead — Settings and the cash-out widget both know to treat it as
- * "no payout set yet" rather than a real handle.
+ * contract only ever stores opaque `bytes`. The handle is OPTIONAL at
+ * registration, so we send empty bytes and the contract requires one at
+ * withdrawal instead. (This used to send an encrypted PAYOUT_PLACEHOLDER
+ * sentinel to satisfy a non-empty check that no longer exists; Settings and the
+ * cash-out widget still recognise that sentinel for older registrations.)
  */
 export default function Onboarding() {
   const router = useRouter();
@@ -34,6 +34,7 @@ export default function Onboarding() {
 
   const [country, setCountry] = useState(null);
   const [shopName, setShopName] = useState("");
+  const [sector, setSector] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -84,6 +85,17 @@ export default function Onboarding() {
     // submit / corrupted prefs shouldn't crash it.
     if (!country) return setError("Still loading your settings — try again in a second.");
     if (!shopName.trim()) return setError("Enter your shop name.");
+    // The contract caps a shop name at 128 BYTES (FieldTooLong). Non-Latin
+    // scripts take 3 bytes a character, so check bytes, not characters.
+    if (new TextEncoder().encode(shopName.trim()).length > 128)
+      return setError("That shop name is too long — please shorten it.");
+    if (!sector.trim()) return setError("Enter what your business sells.");
+    // bytes32 holds 31 bytes. Checked here so an over-long label is a sentence
+    // the merchant can act on rather than an on-chain revert. Measured in BYTES,
+    // not characters — a label with accented or non-Latin characters is longer
+    // than it looks.
+    if (new TextEncoder().encode(sector.trim()).length > 31)
+      return setError("That business sector is too long — please shorten it.");
     setBusy(true);
     try {
       // Wait for the smart wallet to initialise (it can take a few seconds on
@@ -99,19 +111,27 @@ export default function Onboarding() {
         return setError("Your gas-free wallet is still connecting. Wait a moment and try again.");
       }
 
-      // No real payout handle yet — added later from Settings (updateProfile
-      // encrypts it then). registerMerchant reverts on empty encPayoutId bytes,
-      // so encrypt the PAYOUT_PLACEHOLDER sentinel to the merchant's own relay
-      // key to satisfy the contract without storing a real handle.
-      const identity = await getIdentity();
-      const encPayout = await encryptPayout(PAYOUT_PLACEHOLDER, identity);
+      // No real payout handle yet — it is added later from Settings, which
+      // encrypts it before it touches the chain.
+      //
+      // We now send EMPTY bytes. registerMerchant used to reject those, which is
+      // why this once encrypted a PAYOUT_PLACEHOLDER sentinel purely to get past
+      // the check. The contract made the handle optional at registration and
+      // moved the requirement to the withdrawal gate — so sending the sentinel
+      // would now actively DEFEAT that guard, because a sentinel is non-empty
+      // and the gate only tests for emptiness. A merchant would sail past it and
+      // place a SELL whose fiat has nowhere to land.
+      //
+      // Settings and the cash-out widget still recognise the old sentinel, for
+      // merchants who registered under the previous contract.
+      const encPayout = "0x" as `0x${string}`;
 
       // The new contract locks the offramp currency at registration, so we pass
       // the chosen country's ISO code (e.g. "INR"/"BRL"/"ARS") as the 3rd arg.
       const data = encodeFunctionData({
         abi: INTEGRATOR_ABI,
         functionName: "registerMerchant",
-        args: [encPayout, shopName.trim(), country.code],
+        args: [encPayout, shopName.trim(), country.code, stringToHex(sector.trim(), { size: 32 })],
       });
       // Mark BEFORE the tx resolves: refetchRegistered() below flips isRegistered
       // true and would trigger the /dashboard redirect effect otherwise.
@@ -174,6 +194,16 @@ export default function Onboarding() {
               value={shopName}
               onChange={(e) => setShopName(e.target.value)}
               placeholder="My Shop"
+            />
+          </div>
+          <div className="field">
+            <label>WHAT DO YOU SELL?</label>
+            <input
+              className="input"
+              value={sector}
+              onChange={(e) => setSector(e.target.value)}
+              placeholder="e.g. Groceries, Salon, Electronics"
+              maxLength={31}
             />
           </div>
           <p className="muted" style={{ fontSize: 12, marginBottom: 6 }}>

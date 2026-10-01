@@ -49,12 +49,86 @@ export const COUNTRIES: Country[] = [
     validatePayout: (v) => v.trim().length >= 3,
     locale: "es-AR",
   },
+  {
+    id: "venezuela",
+    flag: "🇻🇪",
+    name: "Venezuela",
+    // The p2p.me protocol keys Venezuela's circle/price as "VEN" (its SDK's
+    // CURRENCY.VEN), NOT the ISO "VES" — the on-chain bytes32 must match or no
+    // circle/price is ever found. Same reason the SDK uses "MEX" for Mexico.
+    code: "VEN",
+    // Trailing space for the same reason as ARS: "Bs 500", not "Bs500".
+    symbol: "Bs ",
+    fiat: "Pago Móvil",
+    payoutLabel: "Pago Móvil (phone|Cédula/RIF|bank)",
+    payoutPlaceholder: "04121234567|V12345678|Banesco",
+    validatePayout: isPagoMovil,
+    locale: "es-VE",
+  },
 ];
+
+/** Pago Móvil payout handle in the p2p.me SDK's compound "phone|RIF|bank" form
+ *  (the same shape its Cashout widget packs), so a saved handle round-trips. */
+function isPagoMovil(v: string): boolean {
+  const parts = v.split("|");
+  if (parts.length !== 3) return false;
+  const phone = parts[0].replace(/\D/g, "");
+  return /^0?4\d{9}$/.test(phone) &&
+    /^[VEJGRP]\d+$/.test(parts[1].trim().toUpperCase()) &&
+    parts[2].trim().length > 0;
+}
 
 export const DEFAULT_COUNTRY: Country = COUNTRIES[0];
 
 export function getCountry(id: string | null | undefined): Country {
   return COUNTRIES.find((c) => c.id === id) || DEFAULT_COUNTRY;
+}
+
+/**
+ * Resolve a display config for ANY currency code the protocol can settle — not
+ * only the ones listed above.
+ *
+ * The list above is a UI convenience, but which currencies actually exist is
+ * decided elsewhere: the protocol's live circles (see p2p.ts's
+ * `fetchSupportedCurrencies`, read from the subgraph) and whatever a merchant
+ * registered on-chain. Those move without this file moving, so a currency that
+ * is perfectly real here can be absent above.
+ *
+ * The old lookup — `getCountry(COUNTRIES.find(c => c.code === code)?.id)` —
+ * handled that by returning DEFAULT_COUNTRY, which is India. So an unlisted
+ * currency did not degrade, it LIED: a link priced in a currency this file has
+ * never heard of rendered its amounts with a ₹ and Indian digit grouping, to a
+ * customer about to send real money. Showing the wrong currency symbol on a
+ * payment screen is worse than showing a plain one.
+ *
+ * So an unknown code degrades to something honest instead: the ISO code as its
+ * own symbol, neutral grouping, and a generic bank-transfer rail. Every field
+ * stays populated, so callers need no special case — and adding a country to
+ * the list above still upgrades it to the local symbol, rail name and payout
+ * validator, exactly as before.
+ */
+export function countryForCurrency(code: string | null | undefined): Country {
+  const wanted = String(code || "").trim().toUpperCase();
+  const known = COUNTRIES.find((c) => c.code === wanted);
+  if (known) return known;
+  if (!wanted) return DEFAULT_COUNTRY;
+
+  return {
+    id: `currency:${wanted}`,
+    flag: "🌐",
+    name: wanted,
+    code: wanted,
+    // Trailing space for the same reason ARS has one: bare `${symbol}${amount}`
+    // concatenation would otherwise read "MXN500".
+    symbol: `${wanted} `,
+    fiat: "Bank transfer",
+    payoutLabel: "Payment address",
+    payoutPlaceholder: "",
+    validatePayout: (v) => v.trim().length >= 3,
+    // Neutral grouping. Never inherit another country's locale — en-IN would
+    // render 100000 as "1,00,000" for a currency that does not group that way.
+    locale: "en",
+  };
 }
 
 const KEY = "payqr.country";
@@ -120,6 +194,25 @@ export function clearLocalUserData(): void {
     }
     toRemove.forEach((k) => localStorage.removeItem(k));
   } catch { /* ignore */ }
+}
+
+/** True when the locale groups thousands with "." (and so uses "," for decimals). */
+function dotGroups(locale: string): boolean {
+  try {
+    return new Intl.NumberFormat(locale).formatToParts(1234567.5).some((p) => p.type === "group" && p.value === ".");
+  } catch { return false; }
+}
+
+/** An amount as the PAYER sees it on a payment link.
+ *
+ *  Where "." is the thousands separator (es-VE, es-AR, pt-BR) "Bs 1.000" reads as
+ *  one, not one thousand. For those currencies this uses the notation of the
+ *  p2p.me checkout on /qr — "VEN 1000.00": the currency code, then the amount
+ *  with two decimals and no grouping — so the same order reads the same on both.
+ *  Every other currency keeps its symbol and grouping (see fmtFiat). */
+export function fmtPayerFiat(country: Country, amount: number | string): string {
+  if (!dotGroups(country.locale)) return fmtFiat(country, amount);
+  return `${country.code} ${(Number(amount) || 0).toFixed(2)}`;
 }
 
 /** Format a fiat amount with the country's symbol + locale grouping.

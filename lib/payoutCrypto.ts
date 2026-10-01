@@ -43,15 +43,24 @@ type RelayIdentity = { address: `0x${string}`; publicKey: string; privateKey: `0
  */
 export const PAYOUT_PLACEHOLDER = "__unset__";
 
-/** Encrypt a plaintext payout handle to the merchant's own relay key → on-chain
- *  `bytes` (0x-hex). Throws only on a genuine crypto failure (caller handles). */
-export async function encryptPayout(plain: string, identity: RelayIdentity): Promise<Hex> {
-  // Guard the primitive itself: an empty/whitespace handle must never be
-  // encrypted-and-stored (it would decrypt back to "" and render as a confusing
-  // falsy "saved" state). All current callers pre-validate, but this keeps the
-  // shared primitive safe for any future caller.
+/** Encrypt any plaintext string to the merchant's own relay key (self-recipient)
+ *  → on-chain `bytes` (0x-hex), using the SDK's ECIES (secp256k1 + AES-GCM).
+ *  Shared primitive behind encryptPayout (below) and payment-links' encrypted
+ *  description (lib/paymentLinks.ts's buildCreateLinkCalldata caller) — same
+ *  crypto, same wire format, different field on-chain. Throws only on a
+ *  genuine crypto failure or empty input; `errorMessage` customizes the latter
+ *  for the caller's own field name. */
+export async function encryptToSelf(
+  plain: string,
+  identity: RelayIdentity,
+  errorMessage = "Could not secure this value. Please try again."
+): Promise<Hex> {
+  // Guard the primitive itself: empty/whitespace input must never be
+  // encrypted-and-stored (it would decrypt back to "" and render as a
+  // confusing falsy state). Callers should pre-validate too, but this keeps
+  // the shared primitive safe for any future caller.
   if (!plain || !plain.trim()) {
-    throw new Error("Enter a payout ID before saving.");
+    throw new Error(errorMessage);
   }
   const { encryptPaymentAddress } = await import("@p2pdotme/sdk/orders");
   const res = await encryptPaymentAddress({
@@ -61,10 +70,16 @@ export async function encryptPayout(plain: string, identity: RelayIdentity): Pro
   });
   // neverthrow ResultAsync — unwrap explicitly.
   if (!res.isOk()) {
-    throw new Error("Could not secure your payout ID. Please try again.");
+    throw new Error(errorMessage);
   }
   // Persist the cipher STRING as UTF-8 bytes so it round-trips exactly.
   return stringToHex(res.value);
+}
+
+/** Encrypt a plaintext payout handle to the merchant's own relay key → on-chain
+ *  `bytes` (0x-hex). Throws only on a genuine crypto failure (caller handles). */
+export async function encryptPayout(plain: string, identity: RelayIdentity): Promise<Hex> {
+  return encryptToSelf(plain, identity, "Enter a payout ID before saving.");
 }
 
 /** Decrypt an on-chain `bytes` payout blob back to plaintext, or null if it

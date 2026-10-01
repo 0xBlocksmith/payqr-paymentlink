@@ -11,11 +11,17 @@
  */
 import { encodeFunctionData, stringToHex } from "viem";
 import { INTEGRATOR_ABI, CONTRACT_ADDRESS, CLIENT_ADDRESS, PRODUCT_ID } from "./contract";
+import { IS_MAINNET } from "./chain";
 
-// The team's Base Sepolia subgraph — enables automatic circle selection.
-export const SUBGRAPH_URL =
-  process.env.NEXT_PUBLIC_SUBGRAPH_URL ||
+// The subgraph powers circle selection, history, receipts and the rate
+// fallback. The built-in default is the team's Base SEPOLIA subgraph, so it
+// applies on the testnet only: on mainnet it used to answer with testnet
+// circles and silently empty history. Mainnet must set NEXT_PUBLIC_SUBGRAPH_URL
+// (next.config.mjs refuses to build without it).
+const TESTNET_SUBGRAPH_URL =
   "https://api.studio.thegraph.com/query/1745491/event-indexer/v0.0.6";
+export const SUBGRAPH_URL =
+  process.env.NEXT_PUBLIC_SUBGRAPH_URL || (IS_MAINNET ? "" : TESTNET_SUBGRAPH_URL);
 
 export const USDC_ADDRESS = process.env.NEXT_PUBLIC_USDC_ADDRESS || "";
 export const DIAMOND_ADDRESS = process.env.NEXT_PUBLIC_DIAMOND_ADDRESS || "";
@@ -38,8 +44,8 @@ export const SCREENING_CONFIG =
       }
     : undefined;
 
-// Per-order dispute support (see @p2pdotme/widgets/support). The bridge URL is
-// p2p.me-hosted infra provisioned per integrator — unset in steady state until
+// Support bridge integration — optional; when configured, the Dispute Manager
+// resolves order disputes on-chain with the p2p.me support bridge. Empty →
 // p2p.me hands it over, so the Dispute Manager UI stays dormant (no bridge
 // calls) rather than pointing at nothing.
 export const SUPPORT_BRIDGE_URL = process.env.NEXT_PUBLIC_SUPPORT_BRIDGE_URL || "";
@@ -97,8 +103,10 @@ export async function fetchSupportedCurrencies(): Promise<{ circleId: bigint; co
     _circlesCache = { at: Date.now(), rows };
     return rows;
   } catch {
-    // offline fallback — the known-live circles so the UI still works
-    return [{ circleId: 1n, code: "INR" }, { circleId: 2n, code: "BRL" }];
+    // Offline fallback: the TESTNET's known circles, so the testnet UI still
+    // works. Never on mainnet — its circle ids may differ, and a payment placed
+    // against the wrong circle is worse than "this currency is not available".
+    return IS_MAINNET ? [] : [{ circleId: 1n, code: "INR" }, { circleId: 2n, code: "BRL" }];
   }
 }
 

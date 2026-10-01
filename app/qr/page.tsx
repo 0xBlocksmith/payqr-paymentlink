@@ -16,7 +16,7 @@ import { loadPendingOrder, savePendingOrder, clearPendingOrder } from "../../lib
 import { fetchOrder, receiptToken } from "../../lib/history";
 import type { PendingOrder } from "../../lib/p2p";
 import { useT } from "../../lib/i18n";
-import { ACTIVE_CHAIN } from "../../lib/chain";
+import { EXPLORER_URL } from "../../lib/chain";
 import { decryptPayout } from "../../lib/payoutCrypto";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
 import dynamic from "next/dynamic";
@@ -39,7 +39,7 @@ function maskHandle(h: string): string {
 }
 
 const INTEGRATOR = CONTRACT_ADDRESS;
-const SCAN = ACTIVE_CHAIN.blockExplorers?.default.url ?? "https://basescan.org";
+const SCAN = EXPLORER_URL;
 
 const CheckoutWidget = dynamic(
   () => import("../../components/CheckoutWidget").then((m) => m.CheckoutWidget),
@@ -47,7 +47,7 @@ const CheckoutWidget = dynamic(
 );
 
 // Quick-amount presets per country (local fiat).
-const QUICK = { INR: [10, 20, 50], BRL: [5, 10, 20], ARS: [500, 1000, 2000] };
+const QUICK = { INR: [10, 20, 50], BRL: [5, 10, 20], ARS: [500, 1000, 2000], VEN: [100, 200, 500] };
 // Quick-amount presets when charging directly in USDC.
 const QUICK_USDC = [1, 5, 10];
 
@@ -484,18 +484,12 @@ export default function PosQr() {
   // payer address, timestamp) as on-chain-public, not confidential.
   function receiptUrl() {
     if (typeof window === "undefined" || !done || !done.token) return "";
-    const rcCountry = done.country || country;
+    // Order id + access token only. The receipt shows nothing from its URL —
+    // amount, currency and shop all come from the chain (review H1) — so the
+    // display hints this used to add (shop, fiat, cur, upi) are gone.
     const q = new URLSearchParams({
-      shop: shopLabel || "My Shop",
-      // decimals:2 — a ₹10.50 sale must not read "₹11" on the customer's receipt.
-      fiat: fmtFiat(rcCountry, done.fiat, { decimals: 2 }),
       token: done.token,
-      kind: "buy",                              // customer paid the merchant
-      ...(rcCountry?.code ? { cur: rcCountry.code } : {}),
-      // Masked payout handle — "which account did I pay?" on the customer's
-      // receipt. Already masked before it leaves this device (see upiMasked
-      // above); omitted entirely if this device couldn't decrypt it.
-      ...(upiMasked ? { upi: upiMasked } : {}),
+      kind: "buy", // which table the receipt looks in first
     });
     return `${window.location.origin}/receipt/${done.orderId}?${q.toString()}`;
   }
@@ -741,7 +735,7 @@ export default function PosQr() {
                   <button className={`cur-pick-btn ${pickOpen ? "on" : ""}`} disabled={busy}
                     onClick={() => setPickOpen((o) => !o)}>
                     <span className="cur-pick-label">{t("qr.chargeIn")}</span>
-                    <img className="cur-flag" src={`https://flagcdn.com/w40/${({india:"in",brazil:"br",argentina:"ar"})[country.id] || "un"}.png`} alt="" />
+                    <img className="cur-flag" src={`https://flagcdn.com/w40/${({india:"in",brazil:"br",argentina:"ar",venezuela:"ve"})[country.id] || "un"}.png`} alt="" />
                     <b>{country.code}</b><span className="cur-car">▾</span>
                   </button>
                   {pickOpen && (
@@ -749,7 +743,7 @@ export default function PosQr() {
                       {payOpts.map((c) => (
                         <button key={c.id} className={`cur-pick-item ${c.id === country.id ? "sel" : ""}`}
                           onClick={() => { setCountry(c); setAmt(""); setError(""); setPickOpen(false); }}>
-                          <img className="cur-flag" src={`https://flagcdn.com/w40/${({india:"in",brazil:"br",argentina:"ar"})[c.id] || "un"}.png`} alt="" />
+                          <img className="cur-flag" src={`https://flagcdn.com/w40/${({india:"in",brazil:"br",argentina:"ar",venezuela:"ve"})[c.id] || "un"}.png`} alt="" />
                           <span className="cur-pick-txt">{c.name}<small>{c.fiat} · {fmtSymbolCode(c)}</small></span>
                           {c.id === country.id && <span className="cur-chk">✓</span>}
                         </button>

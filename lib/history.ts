@@ -1,142 +1,135 @@
 // Merchant transaction history straight from the p2p.me subgraph — no backend
 // database. The subgraph indexes every on-chain order across the WHOLE p2p
-// protocol, so every query here is scoped to PayQR's own integrator as well as
+// protocol, so every query here is scoped to PayQR's own integrators as well as
 // to this merchant — a merchant who also uses other P2P ecosystem apps must not
-// see those orders here. Balances/locks still come live from the contract; this
-// is purely the historical list for the Transactions page.
+// see those orders here. Balances/locks still come live from the contracts; this
+// is purely the historical list.
 
 import { keccak256, stringToBytes, isAddress } from "viem";
 import { SUBGRAPH_URL } from "./p2p";
-import { CONTRACT_ADDRESS } from "./contract";
+import { ALL_CONTRACT_ADDRESSES, currencyFromBytes32 } from "./contract";
 
 const ST = { 0: "matching", 1: "matching", 2: "matching", 3: "settled", 4: "cancelled" };
+/** p2p.me's dispute status on an order. A dispute can be opened on an order
+ *  that is already completed or cancelled (e.g. a customer who paid after the
+ *  window closed), so it is shown alongside the status, not instead of it. */
+const DISPUTE = { 0: "none", 1: "open", 2: "resolved" };
 
 /**
- * Fetch the orderIds this merchant placed THROUGH PAYQR'S OWN INTEGRATOR.
+ * EVERY PayQR integrator, current and previous, lower-cased for the subgraph.
  *
- * `orders_collection` is protocol-wide and carries NO integrator field (unlike
- * `b2Borders`), so filtering it by `userAddress` alone returns every order the
- * address ever placed on the p2p protocol — including ones from the OTHER P2P
- * ecosystem apps the merchant may have used. Live data confirms this: the same
- * user address appears under several different integrator ids, and orderIds are
- * a single protocol-wide sequence.
- *
- * `b2Borders` DOES carry `integrator` and shares the same orderId space, so it
- * is the scoping index: the PayQR ramps are exactly the orderIds that appear in
- * b2Borders under CONTRACT_ADDRESS for this user. orderType 0 = BUY (an incoming
- * payment / ramp); orderType 1 = the fiat SELL leg handled by fetchWithdrawals.
- *
- * Returns null when scoping can't be established (no configured integrator), so
- * callers can distinguish "not scopeable" from "scoped to zero orders".
+ * History spans contract upgrades: an upgrade deploys a NEW integrator, and the
+ * merchant's earlier orders stay recorded under the OLD one. Scoping to the
+ * current address alone made all of that history vanish the moment the app was
+ * repointed. Still strictly PayQR-only: orders from other apps on the protocol
+ * carry other integrator ids and never match.
  */
-async function fetchPayqrOrderIds(address): Promise<string[] | null> {
-  if (!CONTRACT_ADDRESS) return null;
-  const query = `query($user: String!, $integrator: String!) {
-    b2Borders(
-      first: 200,
-      where: { user: $user, orderType: 0, integrator: $integrator },
-      orderBy: blockTimestamp,
-      orderDirection: desc
-    ) {
-      orderId
-    }
-  }`;
-  const res = await fetch(SUBGRAPH_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      query,
-      variables: { user: address.toLowerCase(), integrator: CONTRACT_ADDRESS.toLowerCase() },
-    }),
-    cache: "no-store",
-  });
-  const data = await res.json();
-  // Same rule as everywhere else here: a 200-with-errors must not read as an
-  // empty scope, which would silently blank the merchant's whole history.
-  if (data?.errors) {
-    console.error("subgraph error (fetchPayqrOrderIds):", data.errors);
-    throw new Error("Subgraph returned an error.");
+const scope = () => ALL_CONTRACT_ADDRESSES.map((a) => a.toLowerCase());
+
+/** One address or a list → unique, valid, non-zero, lower-case addresses. */
+function addrList(...inputs: (string | string[] | null | undefined)[]): string[] {
+  const out = new Set<string>();
+  for (const x of inputs.flat()) {
+    if (x && isAddress(x) && !/^0x0+$/i.test(x)) out.add(x.toLowerCase());
   }
-  return (data?.data?.b2Borders || []).map((o) => String(o.orderId));
+  return [...out];
 }
 
 /**
- * Fetch a merchant's orders from the subgraph.
- * Returns rows shaped for the Transactions page:
- *   { orderId, amount (raw 6-dec string), status, txHash, createdAt(ms), placedAt }
- * status: 'matching' | 'settled' | 'cancelled'  (the page maps these to badges)
- *
- * SCOPED TO PAYQR: only orders placed through this app's integrator are
- * returned — see fetchPayqrOrderIds for why userAddress alone isn't enough.
+ * POST a query. Throws on a network failure AND on a 200-with-errors, so a
+ * subgraph outage or reindex never renders as "no transactions" — a merchant
+ * can't tell that from a genuine zero. Callers keep their last good data.
+ * Values always travel as GraphQL VARIABLES, never interpolated.
  */
-export async function fetchHistory(address) {
-  // Only a well-formed 0x address may reach the query — mirrors the ^\d+$ guard
-  // on the id-based lookups. The value is ALSO passed as a GraphQL VARIABLE (not
-  // string-interpolated), so it is structurally incapable of altering the query
-  // even if a future caller reached this without the regex (defense-in-depth).
-  if (!address || !isAddress(address)) return [];
-
-  // Establish the PayQR-only scope first: the set of orderIds this merchant
-  // placed through OUR integrator. Everything else the address did elsewhere on
-  // the protocol (other P2P ecosystem apps) is excluded by construction.
-  let ids;
-  try {
-    ids = await fetchPayqrOrderIds(address);
-  } catch {
-    // Scope lookup failed — surface it rather than falling back to the
-    // unscoped query, which would leak other integrators' orders into this
-    // merchant's history.
-    throw new Error("Couldn't reach the transaction index.");
-  }
-  // No integrator configured ⇒ we cannot prove any order is ours. Return empty
-  // rather than showing the whole protocol's traffic as this merchant's.
-  if (ids === null) return [];
-  if (ids.length === 0) return [];
-
-  const query = `query($user: String!, $ids: [String!]) {
-    orders_collection(
-      first: 50,
-      where: { userAddress: $user, orderId_in: $ids },
-      orderBy: orderId,
-      orderDirection: desc
-    ) {
-      orderId
-      status
-      usdcAmount
-      placedAt
-      completedAt
-      transactionHash
-    }
-  }`;
-
+async function querySubgraph(query: string, variables: Record<string, unknown>, label: string) {
   let data;
   try {
     const res = await fetch(SUBGRAPH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables: { user: address.toLowerCase(), ids } }),
+      body: JSON.stringify({ query, variables }),
       cache: "no-store",
     });
     data = await res.json();
   } catch {
-    // A NETWORK failure must not masquerade as an empty history either — same
-    // rationale as the 200-with-errors case below. Returning [] here made every
-    // flaky poll wipe real rows to a false "No payments yet". Throw so the
-    // caller's .catch keeps the last good data.
     throw new Error("Couldn't reach the transaction index.");
   }
-  // A GraphQL endpoint can return HTTP 200 with { errors: [...] } and null data
-  // (schema drift, subgraph reindexing/outage). Treating that as an empty list
-  // would render a FALSE "no transactions" / "0 earnings" that a merchant can't
-  // tell apart from a genuine zero. Throw so the caller's .catch keeps the last
-  // good data instead of overwriting it with a misleading empty set.
   if (data?.errors) {
-    console.error("subgraph error (fetchHistory):", data.errors);
+    console.error(`subgraph error (${label}):`, data.errors);
     throw new Error("Subgraph returned an error.");
   }
-  const rows = data?.data?.orders_collection || [];
+  return data?.data;
+}
 
-  return rows.map((o) => {
+/**
+ * The BUY orderIds this merchant placed through ANY PayQR integrator, mapped to
+ * the integrator each went through.
+ *
+ * `orders_collection` is protocol-wide and has NO integrator field, so it
+ * cannot be scoped on its own. `b2Borders` does carry `integrator` and shares
+ * the orderId space, so it is the scoping index.
+ *
+ * Two kinds of placer: a POS sale records the MERCHANT as the order's user, a
+ * payment-link sale records the merchant's PROXY — and each integrator has its
+ * own proxy for the merchant. Pass every proxy (see useMerchantProxies).
+ *
+ * Returns null when no integrator is configured, so callers can tell "not
+ * scopeable" from "scoped to zero orders".
+ */
+async function fetchPayqrOrderIds(
+  address: string,
+  proxies?: string | string[]
+): Promise<Map<string, string> | null> {
+  const integrators = scope();
+  if (integrators.length === 0) return null;
+  const data = await querySubgraph(
+    `query($users: [String!], $integrators: [String!]) {
+      b2Borders(
+        first: 500,
+        where: { user_in: $users, orderType: 0, integrator_in: $integrators },
+        orderBy: blockTimestamp,
+        orderDirection: desc
+      ) { orderId integrator { id } }
+    }`,
+    { users: addrList(address, proxies), integrators },
+    "fetchPayqrOrderIds"
+  );
+  return new Map<string, string>(
+    (data?.b2Borders || []).map((o) => [String(o.orderId), String(o.integrator?.id || "")])
+  );
+}
+
+/**
+ * A merchant's BUY orders (POS and link sales) across every PayQR integrator.
+ * Rows: { orderId, amount (raw 6-dec), status, txHash, createdAt, placedAt,
+ * completedAt, integrator } — status is 'matching' | 'settled' | 'cancelled'.
+ */
+export async function fetchHistory(address, proxies?: string | string[]) {
+  if (!address || !isAddress(address)) return [];
+
+  let scoped: Map<string, string> | null;
+  try {
+    scoped = await fetchPayqrOrderIds(address, proxies);
+  } catch {
+    // Never fall back to an unscoped query — that would leak other apps' orders.
+    throw new Error("Couldn't reach the transaction index.");
+  }
+  if (!scoped || scoped.size === 0) return [];
+
+  const data = await querySubgraph(
+    `query($users: [String!], $ids: [String!]) {
+      orders_collection(
+        first: 200,
+        where: { userAddress_in: $users, orderId_in: $ids },
+        orderBy: orderId,
+        orderDirection: desc
+      ) { orderId status usdcAmount placedAt completedAt transactionHash userAddress disputeStatus }
+    }`,
+    { users: addrList(address, proxies), ids: [...scoped.keys()] },
+    "fetchHistory"
+  );
+
+  return (data?.orders_collection || []).map((o) => {
     const placed = Number(o.placedAt) * 1000;
     return {
       orderId: String(o.orderId),
@@ -146,70 +139,40 @@ export async function fetchHistory(address) {
       createdAt: new Date(placed).toISOString(),
       placedAt: Number(o.placedAt),
       completedAt: o.completedAt ? Number(o.completedAt) : null,
+      integrator: scoped!.get(String(o.orderId)) || null,
+      // A link sale is placed by the merchant's proxy; a counter sale by the
+      // merchant. p2p.me's support bridge serves only the order's own user, so
+      // its dispute chip cannot work on a link sale (review).
+      isLink: String(o.userAddress || "").toLowerCase() !== String(address).toLowerCase(),
+      dispute: DISPUTE[Number(o.disputeStatus)] || "none",
     };
   });
 }
 
 /**
- * Fetch a merchant's FIAT WITHDRAWALS from the subgraph.
+ * A merchant's FIAT WITHDRAWALS (SELL orders, orderType 1) across every PayQR
+ * integrator. They are placed by the merchant's PROXY, one per integrator, so
+ * pass every proxy.
  *
- * A fiat withdrawal is a SELL order (orderType = 1) placed by the merchant's
- * per-merchant PROXY address (not their EOA). They're indexed in the p2p.me
- * subgraph's `b2Borders` keyed by our integrator. So: pass the merchant's proxy
- * address (read on-chain via `proxyAddress(merchant)`) and we return its SELL
- * orders. No contract change, no event-log scraping needed.
- *
- * SUBGRAPH IS PROTOCOL-WIDE, NOT PER-APP: `b2Borders` indexes every integrator
- * on the protocol, and each row carries its own `integrator` id. Filtering by
- * `user` alone isn't enough to guarantee only THIS app's transactions show —
- * a proxy address collision (or a future protocol change reusing addresses
- * across integrators) would leak another integrator's orders into this
- * merchant's history. Scope explicitly to CONTRACT_ADDRESS so only orders
- * actually placed through PayQR's own integrator contract are ever returned.
- *
- * Returns rows shaped like fetchHistory but tagged kind:"withdraw":
- *   { orderId, amount(raw 6-dec USDC), kind:"withdraw", txHash, createdAt, placedAt }
+ * Rows are shaped like fetchHistory's, tagged kind:"withdraw".
  */
-export async function fetchWithdrawals(proxyAddress) {
-  // Same address validation as fetchHistory before interpolation into GraphQL.
-  if (!proxyAddress || !isAddress(proxyAddress)) return [];
-  if (!CONTRACT_ADDRESS) return [];
-  const query = `query($user: String!, $integrator: String!) {
-    b2Borders(
-      first: 50,
-      where: { user: $user, orderType: 1, integrator: $integrator },
-      orderBy: blockTimestamp,
-      orderDirection: desc
-    ) {
-      orderId
-      amount
-      transactionHash
-      blockTimestamp
-    }
-  }`;
-  let data;
-  try {
-    const res = await fetch(SUBGRAPH_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query,
-        variables: { user: proxyAddress.toLowerCase(), integrator: CONTRACT_ADDRESS.toLowerCase() },
-      }),
-      cache: "no-store",
-    });
-    data = await res.json();
-  } catch {
-    // Network failure ⇒ throw, don't fake an empty list (see fetchHistory).
-    throw new Error("Couldn't reach the transaction index.");
-  }
-  // See fetchHistory: a 200-with-errors must not masquerade as an empty list.
-  if (data?.errors) {
-    console.error("subgraph error (fetchWithdrawals):", data.errors);
-    throw new Error("Subgraph returned an error.");
-  }
-  const rows = data?.data?.b2Borders || [];
-  return rows.map((o) => {
+export async function fetchWithdrawals(proxies: string | string[]) {
+  const users = addrList(proxies);
+  const integrators = scope();
+  if (users.length === 0 || integrators.length === 0) return [];
+  const data = await querySubgraph(
+    `query($users: [String!], $integrators: [String!]) {
+      b2Borders(
+        first: 200,
+        where: { user_in: $users, orderType: 1, integrator_in: $integrators },
+        orderBy: blockTimestamp,
+        orderDirection: desc
+      ) { orderId amount transactionHash blockTimestamp integrator { id } }
+    }`,
+    { users, integrators },
+    "fetchWithdrawals"
+  );
+  return (data?.b2Borders || []).map((o) => {
     const ts = Number(o.blockTimestamp) * 1000;
     return {
       orderId: String(o.orderId),
@@ -219,127 +182,104 @@ export async function fetchWithdrawals(proxyAddress) {
       txHash: o.transactionHash || null,
       createdAt: new Date(ts).toISOString(),
       placedAt: Number(o.blockTimestamp),
+      integrator: o.integrator?.id || null,
     };
   });
 }
 
 /**
  * Fetch a SINGLE order by id from the subgraph — powers the public,
- * no-auth customer receipt page (/receipt/[orderId]). The customer who
- * just paid can open the link and verify the sale on-chain.
- * Returns null if not found.
+ * no-auth customer receipt page (/receipt/[orderId]). Returns null if not found.
  *   { orderId, amount(raw 6-dec, principal the merchant nets), fiatAmount
  *     (raw 6-dec, the customer's TOTAL paid incl. any small-order fee),
- *     status, txHash, placedAt, completedAt }
+ *     status, userAddress, txHash, placedAt, completedAt }
  */
 export async function fetchOrder(orderId) {
   // On-chain order ids are integers — reject anything else so a crafted id can't
   // reach the query as arbitrary text (defense-in-depth for the public receipt).
   const id = String(orderId ?? "").trim();
   if (!/^\d+$/.test(id)) return null;
-  const query = `query($id: String!) {
-    orders_collection(first: 1, where: { orderId: $id }) {
-      orderId
-      status
-      usdcAmount
-      fiatAmount
-      actualUsdcAmount
-      actualFiatAmount
-      userAddress
-      placedAt
-      completedAt
-      transactionHash
-    }
-  }`;
   let data;
   try {
-    const res = await fetch(SUBGRAPH_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables: { id } }),
-      cache: "no-store",
-    });
-    data = await res.json();
+    data = await querySubgraph(
+      `query($id: String!) {
+        orders_collection(first: 1, where: { orderId: $id }) {
+          orderId type status currency usdcAmount fiatAmount actualUsdcAmount actualFiatAmount
+          userAddress placedAt completedAt transactionHash
+        }
+      }`,
+      { id },
+      "fetchOrder"
+    );
   } catch {
+    // The receipt page already treats null as "not ready yet / refresh".
     return null;
   }
-  // Surface a 200-with-errors so a subgraph fault is observable rather than
-  // silently read as "order not found" (the receipt page already treats a null
-  // here as "not ready yet / refresh", so returning null is acceptable — but we
-  // log the real cause).
-  if (data?.errors) console.error("subgraph error (fetchOrder):", data.errors);
-  const o = data?.data?.orders_collection?.[0];
+  const o = data?.orders_collection?.[0];
   if (!o) return null;
   // Prefer the ACTUAL settled amounts when present (post-match, e.g. a partial
-  // fill) — same precedence rates.ts already uses — falling back to the
-  // as-placed amounts otherwise.
+  // fill), falling back to the as-placed amounts otherwise.
   const usdcAmount = o.actualUsdcAmount && o.actualUsdcAmount !== "0" ? o.actualUsdcAmount : o.usdcAmount;
   const fiatAmount = o.actualFiatAmount && o.actualFiatAmount !== "0" ? o.actualFiatAmount : o.fiatAmount;
   return {
     orderId: String(o.orderId),
-    amount: String(usdcAmount),          // principal — what the MERCHANT receives
-    fiatAmount: fiatAmount != null ? String(fiatAmount) : null, // gross — what the CUSTOMER paid (incl. fee)
+    amount: String(usdcAmount), // principal — what the MERCHANT receives
+    fiatAmount: fiatAmount != null ? String(fiatAmount) : null, // what the CUSTOMER paid (incl. fee)
     status: ST[Number(o.status)] || "matching",
-    userAddress: o.userAddress || null,   // the placer proxy (resolves to the merchant)
+    userAddress: o.userAddress || null, // the placer (merchant, or their proxy)
     txHash: o.transactionHash || null,
     placedAt: Number(o.placedAt),
     completedAt: o.completedAt ? Number(o.completedAt) : null,
+    // From the chain, so the receipt never takes them from its URL (review H1):
+    // the currency the order was charged in, and whether it is a payment (BUY)
+    // or a cash-out (SELL).
+    currency: currencyFromBytes32(o.currency) || "",
+    kind: Number(o.type) === 1 ? "withdraw" : "buy",
   };
 }
 
 /**
  * Fetch a SINGLE WITHDRAWAL (fiat SELL) order by id — powers the withdrawal
- * receipt. Withdrawals are NOT in orders_collection; they're b2Borders (orderType
- * 1), keyed by the merchant's proxy in `user`, with different fields (amount /
- * blockTimestamp, and no status). A row indexed here has already emitted its
- * on-chain WithdrawalFiat, so we treat it as completed. Returns the SAME shape as
- * fetchOrder so the receipt page can consume either uniformly (userAddress = the
- * proxy, so verifyOrderOwner resolves it via proxyMerchant). null if not found.
+ * receipt. Withdrawals are b2Borders (orderType 1), keyed by the merchant's
+ * proxy in `user`. Returns the SAME shape as fetchOrder. null if not found.
  *
- * Scoped to CONTRACT_ADDRESS — see fetchWithdrawals for why: b2Borders is
- * protocol-wide, and an orderId a customer/merchant pastes into a receipt link
- * should never resolve to a DIFFERENT integrator's withdrawal just because the
- * id happens to match. (verifyOrderOwner in the receipt page independently
- * re-checks on-chain registration too — this is defense-in-depth, not the only
- * guard.)
+ * Scoped to PayQR's integrators (all of them): an orderId pasted into a receipt
+ * link must never resolve to a DIFFERENT app's withdrawal. The receipt page
+ * independently re-checks on-chain registration too.
  */
 export async function fetchWithdrawalOrder(orderId) {
   const id = String(orderId ?? "").trim();
   if (!/^\d+$/.test(id)) return null;
-  if (!CONTRACT_ADDRESS) return null;
-  const query = `query($id: String!, $integrator: String!) {
-    b2Borders(first: 1, where: { orderId: $id, orderType: 1, integrator: $integrator }) {
-      orderId
-      amount
-      user
-      transactionHash
-      blockTimestamp
-    }
-  }`;
+  const integrators = scope();
+  if (integrators.length === 0) return null;
   let data;
   try {
-    const res = await fetch(SUBGRAPH_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, variables: { id, integrator: CONTRACT_ADDRESS.toLowerCase() } }),
-      cache: "no-store",
-    });
-    data = await res.json();
+    data = await querySubgraph(
+      `query($id: String!, $integrators: [String!]) {
+        b2Borders(first: 1, where: { orderId: $id, orderType: 1, integrator_in: $integrators }) {
+          orderId amount user transactionHash blockTimestamp integrator { id }
+        }
+      }`,
+      { id, integrators },
+      "fetchWithdrawalOrder"
+    );
   } catch {
     return null;
   }
-  if (data?.errors) console.error("subgraph error (fetchWithdrawalOrder):", data.errors);
-  const o = data?.data?.b2Borders?.[0];
+  const o = data?.b2Borders?.[0];
   if (!o) return null;
   const ts = Number(o.blockTimestamp);
   return {
     orderId: String(o.orderId),
-    amount: String(o.amount),         // raw 6-dec USDC
-    status: "settled",                // indexed here ⇒ the fiat leg fired
-    userAddress: o.user || null,      // the merchant's proxy → verifyOrderOwner resolves it
+    amount: String(o.amount), // raw 6-dec USDC
+    status: "settled", // indexed here ⇒ the fiat leg fired
+    userAddress: o.user || null, // the merchant's proxy → verifyOrderOwner resolves it
     txHash: o.transactionHash || null,
     placedAt: ts,
     completedAt: ts,
+    integrator: o.integrator?.id || null,
+    currency: "", // not on this table; the receipt then omits the payment rail
+    kind: "withdraw",
   };
 }
 
@@ -354,4 +294,66 @@ export async function fetchWithdrawalOrder(orderId) {
  */
 export function receiptToken(orderId: string, txHash: string): string {
   return keccak256(stringToBytes(`${orderId}:${txHash.toLowerCase()}`)).slice(2, 18);
+}
+
+/**
+ * A merchant's PAYMENT-LINK sales only — across every PayQR integrator.
+ *
+ * The separation comes from the contract: a POS sale records the MERCHANT as
+ * the order's user, a link sale records the merchant's PROXY. So BUY orders
+ * (orderType 0) under the proxies are exactly the link sales. Pass every proxy
+ * — one per integrator — or link sales made before an upgrade disappear.
+ *
+ * Rows are shaped like fetchHistory's, tagged kind:"link".
+ */
+export async function fetchLinkOrders(proxies: string | string[]) {
+  const users = addrList(proxies);
+  const integrators = scope();
+  if (users.length === 0 || integrators.length === 0) return [];
+
+  const idData = await querySubgraph(
+    `query($users: [String!], $integrators: [String!]) {
+      b2Borders(
+        first: 500,
+        where: { user_in: $users, orderType: 0, integrator_in: $integrators },
+        orderBy: blockTimestamp,
+        orderDirection: desc
+      ) { orderId integrator { id } }
+    }`,
+    { users, integrators },
+    "fetchLinkOrders ids"
+  );
+  const integratorOf = new Map<string, string>(
+    (idData?.b2Borders || []).map((o) => [String(o.orderId), String(o.integrator?.id || "")])
+  );
+  if (integratorOf.size === 0) return [];
+
+  const data = await querySubgraph(
+    `query($users: [String!], $ids: [String!]) {
+      orders_collection(
+        first: 500,
+        where: { userAddress_in: $users, orderId_in: $ids },
+        orderBy: orderId,
+        orderDirection: desc
+      ) { orderId status usdcAmount placedAt completedAt transactionHash currency disputeStatus }
+    }`,
+    { users, ids: [...integratorOf.keys()] },
+    "fetchLinkOrders"
+  );
+
+  return (data?.orders_collection || []).map((o) => ({
+    orderId: String(o.orderId),
+    amount: String(o.usdcAmount),
+    status: ST[Number(o.status)] || "matching",
+    txHash: o.transactionHash || null,
+    placedAt: Number(o.placedAt),
+    completedAt: o.completedAt ? Number(o.completedAt) : null,
+    kind: "link",
+    integrator: integratorOf.get(String(o.orderId)) || null,
+    // Straight from the order. The Payments tab used to look the currency up
+    // through orderToLink, which the contract deletes once an order settles —
+    // so the flag never appeared (review).
+    currency: currencyFromBytes32(o.currency) || "",
+    dispute: DISPUTE[Number(o.disputeStatus)] || "none",
+  }));
 }

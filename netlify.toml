@@ -1,0 +1,19 @@
+# Netlify build config.
+#
+# package-lock.json is the ONLY lockfile here, deliberately. Netlify installs
+# with Bun the moment it sees a bun.lock, before the build command runs — and
+# the bun.lock this repo used to carry had drifted (it still pinned next
+# 14.2.15 while package.json asks for 14.2.35), so Bun's frozen install failed
+# and every deploy died before `npm run build` was ever reached. One lockfile,
+# the one every local build and test uses, keeps that from coming back.
+# The build command reinstalls with `npm ci` to ship exactly what was tested.
+#
+# Next.js is served by Netlify's Next.js runtime, which Netlify adds
+# automatically for Next sites — nothing to install here.
+
+[build]
+  command = "npm ci && npm run build"
+  publish = ".next"
+
+[build.environment]
+  NODE_VERSION = "22"
