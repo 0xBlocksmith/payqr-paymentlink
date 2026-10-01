@@ -63,7 +63,9 @@ async function fromP2P(code: string) {
 // Static per-currency fallbacks so the UI never shows a broken rate when both
 // the on-chain price and the subgraph are unavailable. NOT an FX source — just a
 // last resort. Kept rough on purpose.
-const FALLBACK = { INR: 90, BRL: 5.4, ARS: 1000 };
+// VEN (bolívar) inflates fast, so its entry goes stale quickest — it only
+// matters until p2p.me sets the on-chain VEN price.
+const FALLBACK = { INR: 90, BRL: 5.4, ARS: 1000, VEN: 300 };
 
 /**
  * USDC→local rate for a country, sourced ONLY from the p2p protocol (on-chain

@@ -30,7 +30,7 @@ export default function Login() {
   const langLabel = LANGUAGES.find((l) => l.code === lang)?.label || "English";
 
   // ISO-2 code per country for real flag images (emoji flags don't render on Windows).
-  const CC: Record<string, string> = { india: "in", brazil: "br", argentina: "ar" };
+  const CC: Record<string, string> = { india: "in", brazil: "br", argentina: "ar", venezuela: "ve" };
   const flagUrl = (id: string) => `https://flagcdn.com/w40/${CC[id] || "un"}.png`;
 
   // Settlement/unlock window for the currently-picked country — surfaced HERE,

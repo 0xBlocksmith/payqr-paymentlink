@@ -295,7 +295,7 @@ export default function Withdraw() {
   const maxFiat = rate ? maxFiatUsdc * rate.rate : null;
 
   // withdraw-currency helpers
-  const CC = { india: "in", brazil: "br", argentina: "ar" };
+  const CC = { india: "in", brazil: "br", argentina: "ar", venezuela: "ve" };
   const flagOf = (code) => {
     const c = COUNTRIES.find((x) => x.code === code);
     return `https://flagcdn.com/w40/${CC[c?.id] || "un"}.png`;
