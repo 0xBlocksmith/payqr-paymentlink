@@ -18,6 +18,7 @@ import { STATIC_STALE_MS } from "../../lib/cache";
 import { decryptPayout } from "../../lib/payoutCrypto";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
 import { useDisputeOrderStates, OrderDisputeManager, useSupportSigner } from "../../components/OrderDisputeManager";
+import { useMerchantProxies } from "../../components/useMerchantProxies";
 
 // Partially hide a payout handle for a SHAREABLE receipt: keep the first 2 chars
 // and everything from "@"/domain, mask the middle. e.g. "sheldon@upi" → "sh•••@upi",
@@ -114,40 +115,34 @@ export default function Transactions() {
   // display hints only — the receipt re-reads the real shop name from chain.
   const receiptHref = useCallback((tx) => {
     if (!tx?.orderId || !tx?.txHash) return "";
-    const usdc = Number(tx.amount) / 1e6;
-    const fiat = rate && country ? usdc * rate.rate : null;
-    // kind → the receipt frames "payment received" vs "cash-out"; cur → the rail
-    // label (UPI/PIX/…). Both are display hints; the receipt still trusts on-chain
-    // amount/status. tx.kind is "withdraw" for fiat SELL, else a BUY payment.
+    // Order id + access token only: the receipt shows nothing from its URL
+    // (review H1). `kind` just says which table to look in first.
     const q = new URLSearchParams({
       token: receiptToken(String(tx.orderId), tx.txHash),
       kind: tx.kind === "withdraw" ? "withdraw" : "buy",
-      ...(country?.code ? { cur: country.code } : {}),
-      ...(country && fiat != null ? { fiat: fmtFiat(country, fiat, { decimals: 2 }) } : {}),
-      // Masked payout handle on FIAT withdrawal receipts only (which account it
-      // landed in). Already masked, so a shared link never exposes the full id.
-      ...(tx.kind === "withdraw" && upiMasked ? { upi: upiMasked } : {}),
     });
-    const shop = loadMerchantProfile(address)?.shopName;
-    if (shop) q.set("shop", shop);
     return `/receipt/${tx.orderId}?${q.toString()}`;
-  }, [rate, country, address, upiMasked]);
+  }, []);
 
-  // The merchant's per-merchant proxy — fiat withdrawals (SELL orders) are
-  // indexed in the subgraph under THIS address, so we read it to fetch them.
-  const { data: proxyAddr } = useReadContract({
-    address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "proxyAddress",
-    args: [address], query: { enabled: !!address },
-  });
+  // The merchant's per-merchant proxy. Two different things are indexed under
+  // it: fiat withdrawals (SELL orders), and — less obviously — every PAYMENT
+  // LINK sale, because `relayerPlaceOrder` records the proxy as the order's
+  // user where a POS sale records the merchant. So this address is needed for
+  // the payments query too, not only the withdrawals one.
+  // One proxy PER INTEGRATOR: an upgrade gives the merchant a new proxy, and
+  // link sales / withdrawals made before it are recorded under the old one.
+  const { proxies } = useMerchantProxies(address);
+  const proxyKey = (proxies ?? []).join(",");
 
   const refresh = useCallback(async () => {
-    if (!address) return;
+    if (!address || !proxies) return;
     try {
-      // Payments (BUY orders, keyed by merchant) + fiat withdrawals (SELL
-      // orders, keyed by the merchant's proxy). Merge into one timeline.
+      // Payments (BUY orders — keyed by the merchant for POS sales, by the
+      // proxy for payment-link sales) + fiat withdrawals (SELL orders, keyed by
+      // the proxy). Merge into one timeline.
       const [payments, withdrawals] = await Promise.all([
-        fetchHistory(address),
-        proxyAddr ? fetchWithdrawals(proxyAddr) : Promise.resolve([]),
+        fetchHistory(address, proxies),
+        proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([]),
       ]);
       const merged = [...payments.map((r) => ({ ...r, kind: "payment" })), ...withdrawals]
         .sort((a, b) => b.placedAt - a.placedAt);
@@ -162,7 +157,9 @@ export default function Transactions() {
       setLoadError(true);
     }
     finally { setLoaded(true); }
-  }, [address, proxyAddr]);
+    // proxyKey stands in for proxies: same content, stable identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, proxyKey]);
 
   useEffect(() => {
     refresh();
@@ -204,8 +201,12 @@ export default function Transactions() {
   // Dispute Manager: batched live on-chain read for every visible PAYMENT row
   // (withdrawals aren't disputable orders, so they're excluded). One multicall
   // for the whole visible page rather than a call per row.
+  // Counter (POS) sales only: p2p.me's support bridge serves the order's own
+  // user, and a payment-link sale belongs to the merchant's proxy, so its chip
+  // could never work there (review). Link sales get their dispute status and
+  // PayQR support below instead.
   const disputableOrderIds = useMemo(
-    () => filtered.filter((t) => t.kind !== "withdraw").map((t) => t.orderId),
+    () => filtered.filter((t) => t.kind !== "withdraw" && !t.isLink).map((t) => t.orderId),
     [filtered]
   );
   const { rows: disputeRows } = useDisputeOrderStates(disputableOrderIds);
@@ -430,6 +431,18 @@ export default function Transactions() {
                       order={disputeRow.order}
                       signer={supportSigner}
                     />
+                  )}
+                  {!isWithdraw && tx.isLink && tx.dispute && tx.dispute !== "none" && (
+                    <div className="sub" style={{ margin: "4px 0 10px", fontSize: 12.5 }}>
+                      {tx.dispute === "open" ? "Payment under review by support · " : "Review by support finished · "}
+                      <a
+                        href={`https://t.me/PayQRdotPRO?text=${encodeURIComponent(`Hi, I need help with payment #${tx.orderId}.`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Contact support ↗
+                      </a>
+                    </div>
                   )}
                 </div>
               );

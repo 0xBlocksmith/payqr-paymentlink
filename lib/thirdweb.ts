@@ -2,6 +2,7 @@
 
 import { createThirdwebClient } from "thirdweb";
 import { base, baseSepolia } from "thirdweb/chains";
+import { ACTIVE_CHAIN } from "./chain";
 
 /**
  * Central thirdweb setup.
@@ -25,6 +26,7 @@ export const thirdwebClient = createThirdwebClient({
   clientId: THIRDWEB_CLIENT_ID || "MISSING_THIRDWEB_CLIENT_ID",
 });
 
-// Active chain mirrors lib/chain.ts (env-selected). Base Sepolia today.
-export const THIRDWEB_CHAIN =
-  process.env.NEXT_PUBLIC_CHAIN === "base" ? base : baseSepolia;
+// DERIVED from lib/chain.ts rather than re-reading the env: two separate reads
+// of NEXT_PUBLIC_CHAIN could disagree, and then reads (wagmi/viem) and writes
+// (thirdweb) would go to different chains.
+export const THIRDWEB_CHAIN = ACTIVE_CHAIN.id === base.id ? base : baseSepolia;
