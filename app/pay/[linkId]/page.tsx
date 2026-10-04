@@ -663,6 +663,7 @@ export default function PayLink() {
         />
       ) : (
         <div className="pl-hero">
+          <NoPageScroll />
           <header className="pl-top">
             <img className="pl-logo pl-logo-payqr" src="/payqr-mark-sm.png" alt="PayQR" width={44} height={28} />
             <span className="pl-top-line" aria-hidden="true" />
@@ -785,6 +786,11 @@ export default function PayLink() {
           box-sizing: border-box;
         }
 
+        /* The app's body is min-height: 100vh, which on a phone is taller than
+           the visible screen (the address bar), so the page could still be
+           scrolled. While step 1 shows, the page itself is pinned to the screen. */
+        html.pl-noscroll, html.pl-noscroll body { height: 100dvh; min-height: 0; overflow: hidden; overscroll-behavior: none; }
+
         .pl-top { position: relative; display: flex; align-items: center; justify-content: space-between; height: 40px; flex: none; }
         .pl-logo { display: block; object-fit: contain; mix-blend-mode: multiply; }
         .pl-logo-payqr { height: 28px; width: auto; }
@@ -880,6 +886,16 @@ export default function PayLink() {
       `}</style>
     </div>
   );
+}
+
+/** Pins the page to the screen (no scrolling) for as long as it is mounted. */
+function NoPageScroll() {
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.add("pl-noscroll");
+    return () => root.classList.remove("pl-noscroll");
+  }, []);
+  return null;
 }
 
 function Centered({ children }: { children: React.ReactNode }) {
