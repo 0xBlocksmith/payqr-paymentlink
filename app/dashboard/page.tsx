@@ -289,7 +289,7 @@ export default function Dashboard() {
         </div>
 
         {/* promo carousel — swipe left/right between slides. Volume-challenge
-            campaign is 1st, ecosystem promo 2nd, the original dark promo 3rd;
+            campaign is 1st (Venezuela only), payment links 2nd, then ecosystem and counter QR;
             all share the same dark-gradient card so the swipe reads as one
             continuous banner. */}
         {/* Built as a list, not literal children: the carousel renders every
@@ -297,18 +297,18 @@ export default function Dashboard() {
         <PromoCarousel>
           {[
             ...(campaignActive() && campaignEligible(country.id) ? [<CampaignPromo key="campaign" />] : []),
+            <div key="payment-links" className="promo">
+              <div className="promo-tag">{t("dash.plTag")}</div>
+              <div className="promo-h">{t("dash.plH")}</div>
+              <div className="promo-sub">{t("dash.plSub")}</div>
+              <span className="promo-qr"><Icon.Link /></span>
+            </div>,
             <EcosystemPromo key="ecosystem" />,
             <div key="counter-qr" className="promo">
               <div className="promo-tag">{t("dash.cqTag")}</div>
               <div className="promo-h">{t("dash.cqH")}</div>
               <div className="promo-sub">{t("dash.cqSub")}</div>
               <span className="promo-qr"><Icon.Qr /></span>
-            </div>,
-            <div key="payment-links" className="promo">
-              <div className="promo-tag">{t("dash.plTag")}</div>
-              <div className="promo-h">{t("dash.plH")}</div>
-              <div className="promo-sub">{t("dash.plSub")}</div>
-              <span className="promo-qr"><Icon.Link /></span>
             </div>,
           ]}
         </PromoCarousel>
