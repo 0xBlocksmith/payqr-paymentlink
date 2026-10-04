@@ -9,20 +9,12 @@ import { loadCountry, fmtFiat } from "../../lib/countries";
 import { fetchUsdcRate } from "../../lib/rates";
 import { useT } from "../../lib/i18n";
 import { useMerchantProxies } from "../../components/useMerchantProxies";
+import { CAMPAIGN, campaignEligible } from "../../lib/campaign";
 
-// Challenge window: Sep 1–15, 2026, inclusive, in the MERCHANT'S LOCAL TIME.
-// Only successful (settled) orders PLACED in this window count — nothing from
-// before Sep 1 carries over into the $500 goal.
-//
-// Local, not UTC: the window has to line up with the shopkeeper's trading days.
-// Anchored to UTC midnight it opened at 05:30 on Sep 1 for a merchant in IST
-// (and, worse, closed mid-morning on the 15th), so a full first and last day of
-// real sales fell outside the window. `new Date(y, m, d)` builds LOCAL midnight,
-// which is exactly the boundary a merchant means by "the 1st to the 15th".
-const WINDOW_START = new Date(2026, 8, 1).getTime();        // Sep 1, 00:00 local
-const WINDOW_END = new Date(2026, 8, 16).getTime();         // Sep 16, 00:00 local — exclusive
-const GOAL_USDC = 500;
-const REWARD_USDC = 5;
+// Goal, reward, window and audience live in lib/campaign.ts. Only successful
+// (settled) orders PLACED in the window, charged in the challenge's currency,
+// count — nothing from before it carries over.
+const { start: WINDOW_START, end: WINDOW_END, goalUsdc: GOAL_USDC, rewardUsdc: REWARD_USDC } = CAMPAIGN;
 
 function fmtDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -62,6 +54,18 @@ export default function Campaign() {
 
   if (!ready || !authenticated) return <Splash />;
 
+  // Venezuela only (the country is a saved preference; until it loads, show the page shell).
+  if (country && !campaignEligible(country.id)) {
+    return (
+      <>
+        <Nav back backHref="/dashboard" />
+        <div className="screen">
+          <p className="muted" style={{ textAlign: "center" }}>{t("camp.notAvailable")}</p>
+        </div>
+      </>
+    );
+  }
+
   const toFiat = (usdc: number) =>
     country && rate ? `≈ ${fmtFiat(country, usdc * rate.rate)}` : null;
 
@@ -69,6 +73,7 @@ export default function Campaign() {
   // goal — no prior transactions, and nothing still matching/cancelled.
   const qualifying = rows
     .filter((t) => t.status === "settled")
+    .filter((t) => t.currency === CAMPAIGN.currency)
     .filter((t) => {
       const ts = new Date(t.createdAt).getTime();
       return ts >= WINDOW_START && ts < WINDOW_END;
