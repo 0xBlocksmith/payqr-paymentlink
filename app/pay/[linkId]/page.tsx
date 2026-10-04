@@ -29,6 +29,7 @@ import { routeLinkCircle } from "../../../lib/customerOrder";
 import { placeScreenedOrder } from "../../../lib/customerScreening";
 import { resolveCircleId } from "../../../lib/p2p";
 import { useHumanCheck } from "../../../components/HumanCheck";
+import { usePayerT } from "../../../lib/payerI18n";
 
 // PUBLIC, no-auth page — own module-scope reader, same as /receipt/[orderId].
 // Uses the CONFIGURED RPC (not viem's default), for the same reason: the
@@ -123,6 +124,7 @@ export default function PayLink() {
   // Anything that is not a well-formed id decodes to "" and the page renders
   // "this payment link doesn't exist" — a mistyped or tampered URL fails closed
   // rather than being half-read.
+  const { t } = usePayerT();
   const routeParams = useParams();
   const rawParam = (routeParams as any)?.linkId ?? (routeParams as any)?.code;
   const provided = Array.isArray(rawParam) ? rawParam[0] : rawParam;
@@ -384,7 +386,7 @@ export default function PayLink() {
       .catch((e: any) => {
         if (!alive) return;
         setConfirming(false);
-        setPrepareError(e?.message || "This payment could not be confirmed. Please try again.");
+        setPrepareError(e?.message || t("pl.errPrepare"));
       });
     return () => { alive = false; };
   }, [confirming, safeLinkId]);
@@ -392,7 +394,7 @@ export default function PayLink() {
   if (!PAYMENT_LINKS_ENABLED) {
     return (
       <Centered>
-        <p className="pl-notice">Payment Links isn't available on this deployment.</p>
+        <p className="pl-notice">{t("pl.unavailable")}</p>
       </Centered>
     );
   }
@@ -400,7 +402,7 @@ export default function PayLink() {
   if (state === null) {
     return (
       <Centered>
-        <p className="pl-notice">Loading…</p>
+        <p className="pl-notice">{t("pl.loading")}</p>
       </Centered>
     );
   }
@@ -408,10 +410,7 @@ export default function PayLink() {
   if (state === "retired") {
     return (
       <Centered>
-        <p className="pl-notice">
-          This payment link was made on an earlier version of PayQR and no longer accepts
-          payments. Please ask the merchant for a new link.
-        </p>
+        <p className="pl-notice">{t("pl.retired")}</p>
       </Centered>
     );
   }
@@ -419,7 +418,7 @@ export default function PayLink() {
   if (state === "notFound") {
     return (
       <Centered>
-        <p className="pl-notice">This payment link doesn't exist.</p>
+        <p className="pl-notice">{t("pl.notFound")}</p>
       </Centered>
     );
   }
@@ -427,8 +426,8 @@ export default function PayLink() {
   if (state === "unverified") {
     return (
       <Centered>
-        <p className="pl-notice">Couldn't verify this link right now.</p>
-        <button className="pl-retry-btn" onClick={() => setRetry((r) => r + 1)}>Refresh</button>
+        <p className="pl-notice">{t("pl.unverified")}</p>
+        <button className="pl-retry-btn" onClick={() => setRetry((r) => r + 1)}>{t("pl.refresh")}</button>
       </Centered>
     );
   }
@@ -447,21 +446,21 @@ export default function PayLink() {
   if (isRevoked && !inProgress) {
     return (
       <Centered>
-        <p className="pl-notice">This payment link has been revoked by the merchant.</p>
+        <p className="pl-notice">{t("pl.revoked")}</p>
       </Centered>
     );
   }
   if (isExpired && !inProgress) {
     return (
       <Centered>
-        <p className="pl-notice">This payment link has expired.</p>
+        <p className="pl-notice">{t("pl.expired")}</p>
       </Centered>
     );
   }
   if (isExhausted && !inProgress) {
     return (
       <Centered>
-        <p className="pl-notice">This payment link has already been used the maximum number of times.</p>
+        <p className="pl-notice">{t("pl.exhausted")}</p>
       </Centered>
     );
   }
@@ -469,7 +468,7 @@ export default function PayLink() {
   if (fixed.status === "outdated" && !inProgress) {
     return (
       <Centered>
-        <p className="pl-notice">This payment link is out of date. Please ask the merchant for a new link.</p>
+        <p className="pl-notice">{t("pl.outdated")}</p>
       </Centered>
     );
   }
@@ -477,7 +476,7 @@ export default function PayLink() {
     return (
       <Centered>
         <p className="pl-notice">{fixed.message}</p>
-        <button className="pl-retry-btn" onClick={() => setPriceRetry((r) => r + 1)}>Try again</button>
+        <button className="pl-retry-btn" onClick={() => setPriceRetry((r) => r + 1)}>{t("pl.tryAgain")}</button>
       </Centered>
     );
   }
@@ -521,22 +520,22 @@ export default function PayLink() {
       let quantity = l.amount;
       if (isVariable) {
         const fiat = fixedLocal !== null ? fixedLocal : Number(amountInput);
-        if (!fiat || fiat <= 0) throw new Error("Enter a valid amount.");
+        if (!fiat || fiat <= 0) throw new Error(t("pl.errEnterAmount"));
         // Priced NOW, not at page load: the protocol charges the customer at the
         // price in force when the order is placed, so pricing with a stale rate
         // would miss the amount they were shown.
         const cfg = (country ? await fetchPriceConfig(country.code).catch(() => null) : null) ?? priceCfg;
-        if (!cfg) throw new Error("Could not price this amount right now. Try again shortly.");
+        if (!cfg) throw new Error(t("pl.errNoPrice"));
         // Below p2p.me's small-order fee the fee alone would cost more than the
         // amount, and the customer would be charged it on top.
         const floor = minimumFiat(cfg);
         if (fiat < floor) {
           throw new Error(
-            `That amount is too small to pay — the minimum is ${country ? fmtPayerFiat(country, Math.ceil(floor * 100) / 100) : Math.ceil(floor * 100) / 100}.`
+            t("pl.errTooSmallMin", { min: country ? fmtPayerFiat(country, Math.ceil(floor * 100) / 100) : Math.ceil(floor * 100) / 100 })
           );
         }
         quantity = usdcForFiat(fiat, cfg);
-        if (quantity <= 0n) throw new Error("That amount is too small.");
+        if (quantity <= 0n) throw new Error(t("pl.errTooSmall"));
       }
       // What the relayer charges, in the customer's currency: on an open-amount
       // link it prices this at placement (a fixed-price link charges its own,
@@ -570,11 +569,11 @@ export default function PayLink() {
             })
           : null;
         if (routed === "none") {
-          throw new Error("Payments are busy right now. Please try again in a few minutes.");
+          throw new Error(t("pl.errBusy"));
         }
         circle = routed ?? circleId ?? (await resolveCircleId(linkCurrency));
       }
-      if (circle === null) throw new Error("This currency isn't available for payment right now.");
+      if (circle === null) throw new Error(t("pl.errNoCurrency"));
 
       const identity = await getCustomerIdentity();
       const placeOrder = makeRelayerPlaceOrder({
@@ -627,13 +626,11 @@ export default function PayLink() {
           setConfirming(true);
         } else {
           setStuckReference(e.reference);
-          setPrepareError(
-            `${e.message} Please don't pay again. If it doesn't complete, contact support with this reference: ${e.reference}`
-          );
+          setPrepareError(t("pl.errStuck", { msg: e.message, ref: e.reference }));
         }
         return;
       }
-      setPrepareError(e?.message || "Could not prepare this payment. Please try again.");
+      setPrepareError(e?.message || t("pl.errPrepare"));
     } finally {
       setPreparing(false);
     }
@@ -641,19 +638,6 @@ export default function PayLink() {
 
   return (
     <div className="pl-page">
-      <div className="pl-scene" aria-hidden="true">
-        <PalmCorner className="pl-palm pl-palm-tl" flip={false} />
-        <PalmCorner className="pl-palm pl-palm-tr" flip={true} />
-        <Bird className="pl-bird pl-bird-1" />
-        <Bird className="pl-bird pl-bird-2" />
-        <Bird className="pl-bird pl-bird-3" />
-        <div className="pl-clouds" />
-        <div className="pl-wave pl-wave-1" />
-        <div className="pl-wave pl-wave-2" />
-        <div className="pl-sand-shadow pl-sand-shadow-l" />
-        <div className="pl-sand-shadow pl-sand-shadow-r" />
-      </div>
-
       {orderId ? (
         <PaymentLinkWidget
           linkId={safeLinkId as `0x${string}`}
@@ -679,240 +663,177 @@ export default function PayLink() {
         />
       ) : (
         <div className="pl-hero">
-          <div className="pl-avatar-glow">
-            <div className="pl-avatar">{merchantInitials}</div>
-          </div>
-          <div className={shopName ? "pl-hero-name" : "pl-hero-name pl-hero-name-addr"}>{merchantLabel}</div>
+          <div className="pl-hero-main">
+            <div className="pl-hero-name">{merchantLabel}</div>
 
-          {customerTypes ? (
-            <div className="pl-amount-input-wrap">
-              {/* `country` is non-null whenever a link has loaded, and this
-                  input only renders past that point — but guard rather than
-                  assert, and guard with nothing rather than with a rupee sign:
-                  an empty symbol is honest, a wrong one is not. */}
-              <span className="pl-amount-cur">{country?.symbol ?? ""}</span>
-              <input
-                className="pl-amount-input"
-                type="text"
-                inputMode="decimal"
-                placeholder="0"
-                value={fmtTyped(amountInput)}
-                onChange={(e) => {
-                  const digits = e.target.value.replace(/,/g, "");
-                  if (/^\d*\.?\d{0,2}$/.test(digits)) setAmountInput(digits);
-                }}
-                autoFocus
-              />
-            </div>
-          ) : checkingFixed ? (
-            <div className="pl-hero-amount">…</div>
-          ) : (
-            <div className="pl-hero-amount">{country && fmtPayerFiat(country, amountNum)}</div>
-          )}
-
-          {overCap && country && capFiat !== null && (
-            <p className="pl-error">
-              This shop can accept up to {fmtPayerFiat(country, capFiat)} in one payment.
-            </p>
-          )}
-
-          {prepareError && <p className="pl-error">{prepareError}</p>}
-          {confirming && (
-            <p className="pl-notice">
-              Your payment was sent and is being confirmed. Please keep this page open and don't pay again.
-            </p>
-          )}
-          <button className="pl-pay-btn" onClick={handlePay} disabled={preparing || !canPay}>
-            {confirming ? (
-              <span className="pl-btn-loading">
-                <span className="pl-spinner" aria-hidden="true" />
-                Confirming your payment…
-              </span>
-            ) : preparing ? (
-              <span className="pl-btn-loading">
-                <span className="pl-spinner" aria-hidden="true" />
-                Preparing your payment…
-              </span>
+            {customerTypes ? (
+              <div className="pl-amount-input-wrap">
+                {/* `country` is non-null whenever a link has loaded, and this
+                    input only renders past that point — but guard rather than
+                    assert, and guard with nothing rather than with a rupee sign:
+                    an empty symbol is honest, a wrong one is not. */}
+                <span className="pl-amount-cur">{country?.symbol ?? ""}</span>
+                <input
+                  className="pl-amount-input"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="0"
+                  value={fmtTyped(amountInput)}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/,/g, "");
+                    if (/^\d*\.?\d{0,2}$/.test(digits)) setAmountInput(digits);
+                  }}
+                  autoFocus
+                />
+              </div>
             ) : checkingFixed ? (
-              "Checking link…"
-            ) : isVariable ? (
-              overCap ? (
-                "Amount too high"
-              ) : amountNum > 0 && country ? (
-                `Pay ${fmtPayerFiat(country, amountNum)}`
-              ) : (
-                "Enter an amount"
-              )
+              <div className="pl-hero-amount">…</div>
             ) : (
-              country ? `Pay ${fmtPayerFiat(country, amountNum)}` : "Pay"
+              <div className="pl-hero-amount">{country && fmtPayerFiat(country, amountNum)}</div>
             )}
-          </button>
-          <p className="pl-privacy">
-            To help keep payments safe, we check basic device details (like browser and screen size) when you pay.
-          </p>
+
+            {overCap && country && capFiat !== null && (
+              <p className="pl-error">{t("pl.overCap", { max: fmtPayerFiat(country, capFiat) })}</p>
+            )}
+            {prepareError && <p className="pl-error">{prepareError}</p>}
+            {confirming && <p className="pl-notice">{t("pl.sentConfirming")}</p>}
+          </div>
+
+          <div className="pl-hero-foot">
+            <button className="pl-pay-btn" onClick={handlePay} disabled={preparing || !canPay}>
+              {confirming ? (
+                <span className="pl-btn-loading">
+                  <span className="pl-spinner" aria-hidden="true" />
+                  {t("pl.btnConfirming")}
+                </span>
+              ) : preparing ? (
+                <span className="pl-btn-loading">
+                  <span className="pl-spinner" aria-hidden="true" />
+                  {t("pl.btnPreparing")}
+                </span>
+              ) : checkingFixed ? (
+                t("pl.btnChecking")
+              ) : isVariable ? (
+                overCap ? (
+                  t("pl.btnTooHigh")
+                ) : amountNum > 0 && country ? (
+                  t("pl.btnContinue")
+                ) : (
+                  t("pl.btnEnter")
+                )
+              ) : (
+                t("pl.btnContinue")
+              )}
+            </button>
+            <p className="pl-privacy">{t("pl.privacy")}</p>
+          </div>
         </div>
       )}
 
       <style jsx global>{`
-        .pl-privacy { margin: 14px 0 0; font-size: 11.5px; line-height: 1.4; color: rgba(255,255,255,0.75); text-align: center; max-width: 30ch; }
-      `}</style>
+        :root {
+          --pq-blue: #1d5be0;
+          --pq-blue-dark: #1646b8;
+          --pq-blue-soft: #eef4ff;
+          --pq-ink: #0f1b3d;
+          --pq-muted: #5b6b8c;
+          --pq-faint: #8a97b3;
+          --pq-line: #e1e8f5;
+          --pq-bg: #fbfcff;
+          --pq-danger: #d92d20;
+          --pq-danger-soft: #fdecea;
+        }
 
-      <style jsx global>{`
         .pl-page {
           position: relative;
           min-height: 100vh;
-          overflow-x: hidden;
+          min-height: 100dvh;
           display: flex;
           flex-direction: column;
           align-items: center;
           justify-content: center;
-          font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-          background: linear-gradient(
-            180deg,
-            #0a5fd6 0%,
-            #1279e8 22%,
-            #2fa3ee 42%,
-            #4fc7ea 58%,
-            #7fe0d8 70%,
-            #cdeecb 82%,
-            #f2e6b8 92%,
-            #e8c98a 100%
-          );
+          font-family: "Inter", "Manrope", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+          background: var(--pq-bg);
+          color: var(--pq-ink);
+          -webkit-font-smoothing: antialiased;
         }
 
-        .pl-scene { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-
-        .pl-clouds {
-          position: absolute; left: 0; right: 0; top: 58%; height: 14%;
-          background:
-            radial-gradient(ellipse 70px 20px at 15% 50%, rgba(255,255,255,.75), transparent 70%),
-            radial-gradient(ellipse 100px 26px at 40% 40%, rgba(255,255,255,.65), transparent 70%),
-            radial-gradient(ellipse 80px 22px at 68% 55%, rgba(255,255,255,.7), transparent 70%),
-            radial-gradient(ellipse 60px 18px at 88% 45%, rgba(255,255,255,.55), transparent 70%);
-          filter: blur(1px);
-        }
-
-        .pl-wave {
-          position: absolute; left: -10%; right: -10%; height: 40px;
-          border-radius: 50%;
-          background: rgba(255,255,255,0.5);
-          filter: blur(2px);
-        }
-        .pl-wave-1 { top: 74%; opacity: .8; }
-        .pl-wave-2 { top: 79%; opacity: .55; height: 30px; }
-
-        .pl-sand-shadow {
-          position: absolute; bottom: 0; width: 46%; height: 22%;
-          background: radial-gradient(ellipse at center, rgba(20,20,30,0.22), transparent 70%);
-          filter: blur(6px);
-        }
-        .pl-sand-shadow-l { left: -6%; transform: rotate(8deg); }
-        .pl-sand-shadow-r { right: -6%; transform: rotate(-8deg) scaleX(-1); }
-
-        .pl-palm { position: absolute; width: 46vw; max-width: 260px; height: auto; opacity: 0.96; filter: drop-shadow(0 12px 18px rgba(0,30,20,0.25)); }
-        .pl-palm-tl { top: -6%; left: -8%; }
-        .pl-palm-tr { top: -6%; right: -8%; }
-
-        .pl-bird { position: absolute; width: 30px; height: auto; opacity: 0.9; animation: plBirdBob 4s ease-in-out infinite; }
-        .pl-bird-1 { top: 32%; left: 10%; width: 34px; animation-delay: 0s; }
-        .pl-bird-2 { top: 36%; right: 14%; width: 22px; animation-delay: .6s; }
-        .pl-bird-3 { top: 40%; right: 9%; width: 16px; animation-delay: 1.1s; }
-        @keyframes plBirdBob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
-        @media (prefers-reduced-motion: reduce) { .pl-bird { animation: none; } }
-
+        /* Step 1. Phone: the amount block is centred in the space above a
+           bottom-anchored button. Larger screens: one centred column. */
         .pl-hero {
-          position: relative; z-index: 1;
-          width: 100%; max-width: 460px;
-          flex: 1;
-          display: flex; flex-direction: column; align-items: center; justify-content: center;
-          text-align: center;
-          padding: 40px 28px 90px;
+          width: 100%; max-width: 440px;
+          min-height: 100vh; min-height: 100dvh;
+          display: flex; flex-direction: column;
+          padding: 28px 20px calc(24px + env(safe-area-inset-bottom));
+          box-sizing: border-box;
         }
-
-        .pl-avatar-glow {
-          width: 108px; height: 108px; border-radius: 50%;
-          background: radial-gradient(circle, rgba(255,255,255,0.55) 0%, rgba(255,255,255,0) 70%);
-          display: flex; align-items: center; justify-content: center;
+        .pl-hero-main {
+          flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+          text-align: center; gap: 14px;
         }
-        .pl-avatar {
-          width: 84px; height: 84px; border-radius: 50%;
-          background: #ffffff; color: #453deb;
-          font-weight: 800; font-size: 22px; letter-spacing: -0.02em;
-          display: flex; align-items: center; justify-content: center;
-          box-shadow: 0 10px 30px -8px rgba(10, 30, 60, 0.35);
-        }
+        .pl-hero-foot { display: flex; flex-direction: column; align-items: center; }
 
         .pl-hero-name {
-          margin-top: 18px; font-size: 17px; font-weight: 700; color: #ffffff;
-          letter-spacing: -0.01em; text-shadow: 0 2px 10px rgba(0,20,50,0.25);
+          font-size: 17px; font-weight: 700; letter-spacing: -0.01em; color: var(--pq-ink);
+          max-width: 100%; overflow-wrap: anywhere;
         }
-        .pl-hero-name-addr {
-          font-family: ui-monospace, "SF Mono", Menlo, monospace;
-        }
-
         .pl-hero-amount {
-          margin-top: 14px; font-size: 58px; font-weight: 800; letter-spacing: -0.03em;
-          line-height: 1; color: #ffffff; font-variant-numeric: tabular-nums;
-          text-shadow: 0 4px 22px rgba(0,20,50,0.28);
+          font-size: 56px; font-weight: 800; letter-spacing: -0.035em; line-height: 1.05;
+          color: var(--pq-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
         }
 
-        .pl-amount-input-wrap {
-          margin-top: 14px; display: flex; align-items: baseline; justify-content: center; gap: 4px;
-        }
-        .pl-amount-cur {
-          font-size: 40px; font-weight: 800; color: rgba(255,255,255,0.75);
-          text-shadow: 0 4px 22px rgba(0,20,50,0.28);
-        }
+        .pl-amount-input-wrap { display: flex; align-items: baseline; justify-content: center; gap: 4px; max-width: 100%; }
+        .pl-amount-cur { font-size: 36px; font-weight: 700; color: var(--pq-faint); }
         .pl-amount-input {
           border: none; background: none; font-family: inherit;
-          font-size: 58px; font-weight: 800; letter-spacing: -0.03em;
-          color: #ffffff; width: 220px; text-align: center;
-          font-variant-numeric: tabular-nums;
-          text-shadow: 0 4px 22px rgba(0,20,50,0.28);
+          font-size: 56px; font-weight: 800; letter-spacing: -0.035em;
+          color: var(--pq-ink); width: 240px; max-width: 70vw; text-align: center;
+          font-variant-numeric: tabular-nums; padding: 0;
         }
         .pl-amount-input:focus { outline: none; }
-        .pl-amount-input::placeholder { color: rgba(255,255,255,0.6); }
+        .pl-amount-input::placeholder { color: #c3cce0; }
 
-        .pl-error {
-          margin-top: 16px; font-size: 13px; color: #ffe1de;
-          text-shadow: 0 1px 6px rgba(0,20,50,0.25); text-align: center;
-        }
+        .pl-error { margin: 0; font-size: 13.5px; color: var(--pq-danger); text-align: center; max-width: 34ch; }
+        .pl-notice { margin: 0; font-size: 14.5px; font-weight: 500; line-height: 1.5; color: var(--pq-muted); text-align: center; max-width: 34ch; padding: 0 20px; }
 
         .pl-pay-btn {
-          margin-top: 30px; width: 100%; max-width: 340px; border: none; cursor: pointer;
-          background: #ffffff; color: #453deb;
-          font-family: inherit; font-size: 17px; font-weight: 800; letter-spacing: -0.01em;
-          padding: 19px 20px; border-radius: 999px;
-          box-shadow: 0 18px 40px -14px rgba(0, 20, 60, 0.35);
-          transition: transform 0.1s ease, box-shadow 0.15s ease, opacity .15s ease;
+          width: 100%; border: none; cursor: pointer;
+          background: #0b2a6f; color: #ffffff;
+          font-family: inherit; font-size: 17px; font-weight: 700; letter-spacing: 0.01em;
+          padding: 18px 20px; border-radius: 16px;
+          box-shadow: 0 8px 20px -8px rgba(11,42,111,0.6);
+          transition: background .12s ease, transform .08s ease, opacity .12s ease;
         }
-        .pl-pay-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 22px 46px -14px rgba(0, 20, 60, 0.4); }
+        .pl-pay-btn:hover:not(:disabled) { background: #081f55; }
         .pl-pay-btn:active:not(:disabled) { transform: translateY(1px); }
-        .pl-pay-btn:disabled { cursor: default; opacity: 0.7; }
+        .pl-pay-btn:disabled { cursor: default; opacity: 0.5; }
+        .pl-pay-btn:focus-visible, .pl-retry-btn:focus-visible { outline: 3px solid rgba(29,91,224,0.35); outline-offset: 2px; }
 
         .pl-btn-loading { display: inline-flex; align-items: center; justify-content: center; gap: 10px; }
         .pl-spinner {
           width: 16px; height: 16px; border-radius: 50%;
-          border: 2px solid rgba(69,61,235,0.25); border-top-color: #453deb;
+          border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff;
           animation: plSpin 0.7s linear infinite;
         }
         @keyframes plSpin { to { transform: rotate(360deg); } }
         @media (prefers-reduced-motion: reduce) { .pl-spinner { animation-duration: 1.4s; } }
 
-        .pl-notice {
-          position: relative; z-index: 1; color: #ffffff; font-size: 15px; font-weight: 600;
-          text-align: center; text-shadow: 0 2px 10px rgba(0,20,50,0.25); max-width: 320px; padding: 0 20px;
-        }
-        .pl-retry-btn {
-          position: relative; z-index: 1; margin-top: 16px; border: none; cursor: pointer;
-          background: #ffffff; color: #453deb; font-family: inherit; font-size: 14px; font-weight: 700;
-          padding: 12px 24px; border-radius: 999px;
-        }
+        .pl-privacy { margin: 14px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--pq-faint); text-align: center; max-width: 36ch; }
 
+        .pl-retry-btn {
+          margin-top: 16px; border: none; cursor: pointer;
+          background: #0b2a6f; color: #fff; font-family: inherit; font-size: 15px; font-weight: 700;
+          padding: 13px 28px; border-radius: 14px;
+        }
+        .pl-retry-btn:hover { background: #081f55; }
+
+        @media (min-width: 640px) {
+          .pl-hero { min-height: 0; padding: 48px 32px; }
+          .pl-hero-main { flex: none; padding: 24px 0 36px; }
+          .pl-hero-foot { width: 100%; max-width: 360px; align-self: center; }
+        }
         @media (max-width: 380px) {
-          .pl-hero-amount, .pl-amount-input { font-size: 48px; }
-          .pl-avatar-glow { width: 92px; height: 92px; }
-          .pl-avatar { width: 72px; height: 72px; font-size: 20px; }
+          .pl-hero-amount, .pl-amount-input { font-size: 46px; }
         }
       `}</style>
     </div>
@@ -922,57 +843,19 @@ export default function PayLink() {
 function Centered({ children }: { children: React.ReactNode }) {
   return (
     <div className="pl-page">
-      <div className="pl-scene" aria-hidden="true">
-        <PalmCorner className="pl-palm pl-palm-tl" flip={false} />
-        <PalmCorner className="pl-palm pl-palm-tr" flip={true} />
-      </div>
-      <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8, padding: "0 20px" }}>
         {children}
       </div>
       <style jsx global>{`
         .pl-page {
-          position: relative; min-height: 100vh; overflow-x: hidden;
+          position: relative; min-height: 100vh; min-height: 100dvh;
           display: flex; align-items: center; justify-content: center;
-          font-family: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-          background: linear-gradient(180deg, #0a5fd6 0%, #1279e8 22%, #2fa3ee 42%, #4fc7ea 58%, #7fe0d8 70%, #cdeecb 82%, #f2e6b8 92%, #e8c98a 100%);
+          font-family: "Inter", "Manrope", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+          background: #fbfcff; color: #0f1b3d;
         }
-        .pl-scene { position: absolute; inset: 0; z-index: 0; pointer-events: none; }
-        .pl-palm { position: absolute; width: 46vw; max-width: 260px; height: auto; opacity: 0.96; }
-        .pl-palm-tl { top: -6%; left: -8%; }
-        .pl-palm-tr { top: -6%; right: -8%; }
-        .pl-notice { color: #ffffff; font-size: 15px; font-weight: 600; text-align: center; text-shadow: 0 2px 10px rgba(0,20,50,0.25); max-width: 320px; padding: 0 20px; }
-        .pl-retry-btn { border: none; cursor: pointer; background: #ffffff; color: #453deb; font-family: inherit; font-size: 14px; font-weight: 700; padding: 12px 24px; border-radius: 999px; }
+        .pl-notice { margin: 0; font-size: 14.5px; font-weight: 500; line-height: 1.5; color: #5b6b8c; text-align: center; max-width: 34ch; }
+        .pl-retry-btn { border: none; cursor: pointer; background: #0b2a6f; color: #fff; font-family: inherit; font-size: 15px; font-weight: 700; padding: 13px 28px; border-radius: 14px; }
       `}</style>
     </div>
-  );
-}
-
-function PalmCorner({ className, flip }: { className: string; flip: boolean }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 200 180"
-      style={flip ? { transform: "scaleX(-1)" } : undefined}
-    >
-      <g fill="#1f4d2c" opacity="0.92">
-        <path d="M4 6 C40 20 80 50 96 100 C82 66 46 34 4 22 Z" />
-        <path d="M2 -4 C46 2 92 22 118 64 C96 34 52 10 2 6 Z" />
-        <path d="M8 20 C50 40 84 76 96 120 C76 82 42 52 8 34 Z" />
-        <path d="M0 34 C36 58 60 92 68 130 C48 98 22 70 0 50 Z" />
-        <path d="M10 -10 C56 -8 104 6 134 40 C108 14 60 -2 10 2 Z" />
-      </g>
-      <g fill="#173d22" opacity="0.85">
-        <path d="M0 0 C34 8 66 30 84 66 C68 40 36 16 0 12 Z" />
-        <path d="M6 16 C42 30 72 60 82 96 C64 66 36 40 6 30 Z" />
-      </g>
-    </svg>
-  );
-}
-
-function Bird({ className }: { className: string }) {
-  return (
-    <svg className={className} viewBox="0 0 32 14" fill="none">
-      <path d="M1 8 C6 2 10 2 16 7 C22 2 26 2 31 8" stroke="rgba(255,255,255,0.92)" strokeWidth="2" strokeLinecap="round" fill="none" />
-    </svg>
   );
 }
