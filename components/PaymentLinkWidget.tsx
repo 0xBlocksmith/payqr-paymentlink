@@ -20,6 +20,7 @@ import { fetchPriceConfig } from "../lib/pricing";
 import type { PriceConfig } from "../lib/pricing";
 import { PAYMENT_LINK_QR_STYLE } from "./PaymentLinkQR";
 import { Logo } from "./Icons";
+import { usePayerT, PAYER_DATE_LOCALE } from "../lib/payerI18n";
 import type { Hex } from "viem";
 
 /**
@@ -66,6 +67,8 @@ const POLL_MS = 4000;
 type PaymentLinkWidgetProps = {
   linkId: Hex;
   merchantName?: string;
+  /** What the payment is for, when the caller has it (the stored one is merchant-only). */
+  description?: string;
   currencyBytes32: Hex;
   /** The fiat amount the payer was quoted when they placed the order. */
   quotedFiat?: number | null;
@@ -110,9 +113,6 @@ function supportHref(orderId: string): string {
   return `https://t.me/PayQRdotPRO/1819?text=${encodeURIComponent(`Hi, I need help with payment #${orderId}.`)}`;
 }
 
-/** Shown while a dispute is open on the order. */
-const REVIEW_NOTE = "Your payment is being reviewed by our support team. This page will update when it's done.";
-
 function upiUri(params:{ upiId: string; merchantName: string; amountInr: string; orderId: string }) {
   const q = new URLSearchParams({
     pa: params.upiId,
@@ -150,6 +150,7 @@ function compoundRowsFor(currency: string, payoutId: string | null): { key: stri
 export function PaymentLinkWidget({
   linkId,
   merchantName = "the merchant",
+  description,
   currencyBytes32,
   quotedFiat,
   orderId,
@@ -161,6 +162,7 @@ export function PaymentLinkWidget({
   onNewPayment,
   getHumanSolution,
 }: PaymentLinkWidgetProps) {
+  const { t } = usePayerT();
   const [order, setOrder] = useState<Order | null>(null);
   const [decryptedUpi, setDecryptedUpi] = useState<string | null>(null);
   const [phase, setPhase] = useState<UiPhase>("matching");
@@ -360,7 +362,7 @@ export function PaymentLinkWidget({
         setPhase("paying");
         return;
       }
-      const m = e?.message || "Couldn't confirm this payment. Please try again.";
+      const m = e?.message || t("pl.errMarkPaid");
       setErrorMsg(m);
       onError?.(m);
     } finally {
@@ -379,7 +381,7 @@ export function PaymentLinkWidget({
       setPhase("cancelled");
       onCancel?.(orderId);
     } catch (e: any) {
-      const m = e?.message || "Couldn't cancel this order. Please try again.";
+      const m = e?.message || t("pl.errCancel");
       setErrorMsg(m);
       onError?.(m);
     } finally {
@@ -440,23 +442,27 @@ export function PaymentLinkWidget({
     <div className="pc-content">
       <div className="pc-card">
         <div className="pc-head">
-          <div className="pc-head-amount">{fiatDisplay}</div>
-          {phase === "accepted" && <StatusStrip secondsLeft={secondsLeft} urgent={urgent} />}
+          <div className="pc-head-merchant">{merchantName}</div>
+          <div className="pc-head-right">
+            <div className="pc-head-amount">{fiatDisplay}</div>
+            {description && <div className="pc-head-desc">{description}</div>}
+          </div>
         </div>
+        {phase === "accepted" && <StatusStrip secondsLeft={secondsLeft} urgent={urgent} />}
 
         {phase === "matching" && (
           <div className="pc-matching">
             <span className="pc-spinner" aria-hidden="true" />
-            <div className="pc-matching-h">Setting up your payment…</div>
-            <div className="pc-matching-sub">This usually takes a few seconds.</div>
+            <div className="pc-matching-h">{t("pl.settingUp")}</div>
+            <div className="pc-matching-sub">{t("pl.fewSeconds")}</div>
           </div>
         )}
 
         {ownership === "mismatch" && (
           <div className="pc-expired">
-            <div className="pc-expired-h">Please don't pay</div>
+            <div className="pc-expired-h">{t("pl.dontPay")}</div>
             <div className="pc-expired-sub">
-              We couldn't confirm this payment belongs to this link. Nothing has been charged.
+              {t("pl.mismatchSub")}
             </div>
             <a
               className="pc-expired-sub"
@@ -464,7 +470,7 @@ export function PaymentLinkWidget({
               target="_blank"
               rel="noopener noreferrer"
             >
-              Contact support ↗
+              {t("pl.contactSupport")}
             </a>
           </div>
         )}
@@ -473,9 +479,9 @@ export function PaymentLinkWidget({
           <>
             {decryptFailed ? (
               <div className="pc-expired">
-                <div className="pc-expired-h">Payment details unavailable</div>
+                <div className="pc-expired-h">{t("pl.detailsUnavailable")}</div>
                 <div className="pc-expired-sub">
-                  We couldn't open the payment details on this device. Please don't pay yet — contact support.
+                  {t("pl.detailsUnavailableSub")}
                 </div>
                 <a
                   className="pc-expired-sub"
@@ -483,13 +489,13 @@ export function PaymentLinkWidget({
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Contact support ↗
+                  {t("pl.contactSupport")}
                 </a>
               </div>
             ) : !decryptedUpi || ownership !== "ok" ? (
               <div className="pc-matching">
                 <span className="pc-spinner" aria-hidden="true" />
-                <div className="pc-matching-sub">Getting payment details…</div>
+                <div className="pc-matching-sub">{t("pl.gettingDetails")}</div>
               </div>
             ) : (
               <>
@@ -504,7 +510,7 @@ export function PaymentLinkWidget({
                 )}
 
                 <div className="pc-details">
-                  <div className="pc-details-h">Payment details</div>
+                  <div className="pc-details-h">{t("pl.paymentDetails")}</div>
                   {compoundRows?.map((r) => (
                     <DetailRow
                       key={r.key}
@@ -529,17 +535,22 @@ export function PaymentLinkWidget({
                       mono
                     />
                   )}
-                  <DetailRow label="Amount" value={fiatDisplay} />
+                  <DetailRow label={t("pl.amount")} value={fiatDisplay} />
                 </div>
 
                 {errorMsg && <p className="pc-error">{errorMsg}</p>}
 
+                <div className="pc-paid-note" role="note">
+                  <div className="pc-paid-note-h">{t("pl.paidNoteH")}</div>
+                  <div className="pc-paid-note-sub">{t("pl.paidNoteSub")}</div>
+                </div>
+
                 <button className="pc-paid-btn" onClick={handleMarkPaid} disabled={busy}>
-                  {busy ? "Confirming…" : "I've paid"}
+                  {busy ? t("pl.confirming") : t("pl.ivePaid")}
                 </button>
 
                 <button className="pc-cancel-btn" onClick={() => setConfirmCancel(true)} disabled={busy}>
-                  Cancel order
+                  {t("pl.cancel")}
                 </button>
               </>
             )}
@@ -549,8 +560,8 @@ export function PaymentLinkWidget({
         {phase === "paying" && (
           <div className="pc-matching">
             <span className="pc-spinner" aria-hidden="true" />
-            <div className="pc-matching-h">Verifying your payment</div>
-            <div className="pc-matching-sub">Confirming receipt. Usually under a minute.</div>
+            <div className="pc-matching-h">{t("pl.verifying")}</div>
+            <div className="pc-matching-sub">{t("pl.verifyingSub")}</div>
             {warningMsg && <p className="pc-error">{warningMsg}</p>}
           </div>
         )}
@@ -600,9 +611,9 @@ export function PaymentLinkWidget({
             full-screen and show the same notice inside their own card. */}
         {underReview && phase === "paying" && (
           <div className="pc-expired-sub" style={{ marginTop: 12 }}>
-            {REVIEW_NOTE}{" "}
+            {t("pl.reviewNote")}{" "}
             <a href={supportHref(orderId || "")} target="_blank" rel="noopener noreferrer">
-              Contact support ↗
+              {t("pl.contactSupport")}
             </a>
           </div>
         )}
@@ -615,11 +626,11 @@ export function PaymentLinkWidget({
         {confirmCancel && (
           <div className="pc-confirm-overlay" role="dialog" aria-modal="true">
             <div className="pc-confirm-card">
-              <div className="pc-confirm-h">Cancel this order?</div>
-              <div className="pc-confirm-sub">If you've already paid, don't cancel — wait for confirmation instead.</div>
+              <div className="pc-confirm-h">{t("pl.cancelQ")}</div>
+              <div className="pc-confirm-sub">{t("pl.cancelQSub")}</div>
               <div className="pc-confirm-actions">
-                <button className="pc-confirm-keep" onClick={() => setConfirmCancel(false)}>Keep order</button>
-                <button className="pc-confirm-yes" onClick={handleCancel} disabled={busy}>Yes, cancel</button>
+                <button className="pc-confirm-keep" onClick={() => setConfirmCancel(false)}>{t("pl.keepOrder")}</button>
+                <button className="pc-confirm-yes" onClick={handleCancel} disabled={busy}>{t("pl.yesCancel")}</button>
               </div>
             </div>
           </div>
@@ -627,218 +638,171 @@ export function PaymentLinkWidget({
       </div>
 
       <style jsx global>{`
-        :root {
-          --pq-accent: #453deb;
-          --pq-accent-dark: #362fc4;
-          --pq-accent-soft: #eeedfd;
-          --pq-panel-2: rgba(255,255,255,0.82);
-          --pq-border: #ecebf5;
-          --pq-text: #14132b;
-          --pq-muted: #6b6a7d;
-          --pq-faint: #a2a1b5;
-          --pq-success: #0f9d6f;
-          --pq-success-soft: #e5f7ef;
-          --pq-warn: #c9791a;
-          --pq-warn-soft: #fdf0de;
-          --pq-danger: #d8433a;
-          --pq-danger-soft: #fce9e7;
-        }
-
         .pc-content {
-          position: relative; z-index: 1;
-          width: 100%; max-width: 420px;
-          padding: 44px 18px 48px;
-          margin: 0 auto;
+          --pq-blue: #1d5be0;
+          --pq-blue-dark: #1646b8;
+          --pq-blue-soft: #eef4ff;
+          --pq-ink: #0f1b3d;
+          --pq-muted: #5b6b8c;
+          --pq-faint: #8a97b3;
+          --pq-line: #e1e8f5;
+          --pq-success: #0f9d6f;
+          --pq-warn: #b45f06;
+          --pq-warn-soft: #fff4e5;
+          --pq-danger: #d92d20;
+          --pq-danger-soft: #fdecea;
+          position: relative;
+          width: 100%; max-width: 440px;
+          padding: 28px 20px calc(28px + env(safe-area-inset-bottom));
+          margin: 0 auto; box-sizing: border-box;
+          color: var(--pq-ink);
         }
+        @media (min-width: 640px) { .pc-content { padding-top: 56px; } }
 
-        .pc-card { background: transparent; display: flex; flex-direction: column; }
+        .pc-card { display: flex; flex-direction: column; }
 
-        .pc-head { display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: 22px; }
-        .pc-head-amount {
-          font-size: 44px; font-weight: 800; letter-spacing: -0.03em;
-          color: #ffffff; font-variant-numeric: tabular-nums;
-          text-shadow: 0 4px 22px rgba(0,20,50,0.28);
-        }
+        /* Header: shop on the left, amount (and what it is for) on the right. */
+        .pc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+        .pc-head-merchant { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: var(--pq-ink); min-width: 0; overflow-wrap: anywhere; padding-top: 4px; }
+        .pc-head-right { text-align: right; flex: none; max-width: 60%; }
+        .pc-head-amount { font-size: 28px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; color: var(--pq-ink); font-variant-numeric: tabular-nums; }
+        .pc-head-desc { margin-top: 3px; font-size: 13px; font-weight: 500; color: var(--pq-muted); overflow-wrap: anywhere; }
 
-        .pc-matching {
-          display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px;
-          padding: 36px 24px;
-        }
-        .pc-matching-h { font-size: 17px; font-weight: 800; color: #ffffff; text-shadow: 0 2px 10px rgba(0,20,50,0.25); }
-        .pc-matching-sub { font-size: 13px; color: rgba(255,255,255,0.85); text-shadow: 0 1px 6px rgba(0,20,50,0.2); }
+        .pc-status { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; padding: 9px 12px; background: var(--pq-blue-soft); border-radius: 10px; }
+        .pc-status.urgent { background: var(--pq-warn-soft); }
+        .pc-status-text { font-size: 12.5px; font-weight: 600; color: var(--pq-blue-dark); }
+        .pc-status.urgent .pc-status-text { color: var(--pq-warn); }
+        .pc-status-timer { font-variant-numeric: tabular-nums; font-weight: 700; }
+        .pc-pulse { width: 7px; height: 7px; border-radius: 50%; background: var(--pq-blue); flex: none; animation: pcPulse 1.3s ease-in-out infinite; }
+        .pc-status.urgent .pc-pulse { background: var(--pq-warn); }
+        @keyframes pcPulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+        @media (prefers-reduced-motion: reduce) { .pc-pulse { animation: none; opacity: .8; } }
+
+        .pc-matching { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 56px 16px; }
+        .pc-matching-h { font-size: 17px; font-weight: 700; color: var(--pq-ink); }
+        .pc-matching-sub { font-size: 13.5px; color: var(--pq-muted); }
         .pc-spinner {
-          width: 30px; height: 30px; border-radius: 50%;
-          border: 3px solid rgba(255,255,255,0.35); border-top-color: #fff;
+          width: 28px; height: 28px; border-radius: 50%;
+          border: 3px solid var(--pq-line); border-top-color: var(--pq-blue);
           animation: pcSpin .8s linear infinite;
         }
         @keyframes pcSpin { to { transform: rotate(360deg); } }
         @media (prefers-reduced-motion: reduce) { .pc-spinner { animation-duration: 1.6s; } }
 
-        .pc-qr-card { margin: 0 0 16px; padding: 22px; border: 1px solid rgba(255,255,255,0.7); border-radius: 20px; background: var(--pq-panel-2); backdrop-filter: blur(12px); display: flex; flex-direction: column; align-items: center; gap: 12px; box-shadow: 0 18px 40px -20px rgba(0,20,60,0.35); }
-        .pc-qr-label { font-size: 12.5px; font-weight: 700; color: var(--pq-muted); text-transform: uppercase; letter-spacing: 0.05em; }
-        .pc-qr-box { padding: 12px; background: #fff; border-radius: 16px; box-shadow: 0 1px 2px rgba(20,18,60,.06); }
-        .pc-qr-hint { font-size: 12px; color: var(--pq-muted); text-align: center; max-width: 26ch; }
+        /* QR: centred, a plain white tile — no card behind it. */
+        .pc-qr-card { margin: 28px 0 8px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+        .pc-qr-label { display: none; }
+        .pc-qr-box { padding: 14px; background: #fff; border: 1px solid var(--pq-line); border-radius: 14px; line-height: 0; }
+        .pc-qr-hint { font-size: 12.5px; color: var(--pq-muted); text-align: center; max-width: 30ch; }
 
-        .pc-details { margin: 0 0 16px; padding: 6px 18px; border: 1px solid rgba(255,255,255,0.7); border-radius: 16px; background: var(--pq-panel-2); backdrop-filter: blur(12px); box-shadow: 0 18px 40px -20px rgba(0,20,60,0.35); }
-        .pc-details-h { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--pq-faint); padding: 12px 0 4px; }
-        .pc-drow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 0; border-top: 1px dashed var(--pq-border); }
+        .pc-apps { margin: 14px 0 0; }
+        .pc-apps-h { font-size: 12.5px; font-weight: 600; color: var(--pq-muted); margin-bottom: 8px; text-align: center; }
+        .pc-copy-code-btn {
+          width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
+          border: 1px solid #0b2a6f; background: #0b2a6f; color: #fff; border-radius: 14px; padding: 14px 10px;
+          font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer; transition: background .12s ease;
+        }
+        .pc-copy-code-btn:hover { background: #081f55; }
+        .pc-copy-code-btn.copied { background: var(--pq-success); border-color: var(--pq-success); color: #fff; }
+
+        .pc-bank-card { margin: 28px 0 8px; text-align: center; }
+        .pc-bank-h { font-size: 15px; font-weight: 700; color: var(--pq-ink); margin-bottom: 4px; }
+        .pc-bank-sub { font-size: 13.5px; color: var(--pq-muted); line-height: 1.5; }
+
+        /* Payment details: hairlines, no box. */
+        .pc-details { margin: 20px 0 0; border-top: 1px solid var(--pq-line); }
+        .pc-details-h { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--pq-faint); padding: 14px 0 2px; }
+        .pc-drow { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 0; border-top: 1px solid var(--pq-line); }
         .pc-drow:first-of-type { border-top: none; }
-        .pc-drow-k { font-size: 12.5px; color: var(--pq-muted); font-weight: 600; flex: none; }
+        .pc-drow-k { font-size: 13px; color: var(--pq-muted); font-weight: 500; flex: none; }
         .pc-drow-v { display: flex; align-items: center; gap: 8px; min-width: 0; }
-        .pc-drow-val { font-size: 13.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pq-text); }
-        .pc-drow-val.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12.5px; }
-        .pc-copy-btn { flex: none; border: none; background: var(--pq-accent-soft); color: var(--pq-accent); width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .12s ease; }
-        .pc-copy-btn:hover { background: var(--pq-accent); color: #fff; }
+        .pc-drow-val { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pq-ink); }
+        .pc-drow-val.mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; }
+        .pc-copy-btn { flex: none; border: none; background: var(--pq-blue-soft); color: var(--pq-blue); width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background .12s ease; }
+        .pc-copy-btn:hover { background: var(--pq-blue); color: #fff; }
         .pc-copy-btn.copied { background: var(--pq-success); color: #fff; }
 
-        .pc-apps { margin: 0 0 16px; }
-        .pc-apps-h { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #ffffff; margin-bottom: 10px; text-align: center; text-shadow: 0 1px 6px rgba(0,20,50,0.25); }
-        .pc-app-btn {
-          display: flex; align-items: center; justify-content: center; gap: 8px;
-          border: 1px solid rgba(255,255,255,0.7); background: var(--pq-panel-2); color: var(--pq-text);
-          backdrop-filter: blur(12px);
-          border-radius: 14px; padding: 13px 10px; font-size: 13.5px; font-weight: 700;
-          text-decoration: none; cursor: pointer; transition: border-color .12s ease, background .12s ease;
-          box-shadow: 0 12px 26px -18px rgba(0,20,60,0.35);
-        }
-        .pc-app-btn:hover { border-color: var(--pq-accent); background: #ffffff; }
-        .pc-app-btn-wide { width: 100%; }
+        .pc-error { color: var(--pq-danger); font-size: 13.5px; text-align: center; margin: 14px 0 0; }
 
-        .pc-copy-code-btn {
-          margin-top: 4px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 8px;
-          border: none; background: var(--pq-accent); color: #fff; border-radius: 14px; padding: 14px 10px;
-          font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer;
-          transition: background .12s ease;
-        }
-        .pc-copy-code-btn:hover { background: var(--pq-accent-dark); }
-        .pc-copy-code-btn.copied { background: var(--pq-success); }
-
-        .pc-bank-card { margin: 0 0 16px; padding: 20px; border: 1px solid rgba(255,255,255,0.7); border-radius: 20px; background: var(--pq-panel-2); backdrop-filter: blur(12px); box-shadow: 0 18px 40px -20px rgba(0,20,60,0.35); }
-        .pc-bank-h { font-size: 12.5px; font-weight: 700; color: var(--pq-muted); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
-        .pc-bank-sub { font-size: 12.5px; color: var(--pq-muted); }
-
-        .pc-error { color: #ffe1de; font-size: 13px; text-align: center; margin: 0 0 12px; text-shadow: 0 1px 6px rgba(0,20,50,0.25); }
+        /* The "press I Paid only after paying" notice. Noticeable, not alarming. */
+        .pc-paid-note { margin: 22px 0 14px; padding: 12px 14px; border-radius: 10px; background: var(--pq-blue-soft); border-left: 3px solid var(--pq-blue); }
+        .pc-paid-note-h { font-size: 14px; font-weight: 700; color: var(--pq-ink); line-height: 1.4; }
+        .pc-paid-note-sub { margin-top: 4px; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }
 
         .pc-paid-btn {
           width: 100%; border: none; cursor: pointer;
-          background: #ffffff; color: #453deb;
-          font-family: inherit; font-size: 15px; font-weight: 800; letter-spacing: -0.01em;
-          padding: 15px 20px; border-radius: 14px;
-          transition: opacity .12s ease, transform .08s ease;
-          box-shadow: 0 18px 40px -20px rgba(0,20,60,0.4);
+          background: #0b2a6f; color: #fff;
+          font-family: inherit; font-size: 17px; font-weight: 700; letter-spacing: 0.01em;
+          padding: 17px 20px; border-radius: 16px;
+          box-shadow: 0 8px 20px -8px rgba(11,42,111,0.6);
+          transition: background .12s ease, transform .08s ease, opacity .12s ease;
         }
-        .pc-paid-btn:hover:not(:disabled) { opacity: 0.9; }
+        .pc-paid-btn:hover:not(:disabled) { background: #081f55; }
         .pc-paid-btn:active:not(:disabled) { transform: translateY(1px); }
-        .pc-paid-btn:disabled { opacity: 0.6; cursor: default; }
+        .pc-paid-btn:disabled { opacity: 0.55; cursor: default; }
+        .pc-paid-btn:focus-visible, .pc-cancel-btn:focus-visible { outline: 3px solid rgba(29,91,224,0.35); outline-offset: 2px; }
 
+        /* Cancel is a quiet text action so it never competes with I Paid. */
         .pc-cancel-btn {
-          margin-top: 10px; width: 100%; cursor: pointer;
-          background: var(--pq-panel-2); backdrop-filter: blur(12px);
-          border: 1px solid rgba(255,255,255,0.7); color: var(--pq-danger);
-          font-family: inherit; font-size: 14px; font-weight: 700; letter-spacing: -0.01em;
-          padding: 13px; border-radius: 14px; transition: background .12s ease;
-          box-shadow: 0 12px 26px -18px rgba(0,20,60,0.3);
+          display: block; margin: 8px auto 0; padding: 12px 20px; cursor: pointer;
+          background: none; border: none; color: var(--pq-muted);
+          font-family: inherit; font-size: 14px; font-weight: 600; border-radius: 8px;
         }
-        .pc-cancel-btn:hover:not(:disabled) { background: var(--pq-danger-soft); }
-        .pc-cancel-btn:disabled { opacity: 0.6; cursor: default; }
+        .pc-cancel-btn:hover:not(:disabled) { color: var(--pq-danger); }
+        .pc-cancel-btn:disabled { opacity: 0.5; cursor: default; }
 
         .pc-confirm-overlay {
           position: fixed; inset: 0; z-index: 50;
-          background: rgba(10,15,30,0.5); backdrop-filter: blur(2px);
+          background: rgba(15,27,61,0.45);
           display: flex; align-items: flex-end; justify-content: center;
           padding: 20px; animation: pcFadeIn .18s ease;
         }
+        @media (min-width: 640px) { .pc-confirm-overlay { align-items: center; } }
         @keyframes pcFadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .pc-confirm-card {
-          width: 100%; max-width: 380px; background: #ffffff; border-radius: 22px;
-          padding: 22px 20px; box-shadow: 0 30px 60px -20px rgba(0,20,60,0.4);
-          animation: pcSlideUp .22s cubic-bezier(.2,1,.4,1);
-        }
-        @keyframes pcSlideUp { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-        @media (prefers-reduced-motion: reduce) { .pc-confirm-overlay, .pc-confirm-card { animation: none; } }
-        .pc-confirm-h { font-size: 17px; font-weight: 800; color: var(--pq-text); letter-spacing: -0.01em; }
-        .pc-confirm-sub { font-size: 13px; color: var(--pq-muted); margin-top: 6px; line-height: 1.5; }
+        .pc-confirm-card { width: 100%; max-width: 380px; background: #fff; border-radius: 16px; padding: 22px 20px; box-shadow: 0 20px 50px -20px rgba(15,27,61,0.4); }
+        @media (prefers-reduced-motion: reduce) { .pc-confirm-overlay { animation: none; } }
+        .pc-confirm-h { font-size: 17px; font-weight: 700; color: var(--pq-ink); }
+        .pc-confirm-sub { font-size: 13.5px; color: var(--pq-muted); margin-top: 6px; line-height: 1.5; }
         .pc-confirm-actions { display: flex; gap: 10px; margin-top: 18px; }
-        .pc-confirm-keep, .pc-confirm-yes {
-          flex: 1; border: none; cursor: pointer; font-family: inherit; font-size: 14px; font-weight: 700;
-          padding: 12px; border-radius: 12px;
-        }
-        .pc-confirm-keep { background: var(--pq-accent-soft); color: var(--pq-accent-dark); }
-        .pc-confirm-keep:hover { background: var(--pq-accent); color: #fff; }
-        .pc-confirm-yes { background: var(--pq-danger-soft); color: var(--pq-danger); }
-        .pc-confirm-yes:hover:not(:disabled) { background: var(--pq-danger); color: #fff; }
+        .pc-confirm-keep, .pc-confirm-yes { flex: 1; border: none; cursor: pointer; font-family: inherit; font-size: 15px; font-weight: 700; padding: 14px; border-radius: 14px; }
+        .pc-confirm-keep { background: #0b2a6f; color: #fff; }
+        .pc-confirm-keep:hover { background: #081f55; }
+        .pc-confirm-yes { background: #fff; color: var(--pq-danger); border: 1px solid var(--pq-line); }
+        .pc-confirm-yes:hover:not(:disabled) { background: var(--pq-danger-soft); }
         .pc-confirm-yes:disabled { opacity: 0.6; cursor: default; }
 
-        .pc-status { display: flex; align-items: center; justify-content: center; gap: 10px; margin-top: 16px; padding: 13px 16px; background: var(--pq-panel-2); backdrop-filter: blur(12px); border-radius: 999px; border: 1px solid rgba(255,255,255,0.7); }
-        .pc-status.urgent { background: var(--pq-warn-soft); }
-        .pc-status-text { font-size: 12.5px; font-weight: 700; color: var(--pq-accent-dark); }
-        .pc-status.urgent .pc-status-text { color: var(--pq-warn); }
-        .pc-status-timer { font-variant-numeric: tabular-nums; font-weight: 800; }
-        .pc-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--pq-accent); flex: none; animation: pcPulse 1.3s ease-in-out infinite; }
-        .pc-status.urgent .pc-pulse { background: var(--pq-warn); }
-        @keyframes pcPulse { 0%,100% { opacity: .35; transform: scale(.8); } 50% { opacity: 1; transform: scale(1); } }
-        @media (prefers-reduced-motion: reduce) { .pc-pulse { animation: none; opacity: .8; } }
+        .pc-expired { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 40px 8px; gap: 8px; }
+        .pc-expired-h { font-size: 19px; font-weight: 700; color: var(--pq-ink); }
+        .pc-expired-sub { font-size: 13.5px; color: var(--pq-muted); max-width: 32ch; line-height: 1.5; }
+        .pc-expired-sub a { color: var(--pq-blue); font-weight: 600; }
 
-        .pc-success, .pc-expired {
-          display: flex; flex-direction: column; align-items: center; text-align: center; padding: 32px 24px; gap: 8px;
-          background: var(--pq-panel-2); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.7);
-          border-radius: 24px; box-shadow: 0 18px 40px -20px rgba(0,20,60,0.35);
-        }
-        .pc-success-ico {
-          width: 76px; height: 76px; border-radius: 50%; background: var(--pq-success-soft); color: var(--pq-success);
-          display: flex; align-items: center; justify-content: center; margin-bottom: 6px;
-          animation: pcPop .4s cubic-bezier(.2,1.2,.4,1) both;
-        }
-        @keyframes pcPop { from { transform: scale(.55); opacity: 0; } to { transform: scale(1); opacity: 1; } }
-        @media (prefers-reduced-motion: reduce) { .pc-success-ico { animation: none; } }
-        .pc-success-h { font-size: 21px; font-weight: 800; letter-spacing: -0.02em; color: var(--pq-text); }
-        .pc-success-amt { font-size: 40px; font-weight: 800; letter-spacing: -0.03em; color: var(--pq-text); font-variant-numeric: tabular-nums; }
-        .pc-success-sub { font-size: 13.5px; color: var(--pq-muted); }
-
-        .pc-rcpt-full { position: fixed; inset: 0; z-index: 60; overflow-y: auto; background: var(--bg, #fff); }
-        .pc-rcpt-share { width: 100%; margin-top: 16px; }
+        /* Finished / ended receipts (full screen, light, using the app's receipt card). */
+        .pc-rcpt-full { position: fixed; inset: 0; z-index: 60; overflow-y: auto; background: #fbfcff; }
+        .pc-rcpt-share { width: 100%; margin-top: 16px; border-radius: 16px; font-weight: 700; }
+        .pc-rcpt-share:not(.ghost), .pc-help-btn { background: #0b2a6f; color: #fff; border-color: #0b2a6f; }
+        .pc-rcpt-share:not(.ghost):hover:not(:disabled), .pc-help-btn:hover { background: #081f55; }
+        .pc-help-btn { border-radius: 16px; font-weight: 700; }
         .pc-rcpt-full .rcpt-help { margin: 12px 0 0; }
-        .pc-review-note {
-          margin-top: 12px; padding: 10px 12px; border-radius: 12px; text-align: center;
-          background: var(--pq-warn-soft); color: var(--pq-warn); font-size: 13px; line-height: 1.45;
-        }
-        .pc-help-box { margin-top: 18px; padding: 14px; border-radius: 14px; background: var(--bg-soft); text-align: center; }
-        .pc-help-h { font-size: 14px; font-weight: 700; color: var(--text); }
-        .pc-help-sub { font-size: 12px; color: var(--muted); margin: 4px 0 12px; line-height: 1.45; }
+        .pc-review-note { margin-top: 12px; padding: 10px 12px; border-radius: 10px; text-align: center; background: var(--pq-warn-soft); color: var(--pq-warn); font-size: 13px; line-height: 1.45; }
+        .pc-help-box { margin-top: 18px; padding: 14px; border-radius: 12px; background: var(--pq-blue-soft); text-align: center; }
+        .pc-help-h { font-size: 14px; font-weight: 700; color: var(--pq-ink); }
+        .pc-help-sub { font-size: 12px; color: var(--pq-muted); margin: 4px 0 12px; line-height: 1.45; }
         .pc-help-btn { display: block; width: 100%; text-align: center; text-decoration: none; box-sizing: border-box; }
-
-        .pc-expired-ico {
-          width: 76px; height: 76px; border-radius: 50%; background: var(--pq-danger-soft); color: var(--pq-danger);
-          display: flex; align-items: center; justify-content: center; margin-bottom: 6px;
-        }
-        .pc-expired-h { font-size: 20px; font-weight: 800; letter-spacing: -0.02em; color: var(--pq-text); }
-        .pc-expired-sub { font-size: 13.5px; color: var(--pq-muted); max-width: 30ch; }
-        .pc-retry-btn {
-          margin-top: 10px; border: none; cursor: pointer; background: var(--pq-accent); color: #fff;
-          font-family: inherit; font-size: 14.5px; font-weight: 700; padding: 13px 26px; border-radius: 999px;
-        }
-        .pc-retry-btn:hover:not(:disabled) { background: var(--pq-accent-dark); }
-        .pc-retry-btn:disabled { opacity: 0.6; cursor: default; }
       `}</style>
     </div>
   );
 }
 
 function IndiaPayMethods({ qrValue }: { qrValue: string }) {
+  const { t } = usePayerT();
   return (
     <>
       <div className="pc-qr-card">
-        <div className="pc-qr-label">Scan to pay</div>
+        <div className="pc-qr-label">{t("pl.scanToPay")}</div>
         <div className="pc-qr-box">
           <QRCodeSVG value={qrValue} size={196} {...PAYMENT_LINK_QR_STYLE} />
         </div>
-        <div className="pc-qr-hint">Scan this QR with your banking or payment app</div>
-      </div>
-      <div className="pc-apps">
-        <div className="pc-apps-h">Pay with UPI</div>
-        <a className="pc-app-btn pc-app-btn-wide" href={qrValue}>
-          Open UPI app
-        </a>
+        <div className="pc-qr-hint">{t("pl.scanHintApp")}</div>
       </div>
     </>
   );
@@ -854,33 +818,34 @@ function BrazilPayMethod({
   copied: string | null;
   onCopy: (label: string, value: string) => void;
 }) {
+  const { t } = usePayerT();
   // No payable code: send the customer to the Pix key below, named as a key —
   // never a raw key passed off as "Pix Copia e Cola".
   if (!pixCode) {
     return (
       <div className="pc-bank-card">
-        <div className="pc-bank-h">Pay with Pix</div>
-        <div className="pc-bank-sub">Send the amount below to the Pix key shown, from your bank app.</div>
+        <div className="pc-bank-h">{t("pl.payPix")}</div>
+        <div className="pc-bank-sub">{t("pl.pixSub")}</div>
       </div>
     );
   }
   return (
     <>
       <div className="pc-qr-card">
-        <div className="pc-qr-label">Scan to pay</div>
+        <div className="pc-qr-label">{t("pl.scanToPay")}</div>
         <div className="pc-qr-box">
           <QRCodeSVG value={pixCode} size={196} {...PAYMENT_LINK_QR_STYLE} />
         </div>
-        <div className="pc-qr-hint">Scan this Pix QR in your bank app</div>
+        <div className="pc-qr-hint">{t("pl.pixScanHint")}</div>
       </div>
       <div className="pc-apps">
-        <div className="pc-apps-h">Or pay with Pix Copia e Cola</div>
+        <div className="pc-apps-h">{t("pl.pixCopia")}</div>
         <button
           className={`pc-copy-code-btn${copied === "pix-code" ? " copied" : ""}`}
           onClick={() => onCopy("pix-code", pixCode)}
         >
           {copied === "pix-code" ? <CheckIcon /> : <CopyIcon />}
-          {copied === "pix-code" ? "Code copied" : "Copy Pix code"}
+          {copied === "pix-code" ? t("pl.codeCopied") : t("pl.copyPix")}
         </button>
       </div>
     </>
@@ -890,22 +855,24 @@ function BrazilPayMethod({
 // A QR the seller stored for this rail (e.g. Venezuela's Pago Móvil bank QR),
 // scanned from the payer's own banking app.
 function RailQrCard({ qrValue }: { qrValue: string }) {
+  const { t } = usePayerT();
   return (
     <div className="pc-qr-card">
-      <div className="pc-qr-label">Scan to pay</div>
+      <div className="pc-qr-label">{t("pl.scanToPay")}</div>
       <div className="pc-qr-box">
         <QRCodeSVG value={qrValue} size={196} {...PAYMENT_LINK_QR_STYLE} />
       </div>
-      <div className="pc-qr-hint">Scan this QR code with your banking app</div>
+      <div className="pc-qr-hint">{t("pl.scanHintBank")}</div>
     </div>
   );
 }
 
 function OtherRailNote({ currency }: { currency: string }) {
+  const { t } = usePayerT();
   return (
     <div className="pc-bank-card">
-      <div className="pc-bank-h">Bank transfer</div>
-      <div className="pc-bank-sub">Send the {currency} amount below using your banking app.</div>
+      <div className="pc-bank-h">{t("pl.bankTransfer")}</div>
+      <div className="pc-bank-sub">{t("pl.bankTransferSub", { currency })}</div>
     </div>
   );
 }
@@ -923,13 +890,14 @@ function DetailRow({
   copied?: boolean;
   mono?: boolean;
 }) {
+  const { t } = usePayerT();
   return (
     <div className="pc-drow">
       <div className="pc-drow-k">{label}</div>
       <div className="pc-drow-v">
         <span className={`pc-drow-val${mono ? " mono" : ""}`}>{value}</span>
         {onCopy && (
-          <button className={`pc-copy-btn${copied ? " copied" : ""}`} onClick={onCopy} aria-label={`Copy ${label}`}>
+          <button className={`pc-copy-btn${copied ? " copied" : ""}`} onClick={onCopy} aria-label={t("pl.copy", { label })}>
             {copied ? <CheckIcon /> : <CopyIcon />}
           </button>
         )}
@@ -939,11 +907,12 @@ function DetailRow({
 }
 
 function StatusStrip({ secondsLeft, urgent }: { secondsLeft: number; urgent: boolean }) {
+  const { t } = usePayerT();
   return (
     <div className={`pc-status${urgent ? " urgent" : ""}`}>
       <span className="pc-pulse" />
       <span className="pc-status-text">
-        Waiting for payment · <span className="pc-status-timer">{fmtTimer(secondsLeft)}</span>
+        {t("pl.waiting")} · <span className="pc-status-timer">{fmtTimer(secondsLeft)}</span>
       </span>
     </div>
   );
@@ -969,11 +938,12 @@ function ReceiptPanel({
   /** A dispute is open on this order. */
   underReview?: boolean;
 }) {
+  const { t, lang } = usePayerT();
   const country = countryForCurrency(currency);
   const captureRef = useRef<HTMLDivElement>(null);
   const [imgBusy, setImgBusy] = useState(false);
   const when = whenSecs
-    ? new Date(whenSecs * 1000).toLocaleString(undefined, {
+    ? new Date(whenSecs * 1000).toLocaleString(PAYER_DATE_LOCALE[lang], {
         day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
       })
     : "";
@@ -1014,33 +984,33 @@ function ReceiptPanel({
         <div className="rcpt-card" ref={captureRef}>
           <div className="brand rcpt-brand"><Logo size={24} className="brand-mark" /> PayQR</div>
           <div className="rcpt-tick ok"><CheckIconLg /></div>
-          <div className="rcpt-status">Payment successful</div>
-          <div className="rcpt-shop">Paid to {merchantName}</div>
+          <div className="rcpt-status">{t("pl.rcptSuccess")}</div>
+          <div className="rcpt-shop">{t("pl.paidToShop", { name: merchantName })}</div>
           <div className="rcpt-amount">{amount}</div>
-          <div className="rcpt-amount-sub">You paid</div>
-          {underReview && <div className="pc-review-note">{REVIEW_NOTE}</div>}
+          <div className="rcpt-amount-sub">{t("pl.youPaid")}</div>
+          {underReview && <div className="pc-review-note">{t("pl.reviewNote")}</div>}
 
           <div className="rcpt-rows">
-            <div className="rcpt-row"><span>Paid to</span><b>{merchantName}</b></div>
+            <div className="rcpt-row"><span>{t("pl.paidTo")}</span><b>{merchantName}</b></div>
             {handle && (
               <div className="rcpt-row"><span>{country.payoutLabel}</span><b className="mono">{handle}</b></div>
             )}
-            <div className="rcpt-row"><span>Via</span><b>{country.flag} {country.name} · {country.code}</b></div>
+            <div className="rcpt-row"><span>{t("pl.via")}</span><b>{country.flag} {country.name} · {country.code}</b></div>
             {/* No USDC rows: the payer paid in their own currency (the amount
                 above), and settlement detail is the merchant's, not theirs. */}
-            {when && <div className="rcpt-row"><span>When</span><b>{when}</b></div>}
-            <div className="rcpt-row"><span>Receipt no.</span><b>#{orderId}</b></div>
-            <div className="rcpt-row"><span>Status</span>{underReview ? <b className="w">Under review</b> : <b className="g">Completed</b>}</div>
+            {when && <div className="rcpt-row"><span>{t("pl.when")}</span><b>{when}</b></div>}
+            <div className="rcpt-row"><span>{t("pl.receiptNo")}</span><b>#{orderId}</b></div>
+            <div className="rcpt-row"><span>{t("pl.status")}</span>{underReview ? <b className="w">{t("pl.underReview")}</b> : <b className="g">{t("pl.completed")}</b>}</div>
           </div>
-          <p className="rcpt-foot">Save this receipt as proof of your payment.</p>
+          <p className="rcpt-foot">{t("pl.saveReceipt")}</p>
 
           {/* Inside the card, but left out of the saved image. */}
           <button className="btn ghost pc-rcpt-share" data-html2canvas-ignore="true" onClick={shareAsImage} disabled={imgBusy}>
-            {imgBusy ? "Preparing image…" : "Share as image"}
+            {imgBusy ? t("pl.preparingImage") : t("pl.shareImage")}
           </button>
           {onNewPayment && (
             <button className="btn pc-rcpt-share" data-html2canvas-ignore="true" onClick={onNewPayment}>
-              New payment
+              {t("pl.newPayment")}
             </button>
           )}
           <a
@@ -1049,7 +1019,7 @@ function ReceiptPanel({
             href={`https://t.me/PayQRdotPRO?text=${encodeURIComponent(`Hi, I need help with payment #${orderId}.`)}`}
             target="_blank" rel="noopener noreferrer"
           >
-            Something wrong with this payment? Report an issue ↗
+            {t("pl.reportIssue")}
           </a>
         </div>
       </div>
@@ -1090,10 +1060,11 @@ function EndedReceipt({
   /** A dispute is open on this order: the outcome may still change. */
   underReview?: boolean;
 }) {
+  const { t, lang } = usePayerT();
   const country = countryForCurrency(details.currency);
   const support = supportMessage(details);
   const when = details.whenSecs
-    ? new Date(details.whenSecs * 1000).toLocaleString(undefined, {
+    ? new Date(details.whenSecs * 1000).toLocaleString(PAYER_DATE_LOCALE[lang], {
         day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit",
       })
     : "";
@@ -1103,32 +1074,32 @@ function EndedReceipt({
         <div className="rcpt-card">
           <div className="brand rcpt-brand"><Logo size={24} className="brand-mark" /> PayQR</div>
           <div className={`rcpt-tick ${expired ? "wait" : "bad"}`}>{expired ? <ClockIcon /> : <XIcon />}</div>
-          <div className="rcpt-status">{expired ? "Payment window ended" : "Payment cancelled"}</div>
-          <div className="rcpt-shop">Paid to {details.merchantName}</div>
+          <div className="rcpt-status">{expired ? t("pl.windowEnded") : t("pl.payCancelled")}</div>
+          <div className="rcpt-shop">{t("pl.paidToShop", { name: details.merchantName })}</div>
           <div className="rcpt-amount">{details.amount}</div>
           <div className="rcpt-amount-sub">
             {underReview
-              ? "Please don't pay again."
+              ? t("pl.noPayAgain")
               : expired
                 // We can't know whether the customer paid after the window closed,
                 // so this never claims that no money moved.
-                ? "If you already paid, tap “I already paid” — don't pay again."
-                : "This payment did not go through"}
+                ? t("pl.ifAlreadyPaid")
+                : t("pl.didNotGoThrough")}
           </div>
-          {underReview && <div className="pc-review-note">{REVIEW_NOTE}</div>}
+          {underReview && <div className="pc-review-note">{t("pl.reviewNote")}</div>}
 
           <div className="rcpt-rows">
-            <div className="rcpt-row"><span>Paid to</span><b>{details.merchantName}</b></div>
-            <div className="rcpt-row"><span>Via</span><b>{country.flag} {country.name} · {country.code}</b></div>
-            {when && <div className="rcpt-row"><span>When</span><b>{when}</b></div>}
-            <div className="rcpt-row"><span>Receipt no.</span><b>#{details.orderId}</b></div>
-            <div className="rcpt-row"><span>Status</span>{underReview ? <b className="w">Under review</b> : <b className={expired ? "w" : "r"}>{details.status}</b>}</div>
+            <div className="rcpt-row"><span>{t("pl.paidTo")}</span><b>{details.merchantName}</b></div>
+            <div className="rcpt-row"><span>{t("pl.via")}</span><b>{country.flag} {country.name} · {country.code}</b></div>
+            {when && <div className="rcpt-row"><span>{t("pl.when")}</span><b>{when}</b></div>}
+            <div className="rcpt-row"><span>{t("pl.receiptNo")}</span><b>#{details.orderId}</b></div>
+            <div className="rcpt-row"><span>{t("pl.status")}</span>{underReview ? <b className="w">{t("pl.underReview")}</b> : <b className={expired ? "w" : "r"}>{details.status === "Cancelled" ? t("pl.cancelledStatus") : t("pl.windowEnded")}</b>}</div>
           </div>
 
           <div className="pc-help-box" data-html2canvas-ignore="true">
-            <div className="pc-help-h">Need help with this order?</div>
+            <div className="pc-help-h">{t("pl.needHelp")}</div>
             <div className="pc-help-sub">
-              Tap below to open PayQR support. Your order details are filled in and copied — if the chat opens empty, just paste them.
+              {t("pl.helpSub")}
             </div>
             {/* The link carries the message as ?text=, but Telegram doesn't always
                 honour that on a group/thread link, so the details are also copied
@@ -1139,23 +1110,23 @@ function EndedReceipt({
               target="_blank" rel="noopener noreferrer"
               onClick={() => { navigator.clipboard?.writeText(support.text).catch(() => {}); }}
             >
-              Get help on this order ↗
+              {t("pl.getHelp")}
             </a>
           </div>
 
           {expired && onPaid && (
             <button className="btn pc-rcpt-share" data-html2canvas-ignore="true" onClick={onPaid} disabled={busy}>
-              {busy ? "Working…" : "I already paid"}
+              {busy ? t("pl.working") : t("pl.alreadyPaid")}
             </button>
           )}
           {expired && onCancel && (
             <button className="btn ghost pc-rcpt-share" data-html2canvas-ignore="true" onClick={onCancel} disabled={busy}>
-              Cancel order
+              {t("pl.cancelOrder")}
             </button>
           )}
           {!expired && onNewPayment && (
             <button className="btn ghost pc-rcpt-share" data-html2canvas-ignore="true" onClick={onNewPayment}>
-              New payment
+              {t("pl.newPayment")}
             </button>
           )}
         </div>
