@@ -663,40 +663,55 @@ export default function PayLink() {
         />
       ) : (
         <div className="pl-hero">
+          <header className="pl-top">
+            <img className="pl-logo pl-logo-payqr" src="/payqr-mark-sm.png" alt="PayQR" width={44} height={28} />
+            <span className="pl-top-line" aria-hidden="true" />
+            <img className="pl-logo pl-logo-p2p" src="/p2pdotme-sm.png" alt="p2p.me" width={28} height={34} />
+          </header>
+
           <div className="pl-hero-main">
-            <div className="pl-hero-name">{merchantLabel}</div>
+            <div className="pl-card">
+              <div className="pl-avatar" aria-hidden="true">{merchantInitials || "•"}</div>
+              <div className="pl-hero-name">{merchantLabel}</div>
 
-            {customerTypes ? (
-              <div className="pl-amount-input-wrap">
-                {/* `country` is non-null whenever a link has loaded, and this
-                    input only renders past that point — but guard rather than
-                    assert, and guard with nothing rather than with a rupee sign:
-                    an empty symbol is honest, a wrong one is not. */}
-                <span className="pl-amount-cur">{country?.symbol ?? ""}</span>
-                <input
-                  className="pl-amount-input"
-                  type="text"
-                  inputMode="decimal"
-                  placeholder="0"
-                  value={fmtTyped(amountInput)}
-                  onChange={(e) => {
-                    const digits = e.target.value.replace(/,/g, "");
-                    if (/^\d*\.?\d{0,2}$/.test(digits)) setAmountInput(digits);
-                  }}
-                  autoFocus
-                />
-              </div>
-            ) : checkingFixed ? (
-              <div className="pl-hero-amount">…</div>
-            ) : (
-              <div className="pl-hero-amount">{country && fmtPayerFiat(country, amountNum)}</div>
-            )}
+              {customerTypes ? (
+                <>
+                  <div className="pl-amount-label">{t("pl.amount")}</div>
+                  <div className="pl-amount-input-wrap">
+                    {/* `country` is non-null whenever a link has loaded, and this
+                        input only renders past that point — but guard rather than
+                        assert, and guard with nothing rather than with a rupee sign:
+                        an empty symbol is honest, a wrong one is not. */}
+                    <span className="pl-amount-cur">{country?.symbol ?? ""}</span>
+                    <input
+                      className="pl-amount-input"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder="0"
+                      // Sized to what is typed so the currency sign sits right
+                      // against the number instead of at the far edge.
+                      style={{ width: `${Math.max(1, fmtTyped(amountInput).length)}ch` }}
+                      value={fmtTyped(amountInput)}
+                      onChange={(e) => {
+                        const digits = e.target.value.replace(/,/g, "");
+                        if (/^\d*\.?\d{0,2}$/.test(digits)) setAmountInput(digits);
+                      }}
+                      autoFocus
+                    />
+                  </div>
+                </>
+              ) : checkingFixed ? (
+                <div className="pl-hero-amount">…</div>
+              ) : (
+                <div className="pl-hero-amount">{country && fmtPayerFiat(country, amountNum)}</div>
+              )}
 
-            {overCap && country && capFiat !== null && (
-              <p className="pl-error">{t("pl.overCap", { max: fmtPayerFiat(country, capFiat) })}</p>
-            )}
-            {prepareError && <p className="pl-error">{prepareError}</p>}
-            {confirming && <p className="pl-notice">{t("pl.sentConfirming")}</p>}
+              {overCap && country && capFiat !== null && (
+                <p className="pl-error">{t("pl.overCap", { max: fmtPayerFiat(country, capFiat) })}</p>
+              )}
+              {prepareError && <p className="pl-error">{prepareError}</p>}
+              {confirming && <p className="pl-notice">{t("pl.sentConfirming")}</p>}
+            </div>
           </div>
 
           <div className="pl-hero-foot">
@@ -725,7 +740,7 @@ export default function PayLink() {
                 t("pl.btnContinue")
               )}
             </button>
-            <p className="pl-privacy">{t("pl.privacy")}</p>
+            <p className="pl-powered">{t("pl.poweredBy")}</p>
           </div>
         </div>
       )}
@@ -739,7 +754,7 @@ export default function PayLink() {
           --pq-muted: #5b6b8c;
           --pq-faint: #8a97b3;
           --pq-line: #e1e8f5;
-          --pq-bg: #fbfcff;
+          --pq-bg: #f6f8ff;
           --pq-danger: #d92d20;
           --pq-danger-soft: #fdecea;
         }
@@ -753,41 +768,62 @@ export default function PayLink() {
           align-items: center;
           justify-content: center;
           font-family: "Inter", "Manrope", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-          background: var(--pq-bg);
+          background:
+            radial-gradient(120% 55% at 50% -10%, #dfe8ff 0%, rgba(223,232,255,0) 70%),
+            linear-gradient(180deg, #f6f8ff 0%, #ffffff 100%);
           color: var(--pq-ink);
           -webkit-font-smoothing: antialiased;
         }
 
-        /* Step 1. Phone: the amount block is centred in the space above a
-           bottom-anchored button. Larger screens: one centred column. */
+        /* Step 1 is one fixed screen — logos on top, the payment card in the
+           middle, the button at the bottom — and never scrolls. */
         .pl-hero {
           width: 100%; max-width: 440px;
-          min-height: 100vh; min-height: 100dvh;
+          height: 100vh; height: 100dvh; overflow: hidden;
           display: flex; flex-direction: column;
-          padding: 28px 20px calc(24px + env(safe-area-inset-bottom));
+          padding: 18px 20px calc(22px + env(safe-area-inset-bottom));
           box-sizing: border-box;
         }
-        .pl-hero-main {
-          flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-          text-align: center; gap: 14px;
-        }
-        .pl-hero-foot { display: flex; flex-direction: column; align-items: center; }
 
+        .pl-top { position: relative; display: flex; align-items: center; justify-content: space-between; height: 40px; flex: none; }
+        .pl-logo { display: block; object-fit: contain; mix-blend-mode: multiply; }
+        .pl-logo-payqr { height: 28px; width: auto; }
+        .pl-logo-p2p { height: 34px; width: auto; }
+        .pl-top-line { position: absolute; left: 50%; top: 50%; width: 1.5px; height: 22px; transform: translate(-50%, -50%); background: var(--pq-line); border-radius: 2px; }
+
+        .pl-hero-main { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .pl-hero-foot { flex: none; display: flex; flex-direction: column; align-items: center; }
+
+        .pl-card {
+          width: 100%; box-sizing: border-box;
+          display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px;
+          padding: 30px 20px 28px;
+          background: #fff; border: 1px solid var(--pq-line); border-radius: 28px;
+          box-shadow: 0 24px 48px -28px rgba(29,60,140,0.28), 0 2px 6px rgba(29,60,140,0.04);
+        }
+        .pl-avatar {
+          width: 52px; height: 52px; border-radius: 50%;
+          display: flex; align-items: center; justify-content: center;
+          background: var(--pq-blue-soft); color: var(--pq-blue);
+          font-size: 17px; font-weight: 700; letter-spacing: 0.02em;
+        }
         .pl-hero-name {
-          font-size: 17px; font-weight: 700; letter-spacing: -0.01em; color: var(--pq-ink);
+          font-size: 16px; font-weight: 600; letter-spacing: -0.01em; color: var(--pq-muted);
           max-width: 100%; overflow-wrap: anywhere;
         }
         .pl-hero-amount {
-          font-size: 56px; font-weight: 800; letter-spacing: -0.035em; line-height: 1.05;
+          margin-top: 6px;
+          font-size: 52px; font-weight: 800; letter-spacing: -0.035em; line-height: 1.05;
           color: var(--pq-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
         }
 
-        .pl-amount-input-wrap { display: flex; align-items: baseline; justify-content: center; gap: 4px; max-width: 100%; }
-        .pl-amount-cur { font-size: 36px; font-weight: 700; color: var(--pq-faint); }
+        .pl-amount-label { margin-top: 8px; font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--pq-faint); }
+        .pl-amount-input-wrap { display: flex; align-items: baseline; justify-content: center; gap: 6px; max-width: 100%; }
+        .pl-amount-cur { font-size: 34px; font-weight: 700; color: var(--pq-faint); }
         .pl-amount-input {
           border: none; background: none; font-family: inherit;
-          font-size: 56px; font-weight: 800; letter-spacing: -0.035em;
-          color: var(--pq-ink); width: 240px; max-width: 70vw; text-align: center;
+          font-size: 52px; font-weight: 800; letter-spacing: -0.035em;
+          color: var(--pq-ink); min-width: 1ch; max-width: 62vw; text-align: left;
           font-variant-numeric: tabular-nums; padding: 0;
         }
         .pl-amount-input:focus { outline: none; }
@@ -796,18 +832,19 @@ export default function PayLink() {
         .pl-error { margin: 0; font-size: 13.5px; color: var(--pq-danger); text-align: center; max-width: 34ch; }
         .pl-notice { margin: 0; font-size: 14.5px; font-weight: 500; line-height: 1.5; color: var(--pq-muted); text-align: center; max-width: 34ch; padding: 0 20px; }
 
+        /* Soft, pill-shaped primary action. */
         .pl-pay-btn {
           width: 100%; border: none; cursor: pointer;
-          background: #0b2a6f; color: #ffffff;
-          font-family: inherit; font-size: 17px; font-weight: 700; letter-spacing: 0.01em;
-          padding: 18px 20px; border-radius: 16px;
-          box-shadow: 0 8px 20px -8px rgba(11,42,111,0.6);
-          transition: background .12s ease, transform .08s ease, opacity .12s ease;
+          background: linear-gradient(180deg, #4b78ee 0%, #3a64dc 100%); color: #ffffff;
+          font-family: inherit; font-size: 16px; font-weight: 600; letter-spacing: 0.005em;
+          padding: 17px 24px; border-radius: 999px;
+          box-shadow: 0 10px 22px -12px rgba(58,100,220,0.55);
+          transition: filter .15s ease, transform .08s ease, opacity .15s ease;
         }
-        .pl-pay-btn:hover:not(:disabled) { background: #081f55; }
+        .pl-pay-btn:hover:not(:disabled) { filter: brightness(1.04); }
         .pl-pay-btn:active:not(:disabled) { transform: translateY(1px); }
-        .pl-pay-btn:disabled { cursor: default; opacity: 0.5; }
-        .pl-pay-btn:focus-visible, .pl-retry-btn:focus-visible { outline: 3px solid rgba(29,91,224,0.35); outline-offset: 2px; }
+        .pl-pay-btn:disabled { cursor: default; opacity: 0.5; box-shadow: none; }
+        .pl-pay-btn:focus-visible, .pl-retry-btn:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
 
         .pl-btn-loading { display: inline-flex; align-items: center; justify-content: center; gap: 10px; }
         .pl-spinner {
@@ -818,22 +855,27 @@ export default function PayLink() {
         @keyframes plSpin { to { transform: rotate(360deg); } }
         @media (prefers-reduced-motion: reduce) { .pl-spinner { animation-duration: 1.4s; } }
 
-        .pl-privacy { margin: 14px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--pq-faint); text-align: center; max-width: 36ch; }
+        .pl-powered { margin: 14px 0 0; font-size: 12px; line-height: 1.45; color: var(--pq-faint); text-align: center; max-width: 34ch; }
 
         .pl-retry-btn {
           margin-top: 16px; border: none; cursor: pointer;
-          background: #0b2a6f; color: #fff; font-family: inherit; font-size: 15px; font-weight: 700;
-          padding: 13px 28px; border-radius: 14px;
+          background: linear-gradient(180deg, #4b78ee 0%, #3a64dc 100%); color: #fff; font-family: inherit; font-size: 15px; font-weight: 600;
+          padding: 13px 30px; border-radius: 999px;
         }
-        .pl-retry-btn:hover { background: #081f55; }
+        .pl-retry-btn:hover { filter: brightness(1.04); }
 
         @media (min-width: 640px) {
-          .pl-hero { min-height: 0; padding: 48px 32px; }
-          .pl-hero-main { flex: none; padding: 24px 0 36px; }
+          .pl-hero { height: auto; min-height: 0; max-height: 100dvh; padding: 32px; }
+          .pl-hero-main { flex: none; padding: 28px 0 32px; }
           .pl-hero-foot { width: 100%; max-width: 360px; align-self: center; }
         }
         @media (max-width: 380px) {
-          .pl-hero-amount, .pl-amount-input { font-size: 46px; }
+          .pl-hero-amount, .pl-amount-input { font-size: 44px; }
+          .pl-amount-cur { font-size: 28px; }
+        }
+        @media (max-height: 620px) {
+          .pl-avatar { display: none; }
+          .pl-card { padding: 20px 16px; }
         }
       `}</style>
     </div>
@@ -851,10 +893,10 @@ function Centered({ children }: { children: React.ReactNode }) {
           position: relative; min-height: 100vh; min-height: 100dvh;
           display: flex; align-items: center; justify-content: center;
           font-family: "Inter", "Manrope", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-          background: #fbfcff; color: #0f1b3d;
+          background: #f6f8ff; color: #0f1b3d;
         }
         .pl-notice { margin: 0; font-size: 14.5px; font-weight: 500; line-height: 1.5; color: #5b6b8c; text-align: center; max-width: 34ch; }
-        .pl-retry-btn { border: none; cursor: pointer; background: #0b2a6f; color: #fff; font-family: inherit; font-size: 15px; font-weight: 700; padding: 13px 28px; border-radius: 14px; }
+        .pl-retry-btn { border: none; cursor: pointer; background: linear-gradient(180deg, #4b78ee 0%, #3a64dc 100%); color: #fff; font-family: inherit; font-size: 15px; font-weight: 600; padding: 13px 30px; border-radius: 999px; }
       `}</style>
     </div>
   );

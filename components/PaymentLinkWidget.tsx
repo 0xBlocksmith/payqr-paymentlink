@@ -441,13 +441,17 @@ export function PaymentLinkWidget({
   return (
     <div className="pc-content">
       <div className="pc-card">
-        <div className="pc-head">
-          <div className="pc-head-merchant">{merchantName}</div>
-          <div className="pc-head-right">
-            <div className="pc-head-amount">{fiatDisplay}</div>
-            {description && <div className="pc-head-desc">{description}</div>}
+        {/* Not while setting up or verifying: those screens are just a spinner
+            and a message, with no shop name or amount above them. */}
+        {phase !== "matching" && phase !== "paying" && (
+          <div className="pc-head">
+            <div className="pc-head-merchant">{merchantName}</div>
+            <div className="pc-head-right">
+              <div className="pc-head-amount">{fiatDisplay}</div>
+              {description && <div className="pc-head-desc">{description}</div>}
+            </div>
           </div>
-        </div>
+        )}
         {phase === "accepted" && <StatusStrip secondsLeft={secondsLeft} urgent={urgent} />}
 
         {phase === "matching" && (
@@ -662,10 +666,10 @@ export function PaymentLinkWidget({
         .pc-card { display: flex; flex-direction: column; }
 
         /* Header: shop on the left, amount (and what it is for) on the right. */
-        .pc-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
-        .pc-head-merchant { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; color: var(--pq-ink); min-width: 0; overflow-wrap: anywhere; padding-top: 4px; }
+        .pc-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; }
+        .pc-head-merchant { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; color: var(--pq-ink); min-width: 0; overflow-wrap: anywhere; }
         .pc-head-right { text-align: right; flex: none; max-width: 60%; }
-        .pc-head-amount { font-size: 28px; font-weight: 800; letter-spacing: -0.03em; line-height: 1.1; color: var(--pq-ink); font-variant-numeric: tabular-nums; }
+        .pc-head-amount { font-size: 18px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.3; color: var(--pq-ink); font-variant-numeric: tabular-nums; }
         .pc-head-desc { margin-top: 3px; font-size: 13px; font-weight: 500; color: var(--pq-muted); overflow-wrap: anywhere; }
 
         .pc-status { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; padding: 9px 12px; background: var(--pq-blue-soft); border-radius: 10px; }
@@ -725,30 +729,31 @@ export function PaymentLinkWidget({
         .pc-error { color: var(--pq-danger); font-size: 13.5px; text-align: center; margin: 14px 0 0; }
 
         /* The "press I Paid only after paying" notice. Noticeable, not alarming. */
-        .pc-paid-note { margin: 22px 0 14px; padding: 12px 14px; border-radius: 10px; background: var(--pq-blue-soft); border-left: 3px solid var(--pq-blue); }
-        .pc-paid-note-h { font-size: 14px; font-weight: 700; color: var(--pq-ink); line-height: 1.4; }
-        .pc-paid-note-sub { margin-top: 4px; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }
+        .pc-paid-note { margin: 22px 0 14px; padding: 16px 18px; border-radius: 20px; background: linear-gradient(180deg, #4b78ee 0%, #3a64dc 100%); box-shadow: 0 12px 24px -16px rgba(58,100,220,0.6); }
+        .pc-paid-note-h { font-size: 14.5px; font-weight: 700; color: #fff; line-height: 1.4; }
+        .pc-paid-note-sub { margin-top: 5px; font-size: 12.5px; color: rgba(255,255,255,0.88); line-height: 1.5; }
 
         .pc-paid-btn {
           width: 100%; border: none; cursor: pointer;
-          background: #0b2a6f; color: #fff;
-          font-family: inherit; font-size: 17px; font-weight: 700; letter-spacing: 0.01em;
-          padding: 17px 20px; border-radius: 16px;
-          box-shadow: 0 8px 20px -8px rgba(11,42,111,0.6);
-          transition: background .12s ease, transform .08s ease, opacity .12s ease;
+          background: linear-gradient(180deg, #4b78ee 0%, #3a64dc 100%); color: #fff;
+          font-family: inherit; font-size: 16px; font-weight: 600; letter-spacing: 0.005em;
+          padding: 17px 24px; border-radius: 999px;
+          box-shadow: 0 10px 22px -12px rgba(58,100,220,0.55);
+          transition: filter .15s ease, transform .08s ease, opacity .15s ease;
         }
-        .pc-paid-btn:hover:not(:disabled) { background: #081f55; }
+        .pc-paid-btn:hover:not(:disabled) { filter: brightness(1.04); }
         .pc-paid-btn:active:not(:disabled) { transform: translateY(1px); }
-        .pc-paid-btn:disabled { opacity: 0.55; cursor: default; }
-        .pc-paid-btn:focus-visible, .pc-cancel-btn:focus-visible { outline: 3px solid rgba(29,91,224,0.35); outline-offset: 2px; }
+        .pc-paid-btn:disabled { opacity: 0.5; cursor: default; box-shadow: none; }
+        .pc-paid-btn:focus-visible, .pc-cancel-btn:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
 
         /* Cancel is a quiet text action so it never competes with I Paid. */
         .pc-cancel-btn {
-          display: block; margin: 8px auto 0; padding: 12px 20px; cursor: pointer;
-          background: none; border: none; color: var(--pq-muted);
-          font-family: inherit; font-size: 14px; font-weight: 600; border-radius: 8px;
+          display: block; width: 100%; margin: 12px 0 0; padding: 15px 24px; cursor: pointer;
+          background: #fff; border: 1.5px solid var(--pq-line); color: var(--pq-danger);
+          font-family: inherit; font-size: 15px; font-weight: 600; border-radius: 999px;
+          transition: background .15s ease;
         }
-        .pc-cancel-btn:hover:not(:disabled) { color: var(--pq-danger); }
+        .pc-cancel-btn:hover:not(:disabled) { background: var(--pq-danger-soft); }
         .pc-cancel-btn:disabled { opacity: 0.5; cursor: default; }
 
         .pc-confirm-overlay {
@@ -759,14 +764,14 @@ export function PaymentLinkWidget({
         }
         @media (min-width: 640px) { .pc-confirm-overlay { align-items: center; } }
         @keyframes pcFadeIn { from { opacity: 0; } to { opacity: 1; } }
-        .pc-confirm-card { width: 100%; max-width: 380px; background: #fff; border-radius: 16px; padding: 22px 20px; box-shadow: 0 20px 50px -20px rgba(15,27,61,0.4); }
+        .pc-confirm-card { width: 100%; max-width: 380px; background: #fff; border-radius: 24px; padding: 24px 20px; box-shadow: 0 20px 50px -20px rgba(15,27,61,0.4); }
         @media (prefers-reduced-motion: reduce) { .pc-confirm-overlay { animation: none; } }
         .pc-confirm-h { font-size: 17px; font-weight: 700; color: var(--pq-ink); }
         .pc-confirm-sub { font-size: 13.5px; color: var(--pq-muted); margin-top: 6px; line-height: 1.5; }
         .pc-confirm-actions { display: flex; gap: 10px; margin-top: 18px; }
-        .pc-confirm-keep, .pc-confirm-yes { flex: 1; border: none; cursor: pointer; font-family: inherit; font-size: 15px; font-weight: 700; padding: 14px; border-radius: 14px; }
-        .pc-confirm-keep { background: #0b2a6f; color: #fff; }
-        .pc-confirm-keep:hover { background: #081f55; }
+        .pc-confirm-keep, .pc-confirm-yes { flex: 1; border: none; cursor: pointer; font-family: inherit; font-size: 15px; font-weight: 600; padding: 14px 12px; border-radius: 999px; }
+        .pc-confirm-keep { background: linear-gradient(180deg, #4b78ee 0%, #3a64dc 100%); color: #fff; }
+        .pc-confirm-keep:hover { filter: brightness(1.04); }
         .pc-confirm-yes { background: #fff; color: var(--pq-danger); border: 1px solid var(--pq-line); }
         .pc-confirm-yes:hover:not(:disabled) { background: var(--pq-danger-soft); }
         .pc-confirm-yes:disabled { opacity: 0.6; cursor: default; }
