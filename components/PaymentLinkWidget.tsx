@@ -441,13 +441,17 @@ export function PaymentLinkWidget({
   return (
     <div className="pc-content">
       <div className="pc-card">
-        <div className="pc-head">
-          <div className="pc-head-merchant">{merchantName}</div>
-          <div className="pc-head-right">
-            <div className="pc-head-amount">{fiatDisplay}</div>
-            {description && <div className="pc-head-desc">{description}</div>}
+        {/* Not while setting up or verifying: those screens are just a spinner
+            and a message, with no shop name or amount above them. */}
+        {phase !== "matching" && phase !== "paying" && (
+          <div className="pc-head">
+            <div className="pc-head-merchant">{merchantName}</div>
+            <div className="pc-head-right">
+              <div className="pc-head-amount">{fiatDisplay}</div>
+              {description && <div className="pc-head-desc">{description}</div>}
+            </div>
           </div>
-        </div>
+        )}
         {phase === "accepted" && <StatusStrip secondsLeft={secondsLeft} urgent={urgent} />}
 
         {phase === "matching" && (
