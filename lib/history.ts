@@ -123,7 +123,7 @@ export async function fetchHistory(address, proxies?: string | string[]) {
         where: { userAddress_in: $users, orderId_in: $ids },
         orderBy: orderId,
         orderDirection: desc
-      ) { orderId status usdcAmount placedAt completedAt transactionHash userAddress disputeStatus }
+      ) { orderId status usdcAmount placedAt completedAt transactionHash userAddress disputeStatus currency }
     }`,
     { users: addrList(address, proxies), ids: [...scoped.keys()] },
     "fetchHistory"
@@ -133,6 +133,7 @@ export async function fetchHistory(address, proxies?: string | string[]) {
     const placed = Number(o.placedAt) * 1000;
     return {
       orderId: String(o.orderId),
+      currency: currencyFromBytes32(o.currency) || "",
       amount: String(o.usdcAmount), // raw 6-dec
       status: ST[Number(o.status)] || "matching",
       txHash: o.transactionHash || null,

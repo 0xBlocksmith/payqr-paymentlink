@@ -11,7 +11,8 @@ import { Icon } from "../../components/Icons";
 import { AppTour } from "../../components/AppTour";
 import { ConnectionBanner } from "../../components/ConnectionBanner";
 import { SettlementPromo } from "../../components/SettlementBanner";
-import { CampaignPromo, campaignActive } from "../../components/CampaignBanner";
+import { CampaignPromo } from "../../components/CampaignBanner";
+import { campaignActive, campaignEligible } from "../../lib/campaign";
 import { PromoCarousel } from "../../components/PromoCarousel";
 import { WalletSheet } from "../../components/WalletSheet";
 import { EcosystemPromo } from "../../components/EcosystemPanel";
@@ -295,7 +296,7 @@ export default function Dashboard() {
             child as a slide, so a hidden (false) one would leave an empty slide. */}
         <PromoCarousel>
           {[
-            ...(campaignActive() ? [<CampaignPromo key="campaign" />] : []),
+            ...(campaignActive() && campaignEligible(country.id) ? [<CampaignPromo key="campaign" />] : []),
             <EcosystemPromo key="ecosystem" />,
             <div key="counter-qr" className="promo">
               <div className="promo-tag">{t("dash.cqTag")}</div>

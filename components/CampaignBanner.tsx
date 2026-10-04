@@ -8,11 +8,6 @@ import { useT } from "../lib/i18n";
  * promo banner (not a separate green treatment), lives inside the
  * dashboard's swipeable promo carousel. Clicking opens /campaign.
  */
-/** The $500 challenge ran Sep 1–15 (local time). After that the promo would
- *  advertise a reward that no longer exists. */
-export function campaignActive(now = Date.now()): boolean {
-  return now < new Date(2026, 8, 16).getTime();
-}
 
 export function CampaignPromo() {
   const router = useRouter();
