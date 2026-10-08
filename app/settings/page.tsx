@@ -17,7 +17,7 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError, currencyFromBytes32 } 
 import { encryptPayout, decryptPayout, PAYOUT_PLACEHOLDER } from "../../lib/payoutCrypto";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import {
-  COUNTRIES, LANGUAGES, loadCountry, clearLocalUserData, fmtSymbolCode,
+  COUNTRIES, LANGUAGES, VE_BANKS, loadCountry, clearLocalUserData, fmtSymbolCode,
 } from "../../lib/countries";
 import { useTheme } from "../../components/theme";
 import { useAppUpdate } from "../../components/AppUpdate";
@@ -103,6 +103,13 @@ export default function Settings() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMsg, setProfileMsg] = useState("");
 
+  // Pago Móvil is three fields packed as "phone|Cédula/RIF|bank code".
+  const pm = [...edPayout.split("|"), "", "", ""].slice(0, 3);
+  function setPm(i: number, v: string) {
+    const next = [...pm];
+    next[i] = v.replace(/\|/g, "").trim();
+    setEdPayout(next.join("|"));
+  }
   function startEdit() {
     setEdShop(shopName); setEdPayout(payoutId || ""); setEdSector(businessSector);
     setProfileMsg(""); setEditing(true);
@@ -189,8 +196,23 @@ export default function Settings() {
               <input className="input" value={edSector} onChange={(e) => setEdSector(e.target.value)}
                 placeholder={t("set.sectorPlaceholder")} maxLength={31} />
               <label className="set-k" style={{ display: "block", marginTop: 10 }}>{payCountry.payoutLabel}</label>
-              <input className="input" value={edPayout} onChange={(e) => setEdPayout(e.target.value)}
-                placeholder={payCountry.payoutPlaceholder} />
+              {payCountry.code === "VEN" ? (
+                <>
+                  <input className="input" inputMode="tel" placeholder="Teléfono: 04141234567"
+                    value={pm[0]} onChange={(e) => setPm(0, e.target.value)} />
+                  <input className="input" style={{ marginTop: 8 }} placeholder="Cédula o RIF: V12345678"
+                    value={pm[1]} onChange={(e) => setPm(1, e.target.value)} />
+                  <select className="input" style={{ marginTop: 8 }}
+                    value={VE_BANKS.some((b) => b.code === pm[2]) ? pm[2] : ""}
+                    onChange={(e) => setPm(2, e.target.value)}>
+                    <option value="">Banco…</option>
+                    {VE_BANKS.map((b) => <option key={b.code} value={b.code}>{b.code} · {b.name}</option>)}
+                  </select>
+                </>
+              ) : (
+                <input className="input" value={edPayout} onChange={(e) => setEdPayout(e.target.value)}
+                  placeholder={payCountry.payoutPlaceholder} />
+              )}
               <p className="tiny" style={{ color: "var(--muted)", margin: "8px 0 0" }}>
                 {t("set.currencyLocked").replace("{currency}", payCountry.code)}
               </p>

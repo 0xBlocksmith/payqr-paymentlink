@@ -60,8 +60,9 @@ export const COUNTRIES: Country[] = [
     // Trailing space for the same reason as ARS: "Bs 500", not "Bs500".
     symbol: "Bs ",
     fiat: "Pago Móvil",
-    payoutLabel: "Pago Móvil (phone|Cédula/RIF|bank)",
-    payoutPlaceholder: "04121234567|V12345678|Banesco",
+    payoutLabel: "Pago Móvil (phone|Cédula/RIF|bank code)",
+    // Pago Móvil identifies banks by their 4-digit code (Banesco 0134, BVC 0104).
+    payoutPlaceholder: "04121234567|V12345678|0134",
     validatePayout: isPagoMovil,
     locale: "es-VE",
   },
@@ -77,6 +78,33 @@ function isPagoMovil(v: string): boolean {
     /^[VEJGRP]\d+$/.test(parts[1].trim().toUpperCase()) &&
     parts[2].trim().length > 0;
 }
+
+/** Venezuelan banks by the 4-digit code Pago Móvil asks for. */
+export const VE_BANKS: { code: string; name: string }[] = [
+  { code: "0102", name: "Banco de Venezuela" },
+  { code: "0104", name: "Venezolano de Crédito" },
+  { code: "0105", name: "Mercantil" },
+  { code: "0108", name: "Provincial" },
+  { code: "0114", name: "Bancaribe" },
+  { code: "0115", name: "Exterior" },
+  { code: "0128", name: "Banco Caroní" },
+  { code: "0134", name: "Banesco" },
+  { code: "0137", name: "Sofitasa" },
+  { code: "0138", name: "Banco Plaza" },
+  { code: "0151", name: "BFC Banco Fondo Común" },
+  { code: "0156", name: "100% Banco" },
+  { code: "0157", name: "Del Sur" },
+  { code: "0163", name: "Banco del Tesoro" },
+  { code: "0166", name: "Banco Agrícola" },
+  { code: "0168", name: "Bancrecer" },
+  { code: "0169", name: "Mi Banco" },
+  { code: "0171", name: "Banco Activo" },
+  { code: "0172", name: "Bancamiga" },
+  { code: "0174", name: "Banplus" },
+  { code: "0175", name: "Banco Bicentenario" },
+  { code: "0177", name: "Banfanb" },
+  { code: "0191", name: "BNC" },
+];
 
 export const DEFAULT_COUNTRY: Country = COUNTRIES[0];
 

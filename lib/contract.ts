@@ -360,7 +360,7 @@ const ERROR_SIGNATURES: Record<string, string> = Object.fromEntries(
   Object.entries({
     // ── Merchant / registration ──────────────────────────────────────
     AlreadyRegistered: "This shop is already registered.",
-    NotRegistered: "This merchant is not set up to accept payments.",
+    NotRegistered: "Your shop isn't registered yet. Sign out, sign back in and finish the setup, then try again.",
     FieldTooLong: "That text is too long — please shorten it and try again.",
     BusinessSectorRequired:
       "Tell us what your business sells — it's required, and must be under 31 characters.",
