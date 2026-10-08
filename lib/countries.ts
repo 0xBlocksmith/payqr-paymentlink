@@ -60,7 +60,7 @@ export const COUNTRIES: Country[] = [
     // Trailing space for the same reason as ARS: "Bs 500", not "Bs500".
     symbol: "Bs ",
     fiat: "Pago Móvil",
-    payoutLabel: "Pago Móvil (phone|Cédula/RIF|bank code)",
+    payoutLabel: "Pago Móvil",
     // Pago Móvil identifies banks by their 4-digit code (Banesco 0134, BVC 0104).
     payoutPlaceholder: "04121234567|V12345678|0134",
     validatePayout: isPagoMovil,
