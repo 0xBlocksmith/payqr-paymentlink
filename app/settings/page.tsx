@@ -17,7 +17,7 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError, currencyFromBytes32 } 
 import { encryptPayout, decryptPayout, PAYOUT_PLACEHOLDER } from "../../lib/payoutCrypto";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import {
-  COUNTRIES, LANGUAGES, loadCountry, clearLocalUserData, fmtSymbolCode,
+  COUNTRIES, LANGUAGES, VE_BANKS, loadCountry, clearLocalUserData, fmtSymbolCode,
 } from "../../lib/countries";
 import { useTheme } from "../../components/theme";
 import { useAppUpdate } from "../../components/AppUpdate";
@@ -103,6 +103,14 @@ export default function Settings() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMsg, setProfileMsg] = useState("");
 
+  // Pago Móvil is three fields packed as "phone|Cédula/RIF|bank code".
+  const splitPm = (v: string) => [...v.split("|"), "", "", ""].slice(0, 3);
+  const pm = splitPm(editing ? edPayout : payoutId || "");
+  function setPm(i: number, v: string) {
+    const next = [...pm];
+    next[i] = v.replace(/\|/g, "").trim();
+    setEdPayout(next.join("|"));
+  }
   function startEdit() {
     setEdShop(shopName); setEdPayout(payoutId || ""); setEdSector(businessSector);
     setProfileMsg(""); setEditing(true);
@@ -188,9 +196,30 @@ export default function Settings() {
               <label className="set-k" style={{ display: "block", marginTop: 10 }}>{t("set.sector")}</label>
               <input className="input" value={edSector} onChange={(e) => setEdSector(e.target.value)}
                 placeholder={t("set.sectorPlaceholder")} maxLength={31} />
-              <label className="set-k" style={{ display: "block", marginTop: 10 }}>{payCountry.payoutLabel}</label>
-              <input className="input" value={edPayout} onChange={(e) => setEdPayout(e.target.value)}
-                placeholder={payCountry.payoutPlaceholder} />
+              {payCountry.code === "VEN" ? (
+                <>
+                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>Pago Móvil</label>
+                  <label className="set-k" style={{ display: "block", marginTop: 6 }}>Teléfono</label>
+                  <input className="input" inputMode="tel" placeholder="04141234567"
+                    value={pm[0]} onChange={(e) => setPm(0, e.target.value)} />
+                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>Cédula o RIF</label>
+                  <input className="input" placeholder="V12345678"
+                    value={pm[1]} onChange={(e) => setPm(1, e.target.value)} />
+                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>Banco</label>
+                  <select className="input"
+                    value={VE_BANKS.some((b) => b.code === pm[2]) ? pm[2] : ""}
+                    onChange={(e) => setPm(2, e.target.value)}>
+                    <option value="">Selecciona tu banco</option>
+                    {VE_BANKS.map((b) => <option key={b.code} value={b.code}>{b.code} · {b.name}</option>)}
+                  </select>
+                </>
+              ) : (
+                <>
+                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>{payCountry.payoutLabel}</label>
+                  <input className="input" value={edPayout} onChange={(e) => setEdPayout(e.target.value)}
+                    placeholder={payCountry.payoutPlaceholder} />
+                </>
+              )}
               <p className="tiny" style={{ color: "var(--muted)", margin: "8px 0 0" }}>
                 {t("set.currencyLocked").replace("{currency}", payCountry.code)}
               </p>
@@ -209,14 +238,27 @@ export default function Settings() {
                 <span className="set-k">{t("set.shopName")}</span>
                 <span className="set-v">{shopName || "—"}</span>
               </div>
+              {payCountry.code === "VEN" && payoutId ? (
+                <>
+                  {[["Teléfono", pm[0]], ["Cédula o RIF", pm[1]],
+                    ["Banco", VE_BANKS.find((b) => b.code === pm[2]) ? `${pm[2]} · ${VE_BANKS.find((b) => b.code === pm[2]).name}` : pm[2]],
+                  ].map(([k, v]) => (
+                    <div className="set-item" key={k}>
+                      <span className="set-k">{k}</span>
+                      <span className="set-v">{v || "—"}</span>
+                    </div>
+                  ))}
+                </>
+              ) : (
               <div className="set-item">
-                <span className="set-k">{payCountry.payoutLabel}</span>
+                <span className="set-k">{payCountry.code === "VEN" ? "Pago Móvil" : payCountry.payoutLabel}</span>
                 {/* payoutId is decrypted client-side. A saved blob we can't decrypt
                     on this device shows a neutral "saved" marker, never ciphertext. */}
                 <span className="set-v">
                   {payoutId || (encPayout && encPayout !== "0x" ? t("set.payoutSaved") : "—")}
                 </span>
               </div>
+              )}
             </>
           )}
 
