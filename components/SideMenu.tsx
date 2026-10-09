@@ -20,6 +20,7 @@ export function SideMenu({ open, onClose }: { open: boolean; onClose: () => void
 
   const items = [
     { href: "/transactions", label: t("nav.transactions"), Ico: Icon.Repeat },
+    { href: "/disputes", label: t("nav.disputes"), Ico: Icon.Headset },
     { href: "/withdraw", label: t("nav.withdraw"), Ico: Icon.Up },
     { href: "https://t.me/PayQRdotPRO", label: t("nav.help"), Ico: Icon.Headset, ext: true },
     { href: "/settings", label: t("nav.settings"), Ico: Icon.Gear },
