@@ -31,7 +31,7 @@ function timeAgo(iso: string) {
  * ContactSupport chip — rows with nothing actionable render nothing, exactly
  * like the Transactions list.
  */
-export function DisputeList() {
+function DisputePicker({ onClose }: { onClose: () => void }) {
   const { address, ready } = useSmartAccount();
   const supportSigner = useSupportSigner();
   const [rows, setRows] = useState<any[] | null>(null);
@@ -61,48 +61,41 @@ export function DisputeList() {
   );
 
   return (
-    <>
-    {!supportSigner || !SUPPORT_BRIDGE_URL ? (
-      <p className="muted" style={{ padding: "16px 4px" }}>Support isn’t available yet.</p>
-    ) : error ? (
-      <p className="muted" style={{ padding: "16px 4px" }}>Couldn’t load your transactions. Try again shortly.</p>
-    ) : rows === null ? (
-      <p className="muted" style={{ padding: "16px 4px" }}>Loading…</p>
-    ) : actionable.length === 0 ? (
-      <p className="muted" style={{ padding: "16px 4px" }}>
-        No transaction currently has an open report window or dispute. A report can
-        only be filed shortly after a sale is cancelled.
-      </p>
-    ) : (
-      <div className="dispute-picker-list">
-        {actionable.map((r) => {
-          const d = disputeRows.get(r.orderId)!;
-          return (
-            <div key={r.orderId} className="dispute-picker-row">
-              <div className="dispute-picker-row-info">
-                <span className="dispute-picker-order">#{r.orderId}</span>
-                <span className="dispute-picker-amt">{fmtUsdc(r.amount)} USDC</span>
-                <span className="hist-time">{timeAgo(r.createdAt)}</span>
-              </div>
-              <OrderDisputeManager orderId={r.orderId} order={d.order} signer={supportSigner} />
-            </div>
-          );
-        })}
-      </div>
-    )}
-    </>
-  );
-}
-
-function DisputePicker({ onClose }: { onClose: () => void }) {
-  return (
     <div className="sm-overlay" onClick={onClose}>
       <aside className="sm-panel dispute-picker" onClick={(e) => e.stopPropagation()}>
         <div className="sm-head">
           <span className="brand">Disputes &amp; Support</span>
           <button className="sm-close" onClick={onClose} aria-label="Close"><Icon.Close /></button>
         </div>
-        <DisputeList />
+
+        {!supportSigner || !SUPPORT_BRIDGE_URL ? (
+          <p className="muted" style={{ padding: "16px 4px" }}>Support isn’t available yet.</p>
+        ) : error ? (
+          <p className="muted" style={{ padding: "16px 4px" }}>Couldn’t load your transactions. Try again shortly.</p>
+        ) : rows === null ? (
+          <p className="muted" style={{ padding: "16px 4px" }}>Loading…</p>
+        ) : actionable.length === 0 ? (
+          <p className="muted" style={{ padding: "16px 4px" }}>
+            No transaction currently has an open report window or dispute. A report can
+            only be filed shortly after a sale is cancelled.
+          </p>
+        ) : (
+          <div className="dispute-picker-list">
+            {actionable.map((r) => {
+              const d = disputeRows.get(r.orderId)!;
+              return (
+                <div key={r.orderId} className="dispute-picker-row">
+                  <div className="dispute-picker-row-info">
+                    <span className="dispute-picker-order">#{r.orderId}</span>
+                    <span className="dispute-picker-amt">{fmtUsdc(r.amount)} USDC</span>
+                    <span className="hist-time">{timeAgo(r.createdAt)}</span>
+                  </div>
+                  <OrderDisputeManager orderId={r.orderId} order={d.order} signer={supportSigner} />
+                </div>
+              );
+            })}
+          </div>
+        )}
       </aside>
     </div>
   );
