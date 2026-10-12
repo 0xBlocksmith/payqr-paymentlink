@@ -2,8 +2,10 @@
 
 /**
  * Manual UPI checkout: show the payee's UPI ID and the exact amount, let the
- * customer copy each one, and open a UPI app (launcher only) so they can type
- * them in themselves. No `upi://` link or payment intent is ever created here.
+ * customer copy each one, and show how to open a UPI app so they can type
+ * them in themselves. No `upi://` link, payment intent or app-launch URL is
+ * ever created here: browsers have no documented way to open another app, so
+ * "Open UPI App" only shows the steps to do it by hand.
  *
  * This component NEVER reports a payment as made. Opening an app or copying a
  * value changes nothing about the order; the parent keeps its own "I've paid"
@@ -13,7 +15,6 @@
 import { useEffect, useRef, useState } from "react";
 import { usePayerT } from "../lib/payerI18n";
 import { copyText } from "../lib/clipboard";
-import { UPI_APPS, detectPlatform, launchUpiApp, supportsAndroidIntents, type UpiApp } from "../lib/upiAppLaunch";
 
 type Field = "upi" | "amount";
 
@@ -22,16 +23,9 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [copiedField, setCopiedField] = useState<Field | null>(null);
   const [showApps, setShowApps] = useState(false);
-  const [canLaunch, setCanLaunch] = useState(false);
-  const [launchMsg, setLaunchMsg] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Decided after mount: the server render has no user agent.
-  useEffect(() => {
-    const ua = navigator.userAgent;
-    setCanLaunch(detectPlatform(ua, navigator.maxTouchPoints) === "android" && supportsAndroidIntents(ua));
-    return () => { if (timer.current) clearTimeout(timer.current); };
-  }, []);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
   function flash(kind: "ok" | "err", text: string, field?: Field) {
     setToast({ kind, text });
@@ -45,18 +39,6 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
     const res = await copyText(field === "upi" ? upiId : amount);
     if (res.ok) flash("ok", t("pl.man.copied", { label }), field);
     else flash("err", t("pl.man.copyFailed", { label }));
-  }
-
-  function onOpenPrimary() {
-    setLaunchMsg("");
-    setShowApps(true);
-  }
-
-  async function onPickApp(app: UpiApp) {
-    setLaunchMsg("");
-    const outcome = await launchUpiApp(app);
-    if (outcome === "likely-opened") setLaunchMsg(t("pl.man.opened", { app: app.label }));
-    else setLaunchMsg(t("pl.man.openFailed", { app: app.label }));
   }
 
   return (
@@ -78,27 +60,18 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
         </button>
       </div>
 
-      <button type="button" className="pc-man-open" onClick={onOpenPrimary} aria-expanded={showApps}>
+      <button type="button" className="pc-man-open" onClick={() => setShowApps((v) => !v)} aria-expanded={showApps}>
         {t("pl.man.openApp")}
       </button>
 
       {showApps && (
-        <div className="pc-man-apps">
-          {canLaunch ? (
-            <>
-              <div className="pc-man-apps-h">{t("pl.man.pickApp")}</div>
-              <div className="pc-man-apps-row">
-                {UPI_APPS.map((app) => (
-                  <button key={app.id} type="button" className="pc-man-app" onClick={() => onPickApp(app)}>
-                    {app.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : (
-            <div className="pc-man-apps-h">{t("pl.man.noLaunch")}</div>
-          )}
-          {launchMsg && <div className="pc-man-launchmsg" role="status">{launchMsg}</div>}
+        <div className="pc-man-apps" role="status">
+          <div className="pc-man-apps-h">{t("pl.man.noLaunch")}</div>
+          <div className="pc-man-apps-row">
+            {["Google Pay", "PhonePe", "Paytm"].map((name) => (
+              <span key={name} className="pc-man-app">{name}</span>
+            ))}
+          </div>
         </div>
       )}
 
@@ -120,12 +93,11 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
         .pc-man-copy:hover { background: var(--pq-blue); color: #fff; }
         .pc-man-copy.copied { background: var(--pq-success); color: #fff; }
         .pc-man-open { width: 100%; margin-top: 12px; border: none; cursor: pointer; font-family: inherit; font-size: 16px; font-weight: 600; color: #fff; padding: 15px 24px; border-radius: 999px; background: linear-gradient(180deg, #4b78ee 0%, #3a64dc 100%); box-shadow: 0 10px 22px -12px rgba(58,100,220,0.55); }
-        .pc-man-open:focus-visible, .pc-man-app:focus-visible, .pc-man-copy:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
+        .pc-man-open:focus-visible, .pc-man-copy:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
         .pc-man-apps { margin-top: 10px; }
         .pc-man-apps-h { font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; margin-bottom: 8px; }
         .pc-man-apps-row { display: flex; flex-wrap: wrap; gap: 8px; }
-        .pc-man-app { flex: 1 1 90px; border: 1px solid var(--pq-line); background: #fff; color: var(--pq-ink); border-radius: 12px; padding: 11px 8px; font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
-        .pc-man-launchmsg { margin-top: 8px; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }
+        .pc-man-app { flex: 1 1 90px; text-align: center; border: 1px solid var(--pq-line); color: var(--pq-ink); border-radius: 12px; padding: 10px 8px; font-size: 13.5px; font-weight: 600; }
         .pc-man-steps { margin: 12px 0 0; font-size: 13px; color: var(--pq-ink); line-height: 1.5; }
         .pc-man-warn { margin: 8px 0 0; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }
         .pc-man-toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 12px); opacity: 0; pointer-events: none; background: var(--pq-ink); color: #fff; font-size: 13.5px; font-weight: 600; padding: 10px 16px; border-radius: 999px; transition: opacity .15s ease, transform .15s ease; z-index: 50; max-width: calc(100vw - 32px); }
