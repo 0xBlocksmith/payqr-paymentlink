@@ -1,63 +1,29 @@
 /**
- * Open a UPI app WITHOUT starting a payment.
+ * Ask the OS to open a UPI app via the bare `upi://` scheme: no payee, amount
+ * or order, so nothing is paid or pre-filled. On Android the system shows its
+ * UPI app chooser; the customer picks an app and enters the details themselves.
  *
- * Each app is opened with its bare URL scheme (`phonepe://`), with no path,
- * payee, amount or order. It is not a payment intent and never a `upi://` link.
- *
- * STATUS: these schemes are registered by the apps and are recognised as UPI
- * app schemes by payment SDKs (e.g. Cashfree's WebView/iOS handlers), but no
- * app documents a bare "just open me" link, so behaviour is device- and
- * app-version-dependent. Launching therefore reports an outcome and the UI
- * falls back to "open it yourself" when the page never leaves the foreground.
- * Do NOT try `intent:` launcher URLs instead: on Android Chrome they open the
- * app's Play Store page (Chrome only resolves BROWSABLE activities).
+ * Experimental. Bare app schemes (tez://, phonepe://, paytmmp://) and Chrome
+ * `intent:` launcher URLs were tried on a real Android phone and did not work
+ * (see docs/UPI_MANUAL_CHECKOUT.md). Whether bare `upi://` does is unverified,
+ * so the caller must handle "nothing happened".
  */
 
-export type Platform = "android" | "ios" | "desktop";
+/** Bare scheme only. Must never gain a path or query. */
+export const UPI_OPEN_URL = "upi://";
 
-export interface UpiApp {
-  id: "gpay" | "phonepe" | "paytm";
-  label: string;
-  /** Bare scheme URL: scheme + "://" and nothing else. */
-  url: string;
-}
-
-export const UPI_APPS: readonly UpiApp[] = [
-  { id: "gpay", label: "Google Pay", url: "tez://" },
-  { id: "phonepe", label: "PhonePe", url: "phonepe://" },
-  { id: "paytm", label: "Paytm", url: "paytmmp://" },
-];
-
-export function detectPlatform(userAgent: string, maxTouchPoints = 0): Platform {
-  if (/android/i.test(userAgent)) return "android";
-  if (/iPhone|iPad|iPod/i.test(userAgent)) return "ios";
-  // iPadOS 13+ reports a desktop Mac UA; touch points tell them apart.
-  if (/Macintosh/i.test(userAgent) && maxTouchPoints > 1) return "ios";
-  return "desktop";
-}
-
-export type LaunchOutcome =
-  /** The page lost focus/visibility after the attempt: an app probably opened. Not proof. */
-  | "likely-opened"
-  /** The attempt ran but the page stayed in the foreground: show manual steps. */
-  | "no-effect"
-  /** Not a phone/tablet: nothing to launch. */
-  | "unsupported";
-
-export interface LaunchEnv {
-  userAgent: string;
-  maxTouchPoints?: number;
-  navigate: (url: string) => void;
-  /** Resolves after ms, or earlier with true if the page was hidden/blurred meanwhile. */
-  waitForLeave: (ms: number) => Promise<boolean>;
-}
+export type LaunchOutcome = "likely-opened" | "no-effect";
 
 export const LAUNCH_DETECT_MS = 1600;
 
-function browserLaunchEnv(): LaunchEnv {
+export interface LaunchEnv {
+  navigate: (url: string) => void;
+  /** Resolves true if the page was hidden/blurred within ms, else false. */
+  waitForLeave: (ms: number) => Promise<boolean>;
+}
+
+function browserEnv(): LaunchEnv {
   return {
-    userAgent: navigator.userAgent,
-    maxTouchPoints: navigator.maxTouchPoints,
     navigate: (url) => { window.location.href = url; },
     waitForLeave: (ms) =>
       new Promise<boolean>((resolve) => {
@@ -81,14 +47,11 @@ function browserLaunchEnv(): LaunchEnv {
   };
 }
 
-/** Call synchronously from a click handler; browsers ignore app launches without a user gesture. */
-export async function launchUpiApp(app: UpiApp, env?: LaunchEnv): Promise<LaunchOutcome> {
-  if (!env && typeof window === "undefined") return "unsupported";
-  const e = env ?? browserLaunchEnv();
-  if (detectPlatform(e.userAgent, e.maxTouchPoints ?? 0) === "desktop") return "unsupported";
-  const left = e.waitForLeave(LAUNCH_DETECT_MS); // listen before navigating
+/** Call from a click handler: browsers ignore app launches without a user gesture. */
+export async function openUpiChooser(env: LaunchEnv = browserEnv()): Promise<LaunchOutcome> {
+  const left = env.waitForLeave(LAUNCH_DETECT_MS); // listen before navigating
   try {
-    e.navigate(app.url);
+    env.navigate(UPI_OPEN_URL);
   } catch {
     return "no-effect";
   }
