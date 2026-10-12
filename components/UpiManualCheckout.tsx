@@ -1,20 +1,21 @@
 "use client";
 
 /**
- * UPI checkout without a payment intent: app buttons that only OPEN the app
- * (bare scheme, see lib/upiAppLaunch.ts), plus the payee's UPI ID and the
- * exact amount with copy buttons so the customer enters them themselves. No
- * `upi://` link or payee/amount-carrying URL is ever created.
+ * UPI checkout without a payment intent: the payee's UPI ID and exact amount
+ * with copy buttons, and instructions to enter them in any UPI app. No `upi://`
+ * link or payee/amount-carrying URL is ever created, and no app is launched:
+ * the app-scheme links tried on a real Android phone (tez://, phonepe://) did
+ * nothing and paytmmp:// opened Paytm's "App upgrade required" page, so they
+ * were removed (see docs/UPI_MANUAL_CHECKOUT.md).
  *
- * This component NEVER reports a payment as made. Opening an app or copying a
- * value changes nothing about the order; the parent keeps its own "I've paid"
- * step, which only asks the protocol to verify — the order stays pending until
- * its on-chain status says otherwise.
+ * This component NEVER reports a payment as made. Copying a value changes
+ * nothing about the order; the parent keeps its own "I've paid" step, which
+ * only asks the protocol to verify — the order stays pending until its
+ * on-chain status says otherwise.
  */
 import { useEffect, useRef, useState } from "react";
 import { usePayerT } from "../lib/payerI18n";
 import { copyText } from "../lib/clipboard";
-import { UPI_APPS, detectPlatform, launchUpiApp, type UpiApp } from "../lib/upiAppLaunch";
 
 type Field = "upi" | "amount";
 
@@ -22,15 +23,9 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
   const { t } = usePayerT();
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [copiedField, setCopiedField] = useState<Field | null>(null);
-  const [mobile, setMobile] = useState(false);
-  const [launchMsg, setLaunchMsg] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // After mount: the server render has no user agent. App buttons are for phones.
-  useEffect(() => {
-    setMobile(detectPlatform(navigator.userAgent, navigator.maxTouchPoints) !== "desktop");
-    return () => { if (timer.current) clearTimeout(timer.current); };
-  }, []);
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
 
   function flash(kind: "ok" | "err", text: string, field?: Field) {
     setToast({ kind, text });
@@ -46,28 +41,11 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
     else flash("err", t("pl.man.copyFailed", { label }));
   }
 
-  async function onOpen(app: UpiApp) {
-    setLaunchMsg("");
-    const outcome = await launchUpiApp(app);
-    if (outcome === "no-effect") setLaunchMsg(t("pl.man.openFailed", { app: app.label }));
-  }
-
   return (
     <section className="pc-man" aria-labelledby="pc-man-h">
       <div id="pc-man-h" className="pc-man-h">{t("pl.man.title")}</div>
 
-      {mobile ? (
-        <div className="pc-man-apps-row">
-          {UPI_APPS.map((app) => (
-            <button key={app.id} type="button" className="pc-man-app" onClick={() => onOpen(app)}>
-              {app.label}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div className="pc-man-launchmsg">{t("pl.man.desktop")}</div>
-      )}
-      {launchMsg && <div className="pc-man-launchmsg" role="status">{launchMsg}</div>}
+      <div className="pc-man-launchmsg">{t("pl.man.apps")}</div>
 
       <div className="pc-man-details">
         <div className="pc-man-row">
@@ -103,11 +81,8 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
         .pc-man-copy { flex: none; border: none; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 600; padding: 8px 12px; border-radius: 8px; background: var(--pq-blue-soft); color: var(--pq-blue); }
         .pc-man-copy:hover { background: var(--pq-blue); color: #fff; }
         .pc-man-copy.copied { background: var(--pq-success); color: #fff; }
-        .pc-man-app:focus-visible, .pc-man-copy:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
-                        .pc-man-apps-row { display: flex; flex-wrap: wrap; gap: 8px; }
-        .pc-man-app { flex: 1 1 90px; border: 1px solid var(--pq-line); background: #fff; color: var(--pq-ink); border-radius: 12px; padding: 12px 8px; font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
-        .pc-man-app:hover { border-color: var(--pq-blue); }
-        .pc-man-details { margin-top: 12px; }
+        .pc-man-copy:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
+                        .pc-man-details { margin-top: 12px; }
         .pc-man-launchmsg { margin-top: 8px; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }
         .pc-man-steps { margin: 12px 0 0; font-size: 13px; color: var(--pq-ink); line-height: 1.5; }
         .pc-man-warn { margin: 8px 0 0; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }
