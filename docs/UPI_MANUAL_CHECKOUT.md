@@ -13,6 +13,8 @@ Nothing here changes order state. Opening an app, copying, or returning to PayQR
 Tried and removed, tested on an Android phone (Chrome):
 - `intent:` launcher URL with `package=`: opened the app's **Play Store page** (Chrome only resolves `BROWSABLE` activities).
 - Bare app schemes (no path, payee or amount): `tez://` (Google Pay) and `phonepe://` did nothing; `paytmmp://` opened Paytm to an **"App upgrade required"** error page.
+- Bare `upi://`: no host, so Android sends it to whichever app claims the scheme (on the test phone, an unrelated crypto app); with that app uninstalled, nothing opened.
+- `upi://pay` / `intent://pay#Intent;scheme=upi;end` (no payee or amount): the system UPI chooser appears, but every app then shows a "technical error" because there is nothing to pay.
 
 None of the apps documents a bare "open me" link, and iOS has no supported mechanism either. The card therefore names the apps in text and the customer opens one themselves. The only mechanism that reliably opens these apps is a UPI payment intent (`upi://pay`), which this flow deliberately avoids.
 
