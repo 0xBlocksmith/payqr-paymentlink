@@ -182,8 +182,6 @@ Object.assign(en, {
   "pl.man.copy": "Copy",
   "pl.man.copied": "{label} copied",
   "pl.man.copyFailed": "Couldn't copy the {label}. Select it and copy it by hand.",
-  "pl.man.openApp": "Open UPI app",
-  "pl.man.openFailed": "No UPI app opened. Open Google Pay, PhonePe, Paytm or your bank's UPI app yourself.",
   "pl.man.apps": "Open Google Pay, PhonePe, Paytm or your bank's UPI app.",
   "pl.man.steps": "Open your UPI app, enter the merchant's UPI ID, and enter the payment amount.",
   "pl.man.noAuto": "Paying this way is manual: PayQR can't see your payment in your app, so it isn't confirmed automatically. The order stays pending until the payment is verified. Pay the exact amount, then tap I Paid.",
