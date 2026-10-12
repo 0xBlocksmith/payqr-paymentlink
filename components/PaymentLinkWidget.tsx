@@ -522,34 +522,37 @@ export function PaymentLinkWidget({
                   <OtherRailNote currency={currency} />
                 )}
 
-                <div className="pc-details">
-                  <div className="pc-details-h">{t("pl.paymentDetails")}</div>
-                  {compoundRows?.map((r) => (
-                    <DetailRow
-                      key={r.key}
-                      label={r.label}
-                      value={r.value}
-                      onCopy={() => copy(r.key, r.value)}
-                      copied={copied === r.key}
-                      mono
-                    />
-                  ))}
-                  {singlePayout && (
-                    <DetailRow
-                      // The rail's own name for this field — "UPI ID", "PIX key",
-                      // "CBU / alias" — from the country registry rather than two
-                      // hardcoded cases, so a currency added there is labelled
-                      // correctly here with no change to this file. Anything
-                      // unlisted degrades to a plain "Payment address".
-                      label={countryForCurrency(currency).payoutLabel}
-                      value={singlePayout}
-                      onCopy={() => copy("payout", singlePayout)}
-                      copied={copied === "payout"}
-                      mono
-                    />
-                  )}
-                  <DetailRow label={t("pl.amount")} value={fiatDisplay} />
-                </div>
+                {/* INR shows this same ID + amount, with copy buttons, in UpiManualCheckout. */}
+                {currency !== "INR" && (
+                  <div className="pc-details">
+                    <div className="pc-details-h">{t("pl.paymentDetails")}</div>
+                    {compoundRows?.map((r) => (
+                      <DetailRow
+                        key={r.key}
+                        label={r.label}
+                        value={r.value}
+                        onCopy={() => copy(r.key, r.value)}
+                        copied={copied === r.key}
+                        mono
+                      />
+                    ))}
+                    {singlePayout && (
+                      <DetailRow
+                        // The rail's own name for this field — "UPI ID", "PIX key",
+                        // "CBU / alias" — from the country registry rather than two
+                        // hardcoded cases, so a currency added there is labelled
+                        // correctly here with no change to this file. Anything
+                        // unlisted degrades to a plain "Payment address".
+                        label={countryForCurrency(currency).payoutLabel}
+                        value={singlePayout}
+                        onCopy={() => copy("payout", singlePayout)}
+                        copied={copied === "payout"}
+                        mono
+                      />
+                    )}
+                    <DetailRow label={t("pl.amount")} value={fiatDisplay} />
+                  </div>
+                )}
 
                 {errorMsg && <p className="pc-error">{errorMsg}</p>}
 

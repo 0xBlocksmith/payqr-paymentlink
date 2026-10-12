@@ -1,9 +1,10 @@
 "use client";
 
 /**
- * Manual UPI checkout: show the payee's UPI ID and the exact amount, let the
- * customer copy each one, and open a UPI app (launcher only) so they can type
- * them in themselves. No `upi://` link or payment intent is ever created here.
+ * UPI checkout without a payment intent: app buttons that only OPEN the app
+ * (bare scheme, see lib/upiAppLaunch.ts), plus the payee's UPI ID and the
+ * exact amount with copy buttons so the customer enters them themselves. No
+ * `upi://` link or payee/amount-carrying URL is ever created.
  *
  * This component NEVER reports a payment as made. Opening an app or copying a
  * value changes nothing about the order; the parent keeps its own "I've paid"
@@ -13,7 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { usePayerT } from "../lib/payerI18n";
 import { copyText } from "../lib/clipboard";
-import { UPI_APPS, detectPlatform, launchUpiApp, supportsAndroidIntents, type UpiApp } from "../lib/upiAppLaunch";
+import { UPI_APPS, detectPlatform, launchUpiApp, type UpiApp } from "../lib/upiAppLaunch";
 
 type Field = "upi" | "amount";
 
@@ -21,15 +22,13 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
   const { t } = usePayerT();
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [copiedField, setCopiedField] = useState<Field | null>(null);
-  const [showApps, setShowApps] = useState(false);
-  const [canLaunch, setCanLaunch] = useState(false);
+  const [mobile, setMobile] = useState(false);
   const [launchMsg, setLaunchMsg] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Decided after mount: the server render has no user agent.
+  // After mount: the server render has no user agent. App buttons are for phones.
   useEffect(() => {
-    const ua = navigator.userAgent;
-    setCanLaunch(detectPlatform(ua, navigator.maxTouchPoints) === "android" && supportsAndroidIntents(ua));
+    setMobile(detectPlatform(navigator.userAgent, navigator.maxTouchPoints) !== "desktop");
     return () => { if (timer.current) clearTimeout(timer.current); };
   }, []);
 
@@ -47,60 +46,45 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
     else flash("err", t("pl.man.copyFailed", { label }));
   }
 
-  function onOpenPrimary() {
-    setLaunchMsg("");
-    setShowApps(true);
-  }
-
-  async function onPickApp(app: UpiApp) {
+  async function onOpen(app: UpiApp) {
     setLaunchMsg("");
     const outcome = await launchUpiApp(app);
-    if (outcome === "likely-opened") setLaunchMsg(t("pl.man.opened", { app: app.label }));
-    else setLaunchMsg(t("pl.man.openFailed", { app: app.label }));
+    if (outcome === "no-effect") setLaunchMsg(t("pl.man.openFailed", { app: app.label }));
   }
 
   return (
     <section className="pc-man" aria-labelledby="pc-man-h">
       <div id="pc-man-h" className="pc-man-h">{t("pl.man.title")}</div>
 
-      <div className="pc-man-row">
-        <div className="pc-man-k">{t("pl.man.upiId")}</div>
-        <div className="pc-man-v mono">{upiId}</div>
-        <button type="button" className={`pc-man-copy${copiedField === "upi" ? " copied" : ""}`} onClick={() => onCopy("upi")}>
-          {t("pl.man.copy")}
-        </button>
-      </div>
-      <div className="pc-man-row">
-        <div className="pc-man-k">{t("pl.man.amount")}</div>
-        <div className="pc-man-v">{amountDisplay}</div>
-        <button type="button" className={`pc-man-copy${copiedField === "amount" ? " copied" : ""}`} onClick={() => onCopy("amount")}>
-          {t("pl.man.copy")}
-        </button>
-      </div>
-
-      <button type="button" className="pc-man-open" onClick={onOpenPrimary} aria-expanded={showApps}>
-        {t("pl.man.openApp")}
-      </button>
-
-      {showApps && (
-        <div className="pc-man-apps">
-          {canLaunch ? (
-            <>
-              <div className="pc-man-apps-h">{t("pl.man.pickApp")}</div>
-              <div className="pc-man-apps-row">
-                {UPI_APPS.map((app) => (
-                  <button key={app.id} type="button" className="pc-man-app" onClick={() => onPickApp(app)}>
-                    {app.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          ) : (
-            <div className="pc-man-apps-h">{t("pl.man.noLaunch")}</div>
-          )}
-          {launchMsg && <div className="pc-man-launchmsg" role="status">{launchMsg}</div>}
+      {mobile ? (
+        <div className="pc-man-apps-row">
+          {UPI_APPS.map((app) => (
+            <button key={app.id} type="button" className="pc-man-app" onClick={() => onOpen(app)}>
+              {app.label}
+            </button>
+          ))}
         </div>
+      ) : (
+        <div className="pc-man-launchmsg">{t("pl.man.desktop")}</div>
       )}
+      {launchMsg && <div className="pc-man-launchmsg" role="status">{launchMsg}</div>}
+
+      <div className="pc-man-details">
+        <div className="pc-man-row">
+          <div className="pc-man-k">{t("pl.man.upiId")}</div>
+          <div className="pc-man-v mono">{upiId}</div>
+          <button type="button" className={`pc-man-copy${copiedField === "upi" ? " copied" : ""}`} onClick={() => onCopy("upi")}>
+            {t("pl.man.copy")}
+          </button>
+        </div>
+        <div className="pc-man-row">
+          <div className="pc-man-k">{t("pl.man.amount")}</div>
+          <div className="pc-man-v">{amountDisplay}</div>
+          <button type="button" className={`pc-man-copy${copiedField === "amount" ? " copied" : ""}`} onClick={() => onCopy("amount")}>
+            {t("pl.man.copy")}
+          </button>
+        </div>
+      </div>
 
       <p className="pc-man-steps">{t("pl.man.steps")}</p>
       <p className="pc-man-warn" role="note">{t("pl.man.noAuto")}</p>
@@ -119,12 +103,11 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
         .pc-man-copy { flex: none; border: none; cursor: pointer; font-family: inherit; font-size: 12.5px; font-weight: 600; padding: 8px 12px; border-radius: 8px; background: var(--pq-blue-soft); color: var(--pq-blue); }
         .pc-man-copy:hover { background: var(--pq-blue); color: #fff; }
         .pc-man-copy.copied { background: var(--pq-success); color: #fff; }
-        .pc-man-open { width: 100%; margin-top: 12px; border: none; cursor: pointer; font-family: inherit; font-size: 16px; font-weight: 600; color: #fff; padding: 15px 24px; border-radius: 999px; background: linear-gradient(180deg, #4b78ee 0%, #3a64dc 100%); box-shadow: 0 10px 22px -12px rgba(58,100,220,0.55); }
-        .pc-man-open:focus-visible, .pc-man-app:focus-visible, .pc-man-copy:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
-        .pc-man-apps { margin-top: 10px; }
-        .pc-man-apps-h { font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; margin-bottom: 8px; }
-        .pc-man-apps-row { display: flex; flex-wrap: wrap; gap: 8px; }
-        .pc-man-app { flex: 1 1 90px; border: 1px solid var(--pq-line); background: #fff; color: var(--pq-ink); border-radius: 12px; padding: 11px 8px; font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+        .pc-man-app:focus-visible, .pc-man-copy:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
+                        .pc-man-apps-row { display: flex; flex-wrap: wrap; gap: 8px; }
+        .pc-man-app { flex: 1 1 90px; border: 1px solid var(--pq-line); background: #fff; color: var(--pq-ink); border-radius: 12px; padding: 12px 8px; font-family: inherit; font-size: 13.5px; font-weight: 600; cursor: pointer; }
+        .pc-man-app:hover { border-color: var(--pq-blue); }
+        .pc-man-details { margin-top: 12px; }
         .pc-man-launchmsg { margin-top: 8px; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }
         .pc-man-steps { margin: 12px 0 0; font-size: 13px; color: var(--pq-ink); line-height: 1.5; }
         .pc-man-warn { margin: 8px 0 0; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }

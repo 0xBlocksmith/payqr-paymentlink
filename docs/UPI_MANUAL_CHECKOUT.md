@@ -1,6 +1,6 @@
 # Manual UPI checkout
 
-For INR payment links. Shows the payee's UPI ID and exact amount with copy buttons, and an **Open UPI App** button that opens an app's home screen. It never creates a `upi://pay` link or any payment intent, so the customer types the payee and amount themselves.
+For INR payment links. Shows the payee's UPI ID and exact amount with copy buttons, and Google Pay / PhonePe / Paytm buttons that only open the app. It never creates a `upi://pay` link or any payment intent. The customer types the payee and amount themselves.
 
 Code: `components/UpiManualCheckout.tsx`, `lib/upiAppLaunch.ts`, `lib/clipboard.ts`. Mounted in `PaymentLinkWidget` for INR.
 
@@ -9,22 +9,18 @@ Config: `NEXT_PUBLIC_UPI_MANUAL_ONLY=1` hides the existing `upi://pay` QR and le
 ## Payment status
 Nothing here changes order state. Opening an app, copying, or returning to PayQR does nothing to the order. The existing **I've paid** button only asks the protocol to verify, and the order completes only when the on-chain status says so (polled in `PaymentLinkWidget`). The UI says plainly that manual payment is not auto-confirmed.
 
-## What launches what
+## App launching
+Phones show **Pay with UPI apps** buttons: Google Pay (`tez://`), PhonePe (`phonepe://`), Paytm (`paytmmp://`). Each is a bare scheme with no path, payee or amount, so it only opens the app. Desktop shows text only.
 
-| Platform | Mechanism | Status |
-|---|---|---|
-| Android, Chrome | Chrome `intent:` URL with `package=` and MAIN/LAUNCHER (documented syntax: developer.chrome.com/docs/android/intents) | **Unverified on-device.** Chrome's docs say only `BROWSABLE` activities can be invoked; launcher activities usually lack it, so this may do nothing. |
-| Android, webviews / Firefox | none | Manual instructions |
-| iOS Safari | none | No documented way for a web page to open another app's home screen; custom schemes are undocumented and not used. Manual instructions. |
-| Desktop | none | Manual instructions |
+**Unverified:** these schemes are registered by the apps and handled as UPI-app schemes by payment SDKs (e.g. Cashfree), but none of the apps documents a bare "open me" link. Test on real devices (checklist below). After a tap, if the page never leaves the foreground within 1.6 s, the UI says "<app> didn't open. Open it yourself from your home screen."
 
-Package ids (Google Play): Google Pay `com.google.android.apps.nbu.paisa.user`, PhonePe `com.phonepe.app`, Paytm `net.one97.paytm`.
+Tried and rejected: a Chrome `intent:` URL with `package=` + MAIN/LAUNCHER. On Android Chrome it opened the app's **Play Store page**, because Chrome only resolves `BROWSABLE` activities.
 
-Because launching is best-effort, `launchUpiApp` watches for the page being hidden/blurred within 1.6 s. If it stays in the foreground the UI tells the customer to open the app themselves. **Do not describe Android launching as working until the checklist below passes.** If it fails everywhere, the feature still works as copy + manual instructions; the Open button just leads to guidance.
+Known behaviour to check: on iOS Safari a scheme with no installed app may show a "cannot open page" alert; if the apps don't open on a device, remove that app's entry from `UPI_APPS`.
 
 ## Limitations
-- No installed-app detection from the web, so all three apps are offered on Android.
-- Detection of "opened" is a heuristic, not proof.
+- Opening is best-effort and detection is a heuristic, not proof.
+- No installed-app detection from the web, so all three apps are offered.
 - Copy needs a user tap; falls back to `execCommand` on older browsers, and the toast says so if both fail.
 - Translations: hi/pt/es fall back to English for the new strings.
 
@@ -32,27 +28,26 @@ Because launching is best-effort, `launchUpiApp` watches for the page being hidd
 Open your UPI app, enter the merchant's UPI ID, enter the exact amount, pay, then return and tap **I Paid**.
 
 ## Test checklist
-Automated: `npm test` (`test/upiAppLaunch.test.ts`).
+Automated: `npm test` (`test/upiAppLaunch.test.ts`, `test/clipboard.test.ts`).
 
 **Android Chrome** (on a phone with each app installed, and one without)
 - [ ] Copy UPI ID, then paste elsewhere: exact ID; toast shown.
 - [ ] Copy amount: `123.45` form, no symbol; toast shown.
-- [ ] Open UPI App shows Google Pay / PhonePe / Paytm.
-- [ ] Each app: does it open? Record per app + app version + Chrome version in this doc.
-- [ ] Not-installed app / launch does nothing: fallback message appears after ~1.6 s, no error page.
+- [ ] Each app button: opens the app's home screen (record per app + version), not a payment screen and not the Play Store.
+- [ ] App not installed / not opening: "didn't open" message after ~1.6 s.
 - [ ] No payment screen is ever pre-filled.
 - [ ] Return to PayQR: order still pending.
-- [ ] Android in-app browser (e.g. Instagram): chooser is replaced by manual guidance.
 
 **iOS Safari**
-- [ ] Open UPI App shows manual guidance only; no navigation happens.
+- [ ] Each app button: opens the app, or Safari shows an error alert (record which).
 - [ ] Both copy buttons work (tap-triggered); denial shows the error toast.
 
 **Desktop (Chrome, Firefox, Safari)**
-- [ ] Manual guidance only.
+- [ ] No app buttons; text guidance only.
 - [ ] Copy works on https and on localhost; on plain http the legacy path or the error toast.
 - [ ] Layout OK at 320 px and desktop widths; toast not clipped.
 
 **All**
+- [ ] INR shows one details block (UPI ID + amount, with copy), not two.
 - [ ] With `NEXT_PUBLIC_UPI_MANUAL_ONLY=1` the QR is gone; BRL and other rails unchanged.
 - [ ] I've paid → "verifying"; completes only after on-chain confirmation.
