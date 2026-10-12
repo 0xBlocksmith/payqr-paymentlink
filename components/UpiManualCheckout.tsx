@@ -1,21 +1,20 @@
 "use client";
 
 /**
- * UPI checkout without a payment intent: the payee's UPI ID and exact amount
- * with copy buttons, and instructions to enter them in any UPI app. No `upi://`
- * link or payee/amount-carrying URL is ever created, and no app is launched:
- * the app-scheme links tried on a real Android phone (tez://, phonepe://) did
- * nothing and paytmmp:// opened Paytm's "App upgrade required" page, so they
- * were removed (see docs/UPI_MANUAL_CHECKOUT.md).
+ * UPI checkout without a payment intent: an "Open UPI app" button (bare
+ * `upi://`, no payee or amount; see lib/upiAppLaunch.ts), plus the payee's UPI ID
+ * and exact amount with copy buttons to enter in the app. No payee/amount-
+ * carrying URL is ever created.
  *
- * This component NEVER reports a payment as made. Copying a value changes
- * nothing about the order; the parent keeps its own "I've paid" step, which
- * only asks the protocol to verify — the order stays pending until its
- * on-chain status says otherwise.
+ * This component NEVER reports a payment as made. Opening an app or copying a
+ * value changes nothing about the order; the parent keeps its own "I've paid"
+ * step, which only asks the protocol to verify — the order stays pending until
+ * its on-chain status says otherwise.
  */
 import { useEffect, useRef, useState } from "react";
 import { usePayerT } from "../lib/payerI18n";
 import { copyText } from "../lib/clipboard";
+import { openUpiChooser } from "../lib/upiAppLaunch";
 
 type Field = "upi" | "amount";
 
@@ -23,6 +22,7 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
   const { t } = usePayerT();
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [copiedField, setCopiedField] = useState<Field | null>(null);
+  const [launchMsg, setLaunchMsg] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
@@ -32,6 +32,11 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
     setCopiedField(kind === "ok" ? field ?? null : null);
     if (timer.current) clearTimeout(timer.current);
     timer.current = setTimeout(() => { setToast(null); setCopiedField(null); }, 2200);
+  }
+
+  async function onOpen() {
+    setLaunchMsg("");
+    if ((await openUpiChooser()) === "no-effect") setLaunchMsg(t("pl.man.openFailed"));
   }
 
   async function onCopy(field: Field) {
@@ -45,7 +50,8 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
     <section className="pc-man" aria-labelledby="pc-man-h">
       <div id="pc-man-h" className="pc-man-h">{t("pl.man.title")}</div>
 
-      <div className="pc-man-launchmsg">{t("pl.man.apps")}</div>
+      <button type="button" className="pc-man-open" onClick={onOpen}>{t("pl.man.openApp")}</button>
+      <div className="pc-man-launchmsg" role="status">{launchMsg || t("pl.man.apps")}</div>
 
       <div className="pc-man-details">
         <div className="pc-man-row">
@@ -83,6 +89,8 @@ export function UpiManualCheckout({ upiId, amount, amountDisplay }: { upiId: str
         .pc-man-copy.copied { background: var(--pq-success); color: #fff; }
         .pc-man-copy:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
                         .pc-man-details { margin-top: 12px; }
+        .pc-man-open { width: 100%; margin-top: 4px; border: none; cursor: pointer; font-family: inherit; font-size: 16px; font-weight: 600; color: #fff; padding: 15px 24px; border-radius: 999px; background: linear-gradient(180deg, #4b78ee 0%, #3a64dc 100%); box-shadow: 0 10px 22px -12px rgba(58,100,220,0.55); }
+        .pc-man-open:focus-visible { outline: 3px solid rgba(58,100,220,0.3); outline-offset: 2px; }
         .pc-man-launchmsg { margin-top: 8px; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }
         .pc-man-steps { margin: 12px 0 0; font-size: 13px; color: var(--pq-ink); line-height: 1.5; }
         .pc-man-warn { margin: 8px 0 0; font-size: 12.5px; color: var(--pq-muted); line-height: 1.5; }
