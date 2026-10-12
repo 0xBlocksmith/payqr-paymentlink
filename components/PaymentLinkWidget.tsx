@@ -20,6 +20,7 @@ import { fetchPriceConfig } from "../lib/pricing";
 import type { PriceConfig } from "../lib/pricing";
 import { PAYMENT_LINK_QR_STYLE } from "./PaymentLinkQR";
 import { Logo } from "./Icons";
+import { UpiManualCheckout } from "./UpiManualCheckout";
 import { usePayerT, PAYER_DATE_LOCALE } from "../lib/payerI18n";
 import type { Hex } from "viem";
 
@@ -504,7 +505,15 @@ export function PaymentLinkWidget({
             ) : (
               <>
                 {currency === "INR" ? (
-                  <IndiaPayMethods qrValue={qrValue} />
+                  <>
+                    {/* The QR is a upi://pay link. NEXT_PUBLIC_UPI_MANUAL_ONLY=1
+                        drops it for merchants on personal UPI IDs, leaving the
+                        manual flow (no payment intent). */}
+                    {process.env.NEXT_PUBLIC_UPI_MANUAL_ONLY !== "1" && <IndiaPayMethods qrValue={qrValue} />}
+                    {decryptedUpi && (
+                      <UpiManualCheckout upiId={decryptedUpi} amount={fiatUpi} amountDisplay={fiatDisplay} />
+                    )}
+                  </>
                 ) : currency === "BRL" ? (
                   <BrazilPayMethod pixCode={pixCode} copied={copied} onCopy={copy} />
                 ) : railQr ? (

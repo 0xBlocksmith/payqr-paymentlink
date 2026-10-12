@@ -174,6 +174,23 @@ const en: Dict = {
   "pl.alreadyPaid": "I already paid",
 };
 
+// Manual UPI checkout. hi / pt / es fall back to these English strings.
+Object.assign(en, {
+  "pl.man.title": "Pay manually with any UPI app",
+  "pl.man.upiId": "UPI ID",
+  "pl.man.amount": "Amount",
+  "pl.man.copy": "Copy",
+  "pl.man.copied": "{label} copied",
+  "pl.man.copyFailed": "Couldn't copy the {label}. Select it and copy it by hand.",
+  "pl.man.openApp": "Open UPI App",
+  "pl.man.pickApp": "Choose your app. It opens on its home screen; nothing is paid yet.",
+  "pl.man.noLaunch": "This device can't open a UPI app from here. Open Google Pay, PhonePe, Paytm or your bank's UPI app yourself.",
+  "pl.man.opened": "If {app} opened, enter the UPI ID and amount above.",
+  "pl.man.openFailed": "{app} didn't open automatically. Open it yourself from your home screen.",
+  "pl.man.steps": "Open your UPI app, enter the merchant's UPI ID, and enter the payment amount.",
+  "pl.man.noAuto": "Paying this way is manual: PayQR can't see your payment in your app, so it isn't confirmed automatically. The order stays pending until the payment is verified. Pay the exact amount, then tap I Paid.",
+});
+
 const hi: Dict = {
   "pl.btnContinue": "आगे बढ़ें और भुगतान करें",
   "pl.paidNoteH": "भुगतान सफलतापूर्वक पूरा करने के बाद आपको “मैंने भुगतान कर दिया” दबाना ज़रूरी है।",
