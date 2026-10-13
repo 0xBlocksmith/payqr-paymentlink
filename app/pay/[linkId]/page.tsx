@@ -22,6 +22,7 @@ import {
   attemptScreening,
   rememberAttemptScreening,
   clearAttempt,
+  pendingAttemptFiat6,
 } from "../../../lib/paymentLinks";
 import type { PaymentLink } from "../../../lib/paymentLinks";
 import { getCustomerIdentity } from "../../../lib/customerRelayIdentity";
@@ -358,6 +359,28 @@ export default function PayLink() {
     }
   }, [safeLinkId]);
 
+  // A reload mid-placement (Pay tapped, order not yet on screen) leaves an
+  // unsettled attempt behind. Restore its amount and re-run it automatically:
+  // it carries the same idempotency key, so the relayer replays the SAME order
+  // rather than placing another, and the payer lands back on it without having
+  // to re-enter anything.
+  const resumeAttempt = useRef(false);
+  const payNow = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    if (!safeLinkId || loadStoredOrder(safeLinkId) || getPendingPayment(safeLinkId)) return;
+    const f = pendingAttemptFiat6(safeLinkId);
+    if (f === null) return;
+    setAmountInput(String(parseFloat((Number(f) / 1e6).toFixed(2))));
+    resumeAttempt.current = true;
+  }, [safeLinkId]);
+  // Runs every render on purpose: fires once, as soon as the page is able to pay.
+  useEffect(() => {
+    if (resumeAttempt.current && payNow.current) {
+      resumeAttempt.current = false;
+      payNow.current();
+    }
+  });
+
   // Remember a freshly placed (or freshly resolved) order. `at` is only set the
   // first time, so a reload never extends the window.
   useEffect(() => {
@@ -514,6 +537,16 @@ export default function PayLink() {
 
   async function handlePay() {
     if (!canPay || preparing) return;
+    // One live order per device per link: with an order already open here, Pay
+    // reopens it instead of placing another. Parallel orders from one payer are
+    // what ends up cancelled and refunded. A finished order does not block —
+    // paying again after a receipt is a new purchase.
+    const open = loadStoredOrder(safeLinkId);
+    if (open && !open.done) {
+      setQuotedFiat(open.fiat ?? null);
+      setOrderId(open.orderId);
+      return;
+    }
     setPreparing(true);
     setPrepareError("");
     try {
@@ -611,6 +644,9 @@ export default function PayLink() {
           rememberAttemptScreening(safeLinkId, attemptFiat6, idempotencyKey, activityLogId),
       });
       clearAttempt(safeLinkId);
+      // Saved now, not from an effect after the render: a reload in between
+      // would otherwise lose the order it just placed.
+      saveStoredOrder(safeLinkId, { orderId: newOrderId, at: Date.now(), ...(amountNum > 0 ? { fiat: amountNum } : {}) });
       // Set together with the order id so the saved order carries the quote.
       setQuotedFiat(amountNum > 0 ? amountNum : null);
       setOrderId(newOrderId);
@@ -635,6 +671,9 @@ export default function PayLink() {
       setPreparing(false);
     }
   }
+
+  // Lets the resume effect above start the payment once the page can pay.
+  payNow.current = canPay && !preparing && !orderId ? handlePay : null;
 
   return (
     <div className="pl-page">
