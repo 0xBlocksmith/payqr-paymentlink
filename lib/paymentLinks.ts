@@ -560,6 +560,23 @@ export function rememberAttemptScreening(linkId: string, fiat6: bigint, key: str
   }
 }
 
+/** The amount (6-dec fiat) of this link's unsettled attempt, if one is still
+ *  live — a payment the payer started and a reload interrupted before its order
+ *  was shown. Lets the page resume that same attempt (same idempotency key, so
+ *  the relayer replays the same order) instead of starting over. */
+export function pendingAttemptFiat6(linkId: string): bigint | null {
+  try {
+    const raw = localStorage.getItem(attemptSlot(linkId));
+    if (!raw) return null;
+    const a = JSON.parse(raw) as StoredAttempt;
+    if (typeof a?.at !== "number" || Date.now() - a.at >= ATTEMPT_TTL_MS || !/^\d+$/.test(String(a.fiat6))) return null;
+    const v = BigInt(a.fiat6);
+    return v > 0n ? v : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The attempt is settled — an order exists or is being followed up. */
 export function clearAttempt(linkId: string): void {
   try {
