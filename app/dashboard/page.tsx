@@ -12,7 +12,7 @@ import { AppTour } from "../../components/AppTour";
 import { ConnectionBanner } from "../../components/ConnectionBanner";
 import { SettlementPromo } from "../../components/SettlementBanner";
 import { CampaignPromo } from "../../components/CampaignBanner";
-import { campaignActive, campaignEligible } from "../../lib/campaign";
+import { campaignActive, campaignFor } from "../../lib/campaign";
 import { PromoCarousel } from "../../components/PromoCarousel";
 import { WalletSheet } from "../../components/WalletSheet";
 import { EcosystemPromo } from "../../components/EcosystemPanel";
@@ -289,14 +289,14 @@ export default function Dashboard() {
         </div>
 
         {/* promo carousel — swipe left/right between slides. Volume-challenge
-            campaign is 1st (Venezuela only), payment links 2nd, then ecosystem and counter QR;
+            campaign is 1st (Venezuela and Argentina), payment links 2nd, then ecosystem and counter QR;
             all share the same dark-gradient card so the swipe reads as one
             continuous banner. */}
         {/* Built as a list, not literal children: the carousel renders every
             child as a slide, so a hidden (false) one would leave an empty slide. */}
         <PromoCarousel>
           {[
-            ...(campaignActive() && campaignEligible(country.id) ? [<CampaignPromo key="campaign" />] : []),
+            ...(campaignActive(campaignFor(country.id)) ? [<CampaignPromo key="campaign" campaign={campaignFor(country.id)!} />] : []),
             <div key="payment-links" className="promo">
               <div className="promo-tag">{t("dash.plTag")}</div>
               <div className="promo-h">{t("dash.plH")}</div>
