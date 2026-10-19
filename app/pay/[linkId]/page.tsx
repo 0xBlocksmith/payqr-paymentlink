@@ -23,6 +23,8 @@ import {
   rememberAttemptScreening,
   clearAttempt,
   pendingAttemptFiat6,
+  setAttemptInflight,
+  clearPendingPayment,
 } from "../../../lib/paymentLinks";
 import type { PaymentLink } from "../../../lib/paymentLinks";
 import { getCustomerIdentity } from "../../../lib/customerRelayIdentity";
@@ -227,7 +229,19 @@ export default function PayLink() {
     // (e.g. an INR link created for ₹100 stores ~1.10 USDC-equiv, which read
     // back as fiat shows "₹1.10" instead of ₹100).
     if (!link || !country) return;
-    fetchPriceConfig(country.code).then(setPriceCfg);
+    // A fixed-USDC link cannot be paid until this lands, so a failed read is
+    // retried rather than left to strand the payer.
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const load = (attempt: number) => {
+      fetchPriceConfig(country.code).then((cfg) => {
+        if (!alive) return;
+        if (cfg) setPriceCfg(cfg);
+        else if (attempt < 5) timer = setTimeout(() => load(attempt + 1), 2000 * (attempt + 1));
+      });
+    };
+    load(0);
+    return () => { alive = false; if (timer) clearTimeout(timer); };
   }, [link, country]);
 
   // A fixed amount in the customer's own currency, which the RELAYER keeps and
@@ -365,6 +379,7 @@ export default function PayLink() {
   // rather than placing another, and the payer lands back on it without having
   // to re-enter anything.
   const resumeAttempt = useRef(false);
+  const payInFlight = useRef(false);
   const payNow = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (!safeLinkId || loadStoredOrder(safeLinkId) || getPendingPayment(safeLinkId)) return;
@@ -531,22 +546,17 @@ export default function PayLink() {
   const capFiat =
     isVariable && perTxCapUsdc6 && priceCfg ? fiatForUsdc(perTxCapUsdc6, priceCfg) : null;
   const overCap = capFiat !== null && amountNum > capFiat;
-  const canPay = (isVariable ? amountNum > 0 && !overCap : true) && !confirming && !stuckReference;
+  // A fixed-USDC link is priced in the customer's currency through the live
+  // rate, so it cannot be paid (or screened) before that rate has loaded —
+  // the fallback figure above is a USDC number, not their currency.
+  const canPay =
+    (isVariable ? amountNum > 0 && !overCap : !!priceCfg) && !confirming && !stuckReference;
   const merchantLabel = shopName || shortAddr(l.owner);
   const merchantInitials = (shopName ? shopName.replace(/[^a-zA-Z0-9]/g, "") : merchantLabel).slice(0, 2).toUpperCase();
 
   async function handlePay() {
-    if (!canPay || preparing) return;
-    // One live order per device per link: with an order already open here, Pay
-    // reopens it instead of placing another. Parallel orders from one payer are
-    // what ends up cancelled and refunded. A finished order does not block —
-    // paying again after a receipt is a new purchase.
-    const open = loadStoredOrder(safeLinkId);
-    if (open && !open.done) {
-      setQuotedFiat(open.fiat ?? null);
-      setOrderId(open.orderId);
-      return;
-    }
+    if (!canPay || preparing || payInFlight.current) return;
+    payInFlight.current = true;
     setPreparing(true);
     setPrepareError("");
     try {
@@ -580,6 +590,9 @@ export default function PayLink() {
       // The same attempt across a lost answer or a reload, so tapping Pay again
       // cannot place a second order (review: duplicate orders).
       const idempotencyKey = attemptKeyFor(safeLinkId, fiatAmount6 ?? l.amount);
+      // Only a reload that tears the page down mid-request leaves this set, and
+      // that is the only case the resume effect re-runs on its own.
+      setAttemptInflight(safeLinkId, true);
 
       // The offramp circle. The relayer takes circleId from the request and
       // defaults it to 0 — not a real circle — so it must be chosen here. It is
@@ -668,7 +681,9 @@ export default function PayLink() {
       }
       setPrepareError(e?.message || t("pl.errPrepare"));
     } finally {
+      setAttemptInflight(safeLinkId, false);
       setPreparing(false);
+      payInFlight.current = false;
     }
   }
 
@@ -750,7 +765,17 @@ export default function PayLink() {
                 <p className="pl-error">{t("pl.overCap", { max: fmtPayerFiat(country, capFiat) })}</p>
               )}
               {prepareError && <p className="pl-error">{prepareError}</p>}
-              {confirming && <p className="pl-notice">{t("pl.sentConfirming")}</p>}
+              {confirming && (
+                <>
+                  <p className="pl-notice">{t("pl.sentConfirming")}</p>
+                  <button
+                    className="pl-retry-btn"
+                    onClick={() => { clearPendingPayment(safeLinkId); setConfirming(false); }}
+                  >
+                    {t("pl.newPayment")}
+                  </button>
+                </>
+              )}
             </div>
           </div>
 

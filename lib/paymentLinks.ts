@@ -512,7 +512,24 @@ type StoredAttempt = {
   at: number;
   /** Set once this attempt has been through screening — see screeningFor. */
   screened?: { activityLogId: number | null };
+  /** A request for this attempt is on the wire. Still set on reload only if the
+   *  page was torn down mid-request — that, and only that, is auto-resumed. */
+  inflight?: boolean;
 };
+
+/** Mark the attempt as having a request in flight (or no longer). */
+export function setAttemptInflight(linkId: string, inflight: boolean): void {
+  try {
+    const raw = localStorage.getItem(attemptSlot(linkId));
+    if (!raw) return;
+    const a = JSON.parse(raw) as StoredAttempt;
+    if (inflight) a.inflight = true;
+    else delete a.inflight;
+    localStorage.setItem(attemptSlot(linkId), JSON.stringify(a));
+  } catch {
+    /* best-effort */
+  }
+}
 
 export function attemptKeyFor(linkId: string, fiat6: bigint): string {
   const slot = attemptSlot(linkId);
@@ -560,16 +577,18 @@ export function rememberAttemptScreening(linkId: string, fiat6: bigint, key: str
   }
 }
 
-/** The amount (6-dec fiat) of this link's unsettled attempt, if one is still
- *  live — a payment the payer started and a reload interrupted before its order
- *  was shown. Lets the page resume that same attempt (same idempotency key, so
- *  the relayer replays the same order) instead of starting over. */
+/** The amount (6-dec fiat) of this link's attempt, if a reload interrupted it
+ *  mid-request (see `inflight`) — a payment the payer started whose order was
+ *  never shown. An attempt that ended in an error is NOT returned: reopening the
+ *  link must never place an order the payer did not just ask for. Lets the
+ *  page resume that same attempt (same idempotency key, so the relayer replays
+ *  the same order) instead of starting over. */
 export function pendingAttemptFiat6(linkId: string): bigint | null {
   try {
     const raw = localStorage.getItem(attemptSlot(linkId));
     if (!raw) return null;
     const a = JSON.parse(raw) as StoredAttempt;
-    if (typeof a?.at !== "number" || Date.now() - a.at >= ATTEMPT_TTL_MS || !/^\d+$/.test(String(a.fiat6))) return null;
+    if (!a?.inflight || typeof a?.at !== "number" || Date.now() - a.at >= ATTEMPT_TTL_MS || !/^\d+$/.test(String(a.fiat6))) return null;
     const v = BigInt(a.fiat6);
     return v > 0n ? v : null;
   } catch {
@@ -898,15 +917,19 @@ export function makeRelayerPlaceOrder({
       const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, timeout: 30_000 });
       if (receipt.status === "reverted") throw new Error("The order transaction reverted.");
 
+      // Match on the order id as well as the link: several payers can pay the
+      // same link at once, and the bundler may put their orders in ONE
+      // transaction, so the first LinkOrderPlaced for this link can belong to a
+      // neighbour. Only the log carrying OUR order id confirms it; when it is
+      // absent (another payer's order shares the receipt) the worker's id stands
+      // — the pay page still verifies ownership of it before showing details.
       for (const log of receipt.logs) {
         try {
           const ev: any = decodeEventLog({ abi: INTEGRATOR_ABI, data: log.data, topics: log.topics });
-          // Match the linkId too: one bundled transaction can carry several
-          // links' operations, and taking the first LinkOrderPlaced would hand
-          // this customer a neighbour's order id.
           if (
             ev.eventName === "LinkOrderPlaced" &&
-            String(ev.args.linkId).toLowerCase() === linkId.toLowerCase()
+            String(ev.args.linkId).toLowerCase() === linkId.toLowerCase() &&
+            ev.args.orderId.toString() === String(orderId)
           ) {
             confirmedOrderId = ev.args.orderId.toString();
             break;
@@ -914,17 +937,6 @@ export function makeRelayerPlaceOrder({
         } catch {
           // not our event — skip
         }
-      }
-      if (confirmedOrderId && confirmedOrderId !== String(orderId)) {
-        // The chain disagrees with the worker about which order this is —
-        // that is a real integrity failure, not a slow receipt. The claim
-        // token above is already stored, but keyed under the WORKER's id —
-        // mirror it under the id the CHAIN says is real before throwing, so
-        // whichever id ends up driving mark-paid/cancel later, getLinkClaim
-        // can still find it instead of stranding the customer on an order
-        // that demonstrably exists.
-        if (claimToken) storeLinkClaim(confirmedOrderId, claimToken);
-        throw new Error("We couldn't confirm your payment. Please try again.");
       }
     } catch (e: any) {
       // A reverted transaction or a genuine mismatch is fatal; a timeout on a
