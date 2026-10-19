@@ -204,6 +204,15 @@ export function PaymentLinkWidget({
 
   const currency = currencyFromBytes32(currencyBytes32) || "INR";
 
+  // "Setting up your payment…" has no end of its own while no partner accepts.
+  // After a while offer a way out, so a stored order can never trap the payer.
+  const [slowMatching, setSlowMatching] = useState(false);
+  useEffect(() => {
+    if (phase !== "matching") { setSlowMatching(false); return; }
+    const timer = setTimeout(() => setSlowMatching(true), 90_000);
+    return () => clearTimeout(timer);
+  }, [phase, orderId]);
+
   // Ensure the customer's relay identity exists (pure, local, no wallet) so
   // decryptPayoutAddress has a key to decrypt with once the order accepts.
   useEffect(() => {
@@ -261,7 +270,7 @@ export function PaymentLinkWidget({
           // expired -> accepted -> expired forever. "expired" is terminal from
           // the customer's point of view; only cancelled/completed (handled
           // above) should ever move past it.
-          setPhase((p) => (p === "cancelled" || p === "completed" || p === "expired" ? p : "accepted"));
+          setPhase((p) => (p === "cancelled" || p === "completed" || p === "expired" || p === "paying" ? p : "accepted"));
           // Before ANY payment details: is this order ours (review M1)? Checked
           // once; a read failure just waits for the next tick.
           if (ownershipRef.current !== "ok") {
@@ -458,7 +467,12 @@ export function PaymentLinkWidget({
           <div className="pc-matching">
             <span className="pc-spinner" aria-hidden="true" />
             <div className="pc-matching-h">{t("pl.settingUp")}</div>
-            <div className="pc-matching-sub">{t("pl.fewSeconds")}</div>
+            <div className="pc-matching-sub">{slowMatching ? t("pl.slowSub") : t("pl.fewSeconds")}</div>
+            {slowMatching && onNewPayment && (
+              <button className="btn ghost pc-rcpt-share" onClick={onNewPayment}>
+                {t("pl.newPayment")}
+              </button>
+            )}
           </div>
         )}
 
@@ -1129,7 +1143,7 @@ function EndedReceipt({
               {t("pl.cancelOrder")}
             </button>
           )}
-          {!expired && onNewPayment && (
+          {onNewPayment && (
             <button className="btn ghost pc-rcpt-share" data-html2canvas-ignore="true" onClick={onNewPayment}>
               {t("pl.newPayment")}
             </button>

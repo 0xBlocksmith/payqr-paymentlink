@@ -9,19 +9,18 @@ import { loadCountry, fmtFiat } from "../../lib/countries";
 import { fetchUsdcRate } from "../../lib/rates";
 import { useT } from "../../lib/i18n";
 import { useMerchantProxies } from "../../components/useMerchantProxies";
-import { CAMPAIGN, campaignEligible } from "../../lib/campaign";
+import { campaignFor, campaignRange } from "../../lib/campaign";
 
-// Goal, reward, window and audience live in lib/campaign.ts. Only successful
-// (settled) orders PLACED in the window, charged in the challenge's currency,
-// count — nothing from before it carries over.
-const { start: WINDOW_START, end: WINDOW_END, goalUsdc: GOAL_USDC, rewardUsdc: REWARD_USDC } = CAMPAIGN;
+// Goal, reward, window and audience live in lib/campaign.ts (one per country).
+// Only successful (settled) orders PLACED in the window, charged in the
+// challenge's currency, count — nothing from before it carries over.
 
 function fmtDate(iso) {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 export default function Campaign() {
-  const { t } = useT();
+  const { t, lang } = useT();
   const { ready, authenticated, address } = useMerchant();
   // Every integrator's proxy: link sales, and history from before a contract
   // upgrade, are recorded under them rather than under the merchant.
@@ -54,8 +53,9 @@ export default function Campaign() {
 
   if (!ready || !authenticated) return <Splash />;
 
-  // Venezuela only (the country is a saved preference; until it loads, show the page shell).
-  if (country && !campaignEligible(country.id)) {
+  // Only countries with a campaign (the country is a saved preference; until it loads, show the page shell).
+  const campaign = campaignFor(country?.id);
+  if (country && !campaign) {
     return (
       <>
         <Nav back backHref="/dashboard" />
@@ -66,6 +66,13 @@ export default function Campaign() {
     );
   }
 
+  if (!campaign) return <Splash />;
+  const { start: WINDOW_START, end: WINDOW_END, goalUsdc: GOAL_USDC, rewardUsdc: REWARD_USDC } = campaign;
+  const fill = (key: string, withYear = false) =>
+    t(key)
+      .replace("{country}", t(`camp.country.${campaign.countryId}`))
+      .replace("{range}", campaignRange(campaign, lang, withYear));
+
   const toFiat = (usdc: number) =>
     country && rate ? `≈ ${fmtFiat(country, usdc * rate.rate)}` : null;
 
@@ -73,7 +80,7 @@ export default function Campaign() {
   // goal — no prior transactions, and nothing still matching/cancelled.
   const qualifying = rows
     .filter((t) => t.status === "settled")
-    .filter((t) => t.currency === CAMPAIGN.currency)
+    .filter((t) => t.currency === campaign.currency)
     .filter((t) => {
       const ts = new Date(t.createdAt).getTime();
       return ts >= WINDOW_START && ts < WINDOW_END;
@@ -90,9 +97,9 @@ export default function Campaign() {
       <div className="screen">
         <div className="camp-hero">
           <div className="promo-tag">{t("camp.tag")}</div>
-          <h1>{t("camp.bannerH")}</h1>
-          <p>{t("camp.heroText")}</p>
-          <div className="camp-window">{t("camp.window")}</div>
+          <h1>{t("camp.bannerH").replace("{goal}", `$${GOAL_USDC}`)}</h1>
+          <p>{fill("camp.heroText")}</p>
+          <div className="camp-window">{fill("camp.window", true)}</div>
         </div>
 
         <div className="camp-progress-card">
@@ -114,6 +121,7 @@ export default function Campaign() {
             {goalHit
               ? t("camp.goalReached").replace("{fiat}", toFiat(REWARD_USDC) ? ` (${toFiat(REWARD_USDC)})` : "")
               : t("camp.rewardPending")
+                  .replace("{goal}", `$${GOAL_USDC}`)
                   .replace("{fiat}", toFiat(GOAL_USDC) ? ` (${toFiat(GOAL_USDC)})` : "")
                   .replace("{rewardFiat}", toFiat(REWARD_USDC) ? ` (${toFiat(REWARD_USDC)})` : "")}
           </div>
