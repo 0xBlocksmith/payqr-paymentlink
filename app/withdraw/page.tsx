@@ -18,6 +18,7 @@ import { buildUsdcWithdraw, buildUsdcTransfer } from "../../lib/withdraw";
 import { fetchCashoutFee } from "../../lib/pricing";
 import { fetchWithdrawals } from "../../lib/history";
 import { useT } from "../../lib/i18n";
+import { useStepUp } from "../../components/useStepUp";
 
 // The p2p Cashout widget is a large dependency and only appears when the merchant
 // actually starts a fiat cash-out. Lazy-load it so it is NOT in the withdraw
@@ -50,6 +51,7 @@ export default function Withdraw() {
   const { ready, address, sendTransaction } = useMerchant();
   const publicClient = usePublicClient();
   const { t } = useT();
+  const { requireStepUp, stepUpModal } = useStepUp();
 
   const [country, setCountry] = useState(null);
   const [amount, setAmount] = useState("");
@@ -365,6 +367,7 @@ export default function Withdraw() {
     // handle (once), encrypts it, and runs the full offramp lifecycle. We no
     // longer ask for the handle here — the widget owns that single input.
     if (kind === "fiat") {
+      if (!(await requireStepUp())) return setError("Verification is required to withdraw.");
       setCashout({ defaultAmountUsdc: raw, code: wdCode, isHome });
       return;
     }
@@ -385,6 +388,7 @@ export default function Withdraw() {
   //              or the transfer would race the wallet's incoming balance.
   async function confirmUsdcWithdraw() {
     setError("");
+    if (!(await requireStepUp())) return setError("Verification is required to withdraw.");
     setBusy("usdc");
     try {
       // For an EXTERNAL send, snapshot the wallet's USDC balance BEFORE the
@@ -824,6 +828,7 @@ export default function Withdraw() {
           </div>
         </div>
       )}
+      {stepUpModal}
     </>
   );
 }
