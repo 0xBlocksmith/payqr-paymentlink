@@ -428,6 +428,16 @@ const ERROR_SIGNATURES: Record<string, string> = Object.fromEntries(
     UnknownOrder: "That order wasn't found.",
     OrderLinkMismatch: "That order doesn't belong to this link.",
     BadCustomerSignature: "Please reload the page and try again.",
+
+    // ── Dispute appeal ladder (Diamond) ──────────────────────────────
+    NotDisputeUser: "Only the account that placed this order can appeal.",
+    DisputeNotRaised: "There is no open dispute on this order.",
+    DisputeAppealNotDue: "This step hasn't run out of time yet.",
+    DisputeAppealWindowClosed: "The appeal window has closed. Finalize the decision instead.",
+    DisputeAtFinalTier: "This dispute is already at the final level.",
+    NoDisputeDecision: "There is no pending decision to finalize.",
+    DisputeAppealWindowOpen: "The appeal window is still open.",
+    DisputeAlreadySettled: "This dispute is already settled.",
   }).map(([errorName, message]) => [toFunctionSelector(`${errorName}()`), message])
 );
 

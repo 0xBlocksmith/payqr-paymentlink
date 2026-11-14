@@ -17,6 +17,7 @@ import { useT } from "../../lib/i18n";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { decryptPayout } from "../../lib/payoutCrypto";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
+import { DisputeAppeal } from "../../components/DisputeAppeal";
 import { useDisputeOrderStates, OrderDisputeManager, useSupportSigner } from "../../components/OrderDisputeManager";
 import { useMerchantProxies } from "../../components/useMerchantProxies";
 
@@ -430,6 +431,12 @@ export default function Transactions() {
                       orderId={tx.orderId}
                       order={disputeRow.order}
                       signer={supportSigner}
+                    />
+                  )}
+                  {disputeRow && !tx.isLink && tx.dispute === "open" && (
+                    <DisputeAppeal
+                      orderId={tx.orderId}
+                      enabled={disputeRow.order.user?.toLowerCase() === (supportSigner?.address ?? "").toLowerCase()}
                     />
                   )}
                   {!isWithdraw && tx.isLink && tx.dispute && tx.dispute !== "none" && (
