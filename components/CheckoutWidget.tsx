@@ -6,7 +6,9 @@ import { useCheckoutSigner } from "./useCheckoutSigner";
 import { useRelayIdentity } from "./useRelayIdentity";
 import { makePlaceOrder, SUBGRAPH_URL, USDC_ADDRESS, DIAMOND_ADDRESS, CURRENCIES, SCREENING_CONFIG } from "../lib/p2p";
 import { ACTIVE_CHAIN, RPC_URL } from "../lib/chain";
-import { friendlyError } from "../lib/contract";
+import { toUserError, type UserError } from "../lib/errors";
+import { LoadingState } from "./ui/LoadingState";
+import { useT } from "../lib/i18n";
 import { Icon } from "./Icons";
 
 /**
@@ -41,12 +43,13 @@ type CheckoutWidgetProps = {
   onComplete?: (orderId: any) => void;
   onCancel?: (orderId?: any) => void;
   onClose?: () => void;
-  onError?: (msg: string) => void;
+  onError?: (msg: string, err?: UserError) => void;
 };
 
 export function CheckoutWidget({ orderId, usdcAmount, fiatAmount, quantity, productName, currencies, onPlaced, onComplete, onCancel, onClose, onError }: CheckoutWidgetProps) {
   const { signer, publicClient, ready } = useCheckoutSigner();
   const { getIdentity, syncToSdkStore } = useRelayIdentity();
+  const { t } = useT();
   const [err, setErr] = useState("");
   // Mirror our per-address relay identity into the widget's global store BEFORE
   // it mounts, so the widget places the order AND decrypts the returned payout
@@ -63,8 +66,21 @@ export function CheckoutWidget({ orderId, usdcAmount, fiatAmount, quantity, prod
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Honest wait: says what it is doing, admits when it is slow, and — unlike
+  // the old bare "Preparing wallet…" — offers a way out (Close) and a retry
+  // instead of spinning forever. Closing here is safe: nothing is placed yet.
   if (!ready || !synced) {
-    return <p className="muted">Preparing wallet…</p>;
+    return (
+      <div className="checkout-fullscreen">
+        {onClose && (
+          <button className="checkout-fullscreen-close" onClick={onClose} aria-label={t("ui.close")}>
+            <Icon.Close />
+          </button>
+        )}
+        <LoadingState label={t("qr.preparingWallet")} slowAfterMs={6000} timeoutMs={20000}
+          onRetry={() => window.location.reload()} />
+      </div>
+    );
   }
 
   const placeOrder = makePlaceOrder({ signer, publicClient, quantity, getIdentity });
@@ -72,7 +88,7 @@ export function CheckoutWidget({ orderId, usdcAmount, fiatAmount, quantity, prod
   return (
     <div className="checkout-fullscreen">
       {onClose && (
-        <button className="checkout-fullscreen-close" onClick={onClose} aria-label="Close">
+        <button className="checkout-fullscreen-close" onClick={onClose} aria-label={t("ui.close")}>
           <Icon.Close />
         </button>
       )}
@@ -99,7 +115,12 @@ export function CheckoutWidget({ orderId, usdcAmount, fiatAmount, quantity, prod
         onOrderPlaced={(orderId, txHash) => onPlaced?.(orderId, txHash)}
         onComplete={(orderId) => onComplete?.(orderId)}
         onCancel={(orderId) => onCancel?.(orderId)}
-        onError={(e) => { const m = friendlyError(e, "Couldn't start this payment. Please try again."); setErr(m); onError?.(m); }}
+        onError={(e) => {
+          // Never show raw SDK/RPC text. An uncertain outcome (tx submitted,
+          // result unknown) is reported as such, never as a plain failure.
+          const ue = toUserError(e, { context: "checkout", fallbackKey: "err.order", uncertainKey: "err.uncertainOrder" });
+          setErr(ue.message); onError?.(ue.message, ue);
+        }}
         onClose={() => onClose?.()}
       />
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { PullToRefresh } from "../../components/ui/PullToRefresh";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useReadContract } from "wagmi";
@@ -287,7 +288,7 @@ export default function Transactions() {
   if (!country) return <><Nav back /><div className="screen"><p className="muted" style={{ textAlign: "center" }}>{t("common.loading")}</p></div></>;
 
   return (
-    <>
+    <PullToRefresh onRefresh={async () => { await refresh(); }}>
       <Nav back />
       <div className="screen">
         <h1 style={{ textAlign: "center", marginBottom: 2 }}>{t("tx.title")}</h1>
@@ -465,18 +466,6 @@ export default function Transactions() {
         {pdfMsg && <p className="error" style={{ textAlign: "center" }}>{pdfMsg}</p>}
       </div>
 
-      {/* Same orientation + styling as the dashboard bar: Withdraw (ghost) LEFT,
-          Accept (primary) RIGHT — so the buttons never swap between screens. */}
-      {/* <Link>, not <a href> — a raw anchor does a FULL document navigation,
-          which reboots the PWA (Splash + thirdweb reconnect) on every tap. */}
-      <div className="bottombar">
-        <Link className="btn ghost barbtn" href="/withdraw">
-          <Icon.Up /><span>{t("nav.withdraw")}</span>
-        </Link>
-        <Link className="btn barbtn" href="/qr">
-          <Icon.Plus /><span>{t("common.acceptPayment")}</span>
-        </Link>
-      </div>
-    </>
+    </PullToRefresh>
   );
 }

@@ -482,6 +482,7 @@ export default function Withdraw() {
         />
       )}
       <div className="screen">
+        <h1 style={{ textAlign: "center", marginBottom: 14 }}>{t("nav.withdraw")}</h1>
         {/* USDC WITHDRAW — STEP 2: choose WHERE the USDC goes. Either keep it in
             the merchant's OWN connected wallet (the contract pays out to
             msg.sender), or forward it to a pasted external address (two sponsored
@@ -539,11 +540,13 @@ export default function Withdraw() {
             )}
 
             {error && <p className="error" style={{ textAlign: "center", marginTop: 10 }}>{error}</p>}
+            <div className="wd-slide">
             <button className="btn" style={{ width: "100%", marginTop: 16 }}
               disabled={!address || !!busy || (usdcDest === "external" && !extAddrValid)}
               onClick={() => setUsdcStep("confirm")}>
               {t("common.continue")}
             </button>
+            </div>
           </div>
         )}
 
@@ -658,40 +661,25 @@ export default function Withdraw() {
               <Icon.Back width="16" height="16" /> {t("wd.sendToBank")} {wdCountry?.fiat}
             </button>
 
-            <div className="wd-card">
-              <label className="wd-label">{t("wd.amount")} ({country.code})</label>
-              <div className="wd-amt-row">
-                {/* Amount entered in LOCAL FIAT (₹/R$/…) with the currency symbol; the
-                    USDC equivalent is shown small below. */}
-                <div className="wd-fiat-input" style={{ display: "flex", alignItems: "center", flex: 1, gap: 6 }}>
-                  <span className="wd-fiat-sym" style={{ fontWeight: 700, color: "var(--muted)" }}>{country.symbol}</span>
-                  <input className="input" type="number" min="0" step="0.01"
-                    placeholder={maxFiat != null ? maxFiat.toFixed(2) : "0.00"} value={amount}
-                    onChange={(e) => { setAmount(e.target.value); setMaxSelected(false); }} style={{ flex: 1 }} />
-                </div>
-                {/* Max SHOWS the max fiat value (so the field isn't confusingly blank)
-                    but flags `maxSelected` so submit still uses the EXACT on-chain
-                    bigint (fee reserved) rather than the rounded display string —
-                    which could round a half-cent over the real max and revert. */}
-                <button className="btn secondary small" type="button"
-                  onClick={() => {
-                    setAmount(maxFiat != null ? maxFiat.toFixed(2) : "");
-                    setMaxSelected(true);
-                    setError("");
-                  }}>{t("wd.max")}</button>
+            <div className="wd-amt">
+              <div className="wd-amt-in">
+                <span className="wd-amt-sym">{country.symbol}</span>
+                <input className="wd-amt-field" type="number" inputMode="decimal" min="0" step="0.01"
+                  aria-label={`${t("wd.amount")} (${country.code})`} placeholder="0.00" value={amount}
+                  onChange={(e) => { setAmount(e.target.value); setMaxSelected(false); }} />
               </div>
-              {/* small USDC equivalent of whatever fiat is typed */}
-              <div className="wd-usdc-hint muted" style={{ fontSize: 12, marginTop: 6 }}>
-                ≈ {usdcNum > 0 ? usdcNum.toFixed(2) : maxFiatUsdc.toFixed(2)} USDC
-                {typedFiat === "" && <span> · {t("wd.max")}</span>}
+              <div className="wd-amt-sub">
+                ≈ {usdcNum > 0 ? usdcNum.toFixed(2) : "0.00"} USDC
+                {maxFiatUsdc < availNum - 1e-9 && <> · {t("wd.feeReserved").replace("{fee}", `${cashoutFee.fee.toFixed(2)} USDC`)}</>}
               </div>
-              {/* When Max had to hold back the fee, explain WHY it's less than the
-                  full balance — otherwise it looks like funds went missing. */}
-              {maxFiatUsdc < availNum - 1e-9 && (
-                <div className="wd-usdc-hint muted" style={{ fontSize: 11.5, marginTop: 4 }}>
-                  {t("wd.feeReserved").replace("{fee}", `${cashoutFee.fee.toFixed(2)} USDC`)}
-                </div>
-              )}
+              <div className="wd-pcts" role="group" aria-label={t("wd.amount")}>
+                {[25, 50, 100].map((p) => (
+                  <button key={p} type="button" className="wd-pct" disabled={maxFiat == null}
+                    onClick={() => { setAmount(maxFiat != null ? (maxFiat * p / 100).toFixed(2) : ""); setMaxSelected(p === 100); setError(""); }}>
+                    {p === 100 ? t("wd.max") : `${p}%`}
+                  </button>
+                ))}
+              </div>
               {overBalance && <p className="error">{t("wd.exceeds")}</p>}
             </div>
 
@@ -735,11 +723,13 @@ export default function Withdraw() {
               <p className="muted" style={{ textAlign: "center", fontSize: 12, marginTop: 10 }}>{t("wd.fetchingRate")}</p>
             )}
 
+            <div className="wd-slide">
             <button className="btn" style={{ width: "100%", marginTop: 16 }}
               disabled={!!busy || !ready || availNum <= 0 || overBalance || (typedFiat !== "" && !rate)}
               onClick={() => withdraw("fiat")}>
               {busy === "fiat" ? t("wd.working") : `${t("wd.sendToBank")} ${wdCountry?.fiat}`}
             </button>
+            </div>
           </>
         )}
 
@@ -757,36 +747,35 @@ export default function Withdraw() {
               <div className="wd-dest-head">{t("wd.usdcTitle")}</div>
             )}
 
-            <div className="wd-card">
-              <label className="wd-label">Withdraw to wallet</label>
-              <div className="wd-amt-row">
-                <div className="wd-fiat-input" style={{ display: "flex", alignItems: "center", flex: 1, gap: 6 }}>
-                  <input className="input" type="number" min="0" step="0.01"
-                    placeholder={availNum.toFixed(2)} value={amount}
-                    onChange={(e) => { setAmount(e.target.value); setMaxSelected(false); }} style={{ flex: 1 }} />
-                  <span className="wd-fiat-sym" style={{ fontWeight: 700, color: "var(--muted)" }}>USDC</span>
-                </div>
-                {/* Max SHOWS the full balance (so the field isn't confusingly
-                    blank) but flags `maxSelected` so submit still sends the
-                    EXACT on-chain `available` bigint, not a .toFixed(2) string
-                    that could round a fraction of a cent OVER the balance. */}
-                <button className="btn secondary small" type="button"
-                  onClick={() => { setAmount(availNum.toFixed(2)); setMaxSelected(true); setError(""); }}>{t("wd.max")}</button>
+            <div className="wd-amt">
+              <div className="wd-amt-in">
+                <input className="wd-amt-field" type="number" inputMode="decimal" min="0" step="0.01"
+                  aria-label="Withdraw to wallet" placeholder="0.00" value={amount}
+                  onChange={(e) => { setAmount(e.target.value); setMaxSelected(false); }} />
+                <span className="wd-amt-sym">USDC</span>
               </div>
-              {(typedFiat === "" || maxSelected) && (
-                <div className="wd-usdc-hint muted" style={{ fontSize: 12, marginTop: 6 }}>{t("wd.max")}</div>
-              )}
+              <div className="wd-amt-sub">Withdraw to wallet</div>
+              <div className="wd-pcts" role="group" aria-label="Withdraw to wallet">
+                {[25, 50, 100].map((p) => (
+                  <button key={p} type="button" className="wd-pct"
+                    onClick={() => { setAmount((availNum * p / 100).toFixed(2)); setMaxSelected(p === 100); setError(""); }}>
+                    {p === 100 ? t("wd.max") : `${p}%`}
+                  </button>
+                ))}
+              </div>
               {overBalance && <p className="error">{t("wd.exceeds")}</p>}
             </div>
 
             {error && <p className="error" style={{ textAlign: "center" }}>{error}</p>}
             {done && <p className="success" style={{ textAlign: "center" }}>✓ {done}</p>}
 
+            <div className="wd-slide">
             <button className="btn" style={{ width: "100%", marginTop: 16 }}
               disabled={!!busy || !ready || availNum <= 0 || overBalance}
               onClick={() => withdraw("usdc")}>
               {t("common.continue")}
             </button>
+            </div>
           </>
         )}
         </>

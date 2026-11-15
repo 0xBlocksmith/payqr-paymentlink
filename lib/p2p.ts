@@ -134,7 +134,12 @@ export function makePlaceOrder({ signer, publicClient, quantity, getIdentity }) 
   return async (ctx) => {
     const circleId = ctx?.currency?.circleId;
     if (circleId === undefined || circleId === null) {
-      throw new Error("No circle resolved for INR — check subgraphUrl/usdcAmount");
+      // Nothing was sent. Name the currency that actually failed (this used to
+      // say "INR" for every currency) so the UI can say it is unavailable.
+      throw Object.assign(
+        new Error(`No circle resolved for ${ctx?.currency?.symbol ?? "this currency"}`),
+        { name: "UnsupportedCurrencyError", currency: ctx?.currency?.symbol ?? "" }
+      );
     }
 
     const identity = await getIdentity();
@@ -159,8 +164,28 @@ export function makePlaceOrder({ signer, publicClient, quantity, getIdentity }) 
       gasLimit: 1_500_000,
     });
 
-    const receipt = await publicClient.waitForTransactionReceipt({ hash });
-    if (receipt.status === "reverted") throw new Error("order tx reverted");
+    // From here the order tx HAS been submitted. Any failure to learn its
+    // outcome is UNCERTAIN, not a failure: the order may exist and a customer
+    // may be paying it. We persist that fact (scoped to this wallet) BEFORE
+    // throwing, so the UI can never offer "start again" — which would place a
+    // second order for the same sale.
+    const markUncertain = (cause: unknown) => {
+      savePendingOrder({
+        orderId: "", uncertain: true, txHash: hash,
+        fiat: 0, usdc: Number(quantity) / 1e6,
+        countryId: "", currency: ctx?.currency?.symbol ?? "",
+        shopLabel: "", savedAt: Date.now(),
+      }, signer?.address);
+      return Object.assign(new Error("order outcome unknown"), { name: "OrderUncertainError", txHash: hash, cause });
+    };
+
+    let receipt;
+    try {
+      receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+    } catch (e) {
+      throw markUncertain(e);
+    }
+    if (receipt.status === "reverted") throw new Error("order tx reverted"); // nothing placed
 
     // Decode the orderId from OUR OrderPlaced event (Diamond also emits
     // B2BOrderPlaced; either resolves the id — we use ours since it's in the ABI).
@@ -177,7 +202,8 @@ export function makePlaceOrder({ signer, publicClient, quantity, getIdentity }) 
         // not our event — skip
       }
     }
-    if (!orderId) throw new Error("orderId missing from receipt");
+    // Mined but the id could not be read: the order EXISTS. Never "try again".
+    if (!orderId) throw markUncertain(new Error("orderId missing from receipt"));
 
     return { orderId, txHash: hash };
   };
@@ -189,31 +215,44 @@ export function makePlaceOrder({ signer, publicClient, quantity, getIdentity }) 
 // pending forever with no way to get back to it. We stash the minimal info
 // needed to reopen <Checkout orderId={...}> in tracking-only mode, and clear
 // it once the widget reports the order finished (complete/cancel/error).
+// Scoped PER WALLET: a shared key let a second merchant on the same device see —
+// and "Resume" — the first merchant's order. The old global key is never read.
 const PENDING_KEY = "payqr.pendingOrder";
+const pendingKey = (address?: string | null) => `${PENDING_KEY}.${String(address || "").toLowerCase()}`;
 
 export type PendingOrder = {
+  /** "" while the outcome is uncertain (tx submitted, order id not yet known). */
   orderId: string;
   fiat: number;
   usdc: number;
   countryId: string;
+  /** Currency code, set on uncertain records where the country id is unknown. */
+  currency?: string;
   shopLabel: string;
   savedAt: number;
+  /** The order tx hash, kept so an uncertain order can be matched later. */
+  txHash?: string;
+  /** True when the order tx was submitted but its outcome is not known. */
+  uncertain?: boolean;
 };
 
-export function savePendingOrder(order: PendingOrder): void {
-  try { localStorage.setItem(PENDING_KEY, JSON.stringify(order)); } catch {}
+export function savePendingOrder(order: PendingOrder, address?: string | null): void {
+  if (!address) return;
+  try { localStorage.setItem(pendingKey(address), JSON.stringify(order)); } catch {}
 }
 
-export function loadPendingOrder(): PendingOrder | null {
-  if (typeof window === "undefined") return null;
+export function loadPendingOrder(address?: string | null): PendingOrder | null {
+  if (typeof window === "undefined" || !address) return null;
   try {
-    const raw = localStorage.getItem(PENDING_KEY);
+    localStorage.removeItem(PENDING_KEY); // legacy un-scoped record: drop, never trust
+    const raw = localStorage.getItem(pendingKey(address));
     return raw ? JSON.parse(raw) : null;
   } catch {
     return null;
   }
 }
 
-export function clearPendingOrder(): void {
-  try { localStorage.removeItem(PENDING_KEY); } catch {}
+export function clearPendingOrder(address?: string | null): void {
+  if (!address) return;
+  try { localStorage.removeItem(pendingKey(address)); } catch {}
 }

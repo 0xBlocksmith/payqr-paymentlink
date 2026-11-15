@@ -13,7 +13,11 @@ import { Splash } from "../components/Splash";
  *   else                -> /dashboard
  *
  * Currency + language are picked on the login page itself, so there's no
- * separate /select step. Registration is requested lazily on "Accept Payment".
+ * separate /select step. Registration is requested lazily: an unregistered
+ * account is sent to /onboarding when it taps "Accept Payment" on the dashboard.
+ *
+ * (A "new account → /onboarding right after login" redirect was tried and is
+ * switched off for now; the gate below is the original behaviour.)
  */
 export default function Home() {
   const router = useRouter();

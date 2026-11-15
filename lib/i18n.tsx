@@ -10,6 +10,7 @@
  * Add a key to EN first; other languages fall back to EN until translated.
  */
 import { useEffect, useState, useCallback } from "react";
+import * as stage from "./i18n.stage";
 
 export type Lang = "en" | "hi" | "pt" | "es";
 
@@ -21,7 +22,7 @@ type Dict = Record<string, string>;
 
 const en: Dict = {
   // login
-  "login.headline": "Accept any payment, settle instantly.",
+  "login.headline": "Accept any payment. Get paid in USDC.",
   "login.selectPrefs": "Select Country and Language",
   "login.terms": "By logging in, you agree to our",
   "login.termsLink": "Terms & Conditions",
@@ -37,6 +38,7 @@ const en: Dict = {
   "nav.transactions": "Transactions",
   "nav.help": "Help & Support",
   "nav.disputes": "Disputes & Support",
+  "nav.home": "Home",
   "nav.settings": "Settings",
   "nav.logout": "Log out",
   "nav.loggedInAs": "Logged in as",
@@ -66,6 +68,9 @@ const en: Dict = {
   "wd.settlingNote": "still settling",
   "wd.maturityNote": "Funds unlock after settling",
   "wd.amount": "Amount (leave blank to withdraw all)",
+  "wd.receiveIn": "You'll receive in",
+  "wd.slide": "Slide to withdraw",
+  "tx.chart": "Analytics",
   "wd.max": "Max",
   "wd.fetchingRate": "Fetching the exchange rate…",
   "wd.inflightTitle": "A withdrawal is still in progress",
@@ -203,14 +208,14 @@ const en: Dict = {
   "tour.s1Title": "Welcome to PayQR",
   "tour.s1Text": "Take payments two ways — in person with Counter QR, or online with Payment Links — and get paid in USDC. 5 quick steps.",
   "tour.s2Title": "Counter QR",
-  "tour.s2Text": "For in-person sales. Tap Accept Payment, type the amount, and show the QR at your counter. The customer scans and pays — you receive USDC instantly.",
+  "tour.s2Text": "For in-person sales. Tap Accept Payment, type the amount, and show the QR at your counter. The customer scans and pays — USDC lands in your PayQR balance, then unlocks for withdrawal after your settlement period.",
   "tour.s2Pill": "In person",
   "tour.sLTitle": "Payment Links",
   "tour.sLText": "For remote sales. Create a link with an amount, share it on WhatsApp, email or social, and get paid anywhere. Each link has a 5-minute countdown once accepted.",
   "tour.sLPill": "Online",
   "tour.sLCta": "Create Payment Link",
   "dash.cqTag": "COUNTER QR",
-  "dash.cqH": "Accept in person, instantly.",
+  "dash.cqH": "Accept in person, in USDC.",
   "dash.cqSub": "Type the amount, show the QR at your counter — the customer scans and you get USDC.",
   "dash.plTag": "PAYMENT LINKS",
   "dash.plH": "Get paid from anywhere.",
@@ -255,7 +260,7 @@ const en: Dict = {
 };
 
 const hi: Dict = {
-  "login.headline": "कोई भी भुगतान लें, तुरंत सेटल करें।",
+  "login.headline": "कोई भी भुगतान लें। USDC में पाएँ।",
   "login.selectPrefs": "देश और भाषा चुनें",
   "login.terms": "लॉग इन करके, आप हमारी",
   "login.termsLink": "नियम और शर्तें",
@@ -269,6 +274,7 @@ const hi: Dict = {
   "nav.activity": "लेन-देन",
   "nav.transactions": "लेन-देन",
   "nav.help": "सहायता और समर्थन",
+  "nav.home": "होम",
   "nav.settings": "सेटिंग्स",
   "nav.logout": "लॉग आउट",
   "nav.loggedInAs": "लॉग इन किया गया",
@@ -296,6 +302,9 @@ const hi: Dict = {
   "wd.settlingNote": "सेटल हो रहा",
   "wd.maturityNote": "सेटल होने के बाद फंड अनलॉक होते हैं",
   "wd.amount": "राशि (पूरी निकासी हेतु खाली छोड़ें)",
+  "wd.receiveIn": "आपको यहाँ मिलेगा",
+  "wd.slide": "निकासी के लिए स्लाइड करें",
+  "tx.chart": "विश्लेषण",
   "wd.max": "अधिकतम",
   "wd.fetchingRate": "विनिमय दर प्राप्त हो रही है…",
   "wd.inflightTitle": "एक निकासी अभी भी जारी है",
@@ -423,14 +432,14 @@ const hi: Dict = {
   "tour.s1Title": "PayQR में आपका स्वागत है",
   "tour.s1Text": "दो तरीकों से भुगतान लें — दुकान पर Counter QR से, या ऑनलाइन Payment Links से — और USDC में पाएँ। 5 आसान चरण।",
   "tour.s2Title": "Counter QR",
-  "tour.s2Text": "दुकान पर बिक्री के लिए। भुगतान स्वीकारें दबाएँ, राशि डालें, और काउंटर पर QR दिखाएँ। ग्राहक स्कैन करके भुगतान करता है — आपको तुरंत USDC मिलता है।",
+  "tour.s2Text": "दुकान पर बिक्री के लिए। भुगतान स्वीकारें दबाएँ, राशि डालें, और काउंटर पर QR दिखाएँ। ग्राहक स्कैन करके भुगतान करता है — USDC आपके PayQR बैलेंस में आता है, फिर सेटलमेंट अवधि के बाद निकासी के लिए खुलता है।",
   "tour.s2Pill": "आमने-सामने",
   "tour.sLTitle": "Payment Links",
   "tour.sLText": "दूर से बिक्री के लिए। राशि के साथ एक लिंक बनाएँ, उसे WhatsApp, ईमेल या सोशल पर भेजें, और कहीं से भी भुगतान पाएँ। स्वीकार होने के बाद हर लिंक पर 5 मिनट का काउंटडाउन चलता है।",
   "tour.sLPill": "ऑनलाइन",
   "tour.sLCta": "पेमेंट लिंक बनाएँ",
   "dash.cqTag": "COUNTER QR",
-  "dash.cqH": "दुकान पर तुरंत भुगतान लें।",
+  "dash.cqH": "दुकान पर भुगतान लें, USDC में।",
   "dash.cqSub": "राशि डालें, काउंटर पर QR दिखाएँ — ग्राहक स्कैन करता है और आपको USDC मिलता है।",
   "dash.plTag": "PAYMENT LINKS",
   "dash.plH": "कहीं से भी भुगतान पाएँ।",
@@ -474,7 +483,7 @@ const hi: Dict = {
 };
 
 const pt: Dict = {
-  "login.headline": "Aceite qualquer pagamento, liquide na hora.",
+  "login.headline": "Aceite qualquer pagamento. Receba em USDC.",
   "login.selectPrefs": "Selecione país e idioma",
   "login.terms": "Ao entrar, você concorda com nossos",
   "login.termsLink": "Termos e Condições",
@@ -488,6 +497,7 @@ const pt: Dict = {
   "nav.activity": "Transações",
   "nav.transactions": "Transações",
   "nav.help": "Ajuda e Suporte",
+  "nav.home": "Início",
   "nav.settings": "Configurações",
   "nav.logout": "Sair",
   "nav.loggedInAs": "Conectado como",
@@ -515,6 +525,9 @@ const pt: Dict = {
   "wd.settlingNote": "ainda liquidando",
   "wd.maturityNote": "Os fundos liberam após a liquidação",
   "wd.amount": "Valor (deixe em branco para sacar tudo)",
+  "wd.receiveIn": "Você receberá em",
+  "wd.slide": "Deslize para sacar",
+  "tx.chart": "Análises",
   "wd.max": "Máx",
   "wd.fetchingRate": "Obtendo a taxa de câmbio…",
   "wd.inflightTitle": "Um saque ainda está em andamento",
@@ -642,14 +655,14 @@ const pt: Dict = {
   "tour.s1Title": "Bem-vindo ao PayQR",
   "tour.s1Text": "Receba de duas formas — presencialmente com o Counter QR, ou online com Payment Links — e ganhe em USDC. 5 passos rápidos.",
   "tour.s2Title": "Counter QR",
-  "tour.s2Text": "Para vendas presenciais. Toque em Receber Pagamento, digite o valor e mostre o QR no balcão. O cliente escaneia e paga — você recebe USDC na hora.",
+  "tour.s2Text": "Para vendas presenciais. Toque em Receber Pagamento, digite o valor e mostre o QR no balcão. O cliente escaneia e paga — o USDC chega ao seu saldo PayQR e fica disponível para saque após o prazo de liquidação.",
   "tour.s2Pill": "Presencial",
   "tour.sLTitle": "Payment Links",
   "tour.sLText": "Para vendas à distância. Crie um link com o valor, compartilhe no WhatsApp, e-mail ou redes sociais e receba de qualquer lugar. Cada link tem uma contagem de 5 minutos após ser aceito.",
   "tour.sLPill": "Online",
   "tour.sLCta": "Criar Link de Pagamento",
   "dash.cqTag": "COUNTER QR",
-  "dash.cqH": "Receba presencialmente, na hora.",
+  "dash.cqH": "Receba presencialmente, em USDC.",
   "dash.cqSub": "Digite o valor e mostre o QR no balcão — o cliente escaneia e você recebe USDC.",
   "dash.plTag": "PAYMENT LINKS",
   "dash.plH": "Receba de qualquer lugar.",
@@ -693,7 +706,7 @@ const pt: Dict = {
 };
 
 const es: Dict = {
-  "login.headline": "Acepta cualquier pago, liquida al instante.",
+  "login.headline": "Acepta cualquier pago. Cobra en USDC.",
   "login.selectPrefs": "Selecciona país e idioma",
   "login.terms": "Al iniciar sesión, aceptas nuestros",
   "login.termsLink": "Términos y Condiciones",
@@ -707,6 +720,7 @@ const es: Dict = {
   "nav.activity": "Transacciones",
   "nav.transactions": "Transacciones",
   "nav.help": "Ayuda y Soporte",
+  "nav.home": "Inicio",
   "nav.settings": "Ajustes",
   "nav.logout": "Cerrar sesión",
   "nav.loggedInAs": "Sesión iniciada como",
@@ -734,6 +748,9 @@ const es: Dict = {
   "wd.settlingNote": "aún liquidando",
   "wd.maturityNote": "Los fondos se desbloquean tras liquidar",
   "wd.amount": "Monto (deja vacío para retirar todo)",
+  "wd.receiveIn": "Recibirás en",
+  "wd.slide": "Desliza para retirar",
+  "tx.chart": "Análisis",
   "wd.max": "Máx",
   "wd.fetchingRate": "Obteniendo el tipo de cambio…",
   "wd.inflightTitle": "Un retiro todavía está en curso",
@@ -861,14 +878,14 @@ const es: Dict = {
   "tour.s1Title": "Bienvenido a PayQR",
   "tour.s1Text": "Cobra de dos formas — en persona con Counter QR, u online con Payment Links — y recibe en USDC. 5 pasos rápidos.",
   "tour.s2Title": "Counter QR",
-  "tour.s2Text": "Para ventas presenciales. Toca Cobrar Pago, escribe el monto y muestra el QR en tu mostrador. El cliente escanea y paga — recibes USDC al instante.",
+  "tour.s2Text": "Para ventas presenciales. Toca Cobrar Pago, escribe el monto y muestra el QR en tu mostrador. El cliente escanea y paga — el USDC llega a tu saldo de PayQR y se libera para retirar tras tu plazo de liquidación.",
   "tour.s2Pill": "En persona",
   "tour.sLTitle": "Payment Links",
   "tour.sLText": "Para ventas a distancia. Crea un enlace con el monto, compártelo por WhatsApp, correo o redes y cobra desde cualquier lugar. Cada enlace tiene una cuenta regresiva de 5 minutos tras ser aceptado.",
   "tour.sLPill": "Online",
   "tour.sLCta": "Crear Enlace de Pago",
   "dash.cqTag": "COUNTER QR",
-  "dash.cqH": "Cobra en persona, al instante.",
+  "dash.cqH": "Cobra en persona, en USDC.",
   "dash.cqSub": "Escribe el monto y muestra el QR en tu mostrador — el cliente escanea y recibes USDC.",
   "dash.plTag": "PAYMENT LINKS",
   "dash.plH": "Cobra desde cualquier lugar.",
@@ -911,17 +928,48 @@ const es: Dict = {
   "eco.openNewTab": "Abrir en nueva pestaña",
 };
 
-const DICTS: Record<Lang, Dict> = { en, hi, pt, es };
+const DICTS: Record<Lang, Dict> = {
+  en: { ...en, ...stage.en },
+  hi: { ...hi, ...stage.hi },
+  pt: { ...pt, ...stage.pt },
+  es: { ...es, ...stage.es },
+};
 
+/**
+ * First supported language among the device's preferences. "pt-BR" → pt,
+ * "es-AR" → es, "hi-IN" → hi; anything unsupported falls through to the next
+ * preference, then English.
+ */
+export function pickSupportedLang(candidates: readonly string[] | null | undefined): Lang {
+  for (const c of candidates ?? []) {
+    const base = String(c || "").toLowerCase().split(/[-_]/)[0];
+    if (base in DICTS) return base as Lang;
+  }
+  return "en";
+}
+
+/** The device/browser language, mapped to a supported one. */
+export function detectDeviceLang(): Lang {
+  if (typeof navigator === "undefined") return "en";
+  return pickSupportedLang(navigator.languages?.length ? navigator.languages : [navigator.language]);
+}
+
+/** The saved choice if there is one; otherwise the device's language. */
 export function getLang(): Lang {
   if (typeof window === "undefined") return "en";
   try {
     const l = localStorage.getItem(LANG_KEY) as Lang | null;
-    return l && DICTS[l] ? l : "en";
-  } catch { return "en"; }
+    return l && DICTS[l] ? l : detectDeviceLang();
+  } catch { return detectDeviceLang(); }
+}
+
+/** Keep <html lang> in step with the chosen language (screen readers, hyphenation). */
+function applyHtmlLang(code: Lang) {
+  try { document.documentElement.lang = code; } catch { /* SSR */ }
 }
 
 export function setLang(code: Lang): void {
+  applyHtmlLang(code);
   try {
     localStorage.setItem(LANG_KEY, code);
     window.dispatchEvent(new Event("payqr:lang"));
@@ -930,7 +978,7 @@ export function setLang(code: Lang): void {
 
 /** translate a key for an explicit language (EN fallback, then the key). */
 export function translate(key: string, lang: Lang): string {
-  return DICTS[lang]?.[key] ?? en[key] ?? key;
+  return DICTS[lang]?.[key] ?? DICTS.en[key] ?? key;
 }
 
 /**
@@ -942,7 +990,8 @@ export function useT() {
 
   useEffect(() => {
     setLangState(getLang());
-    const onChange = () => setLangState(getLang());
+    applyHtmlLang(getLang());
+    const onChange = () => { setLangState(getLang()); applyHtmlLang(getLang()); };
     window.addEventListener("payqr:lang", onChange);
     window.addEventListener("storage", onChange);
     return () => {

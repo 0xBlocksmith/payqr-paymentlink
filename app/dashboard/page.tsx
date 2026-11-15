@@ -1,67 +1,73 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
+import { PullToRefresh } from "../../components/ui/PullToRefresh";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useReadContract } from "wagmi";
+import { useQueryClient } from "@tanstack/react-query";
 import { Nav } from "../../components/Nav";
 import { useMerchant } from "../../components/useMerchant";
 import { Splash } from "../../components/Splash";
 import { Icon } from "../../components/Icons";
-import { AppTour } from "../../components/AppTour";
+import { AppTour, tourSeen } from "../../components/AppTour";
 import { ConnectionBanner } from "../../components/ConnectionBanner";
-import { SettlementPromo } from "../../components/SettlementBanner";
-import { CampaignPromo } from "../../components/CampaignBanner";
-import { campaignActive, campaignFor } from "../../lib/campaign";
-import { PromoCarousel } from "../../components/PromoCarousel";
-import { WalletSheet } from "../../components/WalletSheet";
-import { EcosystemPromo } from "../../components/EcosystemPanel";
+import { SetupChecklist } from "../../components/SetupChecklist";
+import { Skeleton, LoadingState } from "../../components/ui/LoadingState";
+import { ErrorPanel } from "../../components/ui/ErrorPanel";
+import { SettlementNote } from "../../components/ui/SettlementNote";
+import { useRegisteredCurrency } from "../../components/useRegisteredCurrency";
+import { useLockPeriod } from "../../components/useLockPeriod";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc } from "../../lib/contract";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
-import { fetchHistory } from "../../lib/history";
-import { loadCountry, fmtFiat } from "../../lib/countries";
+import { useHistory } from "../../components/useHistory";
+import { loadCountry, fmtFiat, saveCountry, COUNTRIES } from "../../lib/countries";
+import { rememberedLinks } from "../../lib/paymentLinks";
+import { computeSetup, dismissSetup, setupDismissed } from "../../lib/setup";
+import { resolveStatus } from "../../lib/status";
+import { fill, fmtAgo, fmtDay } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { usePrevBalances } from "../../components/usePrevBalances";
 import { useMerchantProxies } from "../../components/useMerchantProxies";
 
-function timeAgo(iso) {
-  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return "just now";
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)} hr ago`;
-  return `${Math.floor(s / 86400)} d ago`;
-}
-function isToday(iso) {
-  const d = new Date(iso), n = new Date();
-  return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
-}
-
 export default function Dashboard() {
   const router = useRouter();
-  const { t } = useT();
+  const { t, lang } = useT();
   const { ready, authenticated, address, isRegistered } = useMerchant();
   // Every integrator's proxy: link sales, and history from before a contract
   // upgrade, are recorded under them rather than under the merchant.
   const { proxies } = useMerchantProxies(address);
   const [country, setCountry] = useState(null);
   const [rate, setRate] = useState(null);
-  const [rows, setRows] = useState([]);
+  const [rateFailed, setRateFailed] = useState(false);
   const [tourForce, setTourForce] = useState(false);
   const [toast, setToast] = useState("");       // settlement-ready banner
-  const [walletOpen, setWalletOpen] = useState(false);
+  const [welcome, setWelcome] = useState(false); // just registered
   const [dismissed, setDismissed] = useState<string[]>([]); // locally-hidden stuck orders
+  const [setupHidden, setSetupHidden] = useState(true);     // true until we know (no flash)
 
   useEffect(() => { setCountry(loadCountry()); }, []);
   useEffect(() => {
     try { setDismissed(JSON.parse(localStorage.getItem("payqr.dismissedStuck") || "[]")); } catch {}
   }, []);
 
+  // One-shot query flags: ?welcome=1 (just registered) and ?wallet=1 (deep link
+  // from the withdraw recovery panel). Read from location, then cleaned off the
+  // URL so a refresh doesn't replay them.
+  useEffect(() => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      if (q.get("welcome") === "1") { setWelcome(true); setTimeout(() => setWelcome(false), 7000); }
+      if (q.has("welcome") || q.has("wallet")) window.history.replaceState(null, "", window.location.pathname);
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => { if (address) setSetupHidden(setupDismissed(address)); }, [address]);
+
   // Registration is checked lazily: the dashboard opens for everyone, and we
   // route to /onboarding only when the merchant tries to accept a payment.
   // (isRegistered comes from useMerchant, which also counts a merchant
   // registered on a PREVIOUS integrator — carried over, never onboarded again.)
-
   function acceptPayment() {
     // Not ready yet (including a returning merchant's carry-over in flight) —
     // don't bounce a registered merchant to /onboarding on a pending read.
@@ -69,7 +75,7 @@ export default function Dashboard() {
     router.push(isRegistered ? "/qr" : "/onboarding");
   }
 
-  const { data: balance } = useReadContract({
+  const { data: balance, isError: balanceError, refetch: refetchBalance } = useReadContract({
     address: CONTRACT_ADDRESS,
     abi: INTEGRATOR_ABI,
     functionName: "getMerchantBalance",
@@ -77,10 +83,9 @@ export default function Dashboard() {
     query: { enabled: !!address, refetchInterval: 20000 },
   });
 
-  // Settlement buckets — each received sale is locked for the settlement
-  // window (prod: 30 days) before it's withdrawable. We surface a LIVE
-  // countdown to the next unlock so the merchant knows exactly when their
-  // money frees up (not just "settling").
+  // Settlement buckets — each received sale is locked for the currency's
+  // settlement window before it's withdrawable. The REAL unlock times come from
+  // here (not from a hardcoded period).
   const { data: buckets } = useReadContract({
     address: CONTRACT_ADDRESS,
     abi: INTEGRATOR_ABI,
@@ -88,101 +93,94 @@ export default function Dashboard() {
     args: [address],
     query: { enabled: !!address, refetchInterval: 15000 },
   });
+  const { data: info } = useReadContract({
+    address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "getMerchantInfo",
+    args: [address], query: { enabled: !!address, staleTime: STATIC_STALE_MS },
+  });
+  const { code: regCode } = useRegisteredCurrency(address);
+  const { secs: lockSecs } = useLockPeriod(regCode || null);
+  // The REGISTERED currency is immutable and is what the contract settles in, so it
+  // overrides a stale UI pick in localStorage (e.g. an old Brazil choice on a device
+  // where the merchant registered in India).
+  useEffect(() => {
+    if (!regCode) return;
+    const reg = COUNTRIES.find((c) => c.code === regCode);
+    if (reg) { saveCountry(reg.id); setCountry((cur) => (cur?.id === reg.id ? cur : reg)); }
+  }, [regCode]);
+
+  // Labels read in days / hours, so a half-minute tick is plenty. (This used to
+  // tick every second and re-render the whole page — carousel and list included.)
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   useEffect(() => {
-    const t = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
-    return () => clearInterval(t);
+    const id = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 30_000);
+    return () => clearInterval(id);
   }, []);
 
   useEffect(() => {
     if (!country) return;
     let on = true;
+    setRateFailed(false);
     // "sell" price: the dashboard values the merchant's USDC balance at what
     // they'd RECEIVE cashing out to fiat (not the customer-facing buy price).
-    fetchUsdcRate(country, "sell").then((r) => on && setRate(r)).catch(() => {});
+    fetchUsdcRate(country, "sell").then((r) => on && setRate(r)).catch(() => on && setRateFailed(true));
     return () => { on = false; };
   }, [country]);
 
-  useEffect(() => {
-    if (!address) return;
-    let on = true;
-    if (!proxies) return; // wait for every integrator's proxy, then load once
-    const load = () => fetchHistory(address, proxies).then((h) => on && setRows(h)).catch(() => {});
-    load();
-    const t = setInterval(load, 15000);
-    return () => { on = false; clearInterval(t); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address, (proxies ?? []).join(",")]);
+  // Shared, cached history (same query the Transactions page uses): instant on
+  // navigation, polled while visible, and a failed refresh keeps the last rows.
+  const hist = useHistory(address, proxies);
+  const rows = (hist.data ?? []) as any[];
+  const historyLoaded = !hist.isLoading;
+  const historyFailed = hist.isError;
+  const loadHistory = { current: () => { hist.refetch(); } };
 
-  const [pending, available, , isFrozen] = balance ?? [0n, 0n, 0n, false];
+  const balanceLoaded = balance !== undefined;
+  const [pending, available, totalDeposited, isFrozen] = balance ?? [0n, 0n, 0n, false];
   // Includes every PREVIOUS contract, so a contract upgrade never makes the
   // merchant's balance look like it dropped to zero. Moving old funds happens
   // on the withdraw page.
   const prevBal = usePrevBalances(address);
   const availUsdc = (Number(available) + Number(prevBal.available)) / 1e6;
-  const fiatEquiv = rate && country ? availUsdc * rate.rate : null;
-  // Account balance = everything in the contract (locked + unlocked). NOT
-  // totalDeposited (a lifetime counter). Withdrawable = the unlocked part.
-  const accountUsdc = (Number(pending) + Number(available) + Number(prevBal.total)) / 1e6;
-  const accountFiat = rate && country ? accountUsdc * rate.rate : null;
+  const settlingUsdc = (Number(pending) + Number(prevBal.pending)) / 1e6;
+  const totalUsdc = Number(totalDeposited) / 1e6;
+  const fiatOf = (usdc: number) => (rate && country ? fmtFiat(country, usdc * rate.rate) : null);
 
   // Settlement-ready notification: when the available balance JUMPS UP between
-  // refetches, a locked bucket just cleared — tell the merchant their money is
-  // ready to withdraw. (Skips the first read so we don't toast on page load.)
+  // refetches, a locked bucket just cleared. (Skips the first read so we don't
+  // toast on page load.)
   const prevAvail = useRef(null);
   useEffect(() => {
     if (balance === undefined) return;
     const cur = available;
     if (prevAvail.current != null && cur > prevAvail.current) {
       const cleared = Number(cur - prevAvail.current) / 1e6;
-      // "≈" — the fiat figure is valued at today's sell rate (an estimate);
-      // the USDC fallback is exact, so it carries no "≈".
-      const fiat = rate && country ? `≈ ${fmtFiat(country, cleared * rate.rate, { decimals: 2 })}` : `${cleared.toFixed(2)} USDC`;
-      setToast(`${fiat} just cleared — ready to withdraw`);
-      setTimeout(() => setToast(""), 6000);
+      const label = rate && country ? `≈ ${fmtFiat(country, cleared * rate.rate, { decimals: 2 })}` : `${cleared.toFixed(2)} USDC`;
+      setToast(fill(t("dash2.cleared"), { amount: label }));
+      const id = setTimeout(() => setToast(""), 6000);
+      prevAvail.current = cur;
+      return () => clearTimeout(id);
     }
     prevAvail.current = cur;
-  }, [available, balance, rate, country]);
+  }, [available, balance, rate, country, t]);
 
-  // Soonest still-locked bucket → seconds until it unlocks (for the countdown).
-  const lockedBuckets = (buckets || []).filter(
-    (b) => b.amount > 0n && Number(b.unlockTimestamp) > now
-  );
-  const nextUnlock = lockedBuckets.length
-    ? Math.min(...lockedBuckets.map((b) => Number(b.unlockTimestamp)))
+  // Soonest still-locked bucket → the real unlock time and how much unlocks then.
+  const lockedBuckets = ((buckets as any[]) || []).filter((b) => b.amount > 0n && Number(b.unlockTimestamp) > now);
+  const nextBucket = lockedBuckets.length
+    ? lockedBuckets.reduce((a, b) => (Number(b.unlockTimestamp) < Number(a.unlockTimestamp) ? b : a))
     : null;
-  const secsLeft = nextUnlock != null ? nextUnlock - now : 0;
-  // Always in DAYS — the real settlement window is ~30 days, so a raw mm:ss
-  // countdown wrapped into absurd numbers ("43199:13"). Same fix as
-  // withdraw/page.tsx's fmtRemaining; round up so any remaining time reads as
-  // at least "1 day" (never "0 days", which would look identical to unlocked).
-  const daysLeft = Math.max(1, Math.ceil(secsLeft / 86400));
-  const unlockIn = `${daysLeft} day${daysLeft === 1 ? "" : "s"}`;
+  const nextUnlock = nextBucket ? Number(nextBucket.unlockTimestamp) : null;
 
-  // Today's earnings = only COMPLETED sales (status "settled"). A sale that's
-  // still waiting for a payment partner (status "matching") hasn't been received
-  // yet, so it must NOT count as earnings.
-  const todayUsdc = rows
-    .filter((t) => isToday(t.createdAt) && t.status === "settled")
-    .reduce((a, t) => a + Number(t.amount) / 1e6, 0);
-  const todayFiat = rate && country ? todayUsdc * rate.rate : null;
-  const todayCount = rows.filter((t) => isToday(t.createdAt) && t.status === "settled").length;
-  const recent = rows.slice(0, 3);
+  const recent = rows.slice(0, 4);
 
   // Stuck order: a sale still "Waiting" (no payment partner accepted) more than
-  // 3 minutes after it was placed. We surface it so the merchant can start a new
-  // sale or DISMISS the row instead of staring at a dead QR.
-  //
-  // NOTE: there is NO merchant-callable on-chain cancel (the contract's
-  // onOrderCancel is Diamond-only — the p2p protocol cancels an unmatched order
-  // itself after a timeout). So "Dismiss" here is a LOCAL hide: it removes the
-  // row from this merchant's view. The order still resolves on-chain on its own
-  // (it will show as cancelled once the protocol times it out).
+  // 3 minutes after it was placed. NOTE: there is NO merchant-callable on-chain
+  // cancel (the protocol cancels an unmatched order itself after a timeout), so
+  // "Dismiss" is a LOCAL hide — the order still resolves on-chain on its own.
   const stuck = rows.find(
-    (t) =>
-      t.status === "matching" &&
-      !dismissed.includes(String(t.orderId)) &&
-      (Date.now() - new Date(t.createdAt).getTime()) > 180_000
+    (r) =>
+      r.status === "matching" &&
+      !dismissed.includes(String(r.orderId)) &&
+      (now * 1000 - new Date(r.createdAt).getTime()) > 180_000
   );
   function dismissStuck(orderId) {
     const next = [...dismissed, String(orderId)];
@@ -190,146 +188,160 @@ export default function Dashboard() {
     try { localStorage.setItem("payqr.dismissedStuck", JSON.stringify(next)); } catch {}
   }
 
-  // Daily close ("Z-report") — what a shop owner screenshots at end of day for
-  // their own books. Shares the day's totals via the native share sheet.
-  function shareDailyClose() {
-    const today = new Date().toLocaleDateString(country?.locale || undefined, {
-      weekday: "short", day: "numeric", month: "short", year: "numeric",
-    });
-    const fiatLine = todayFiat != null ? `${fmtFiat(country, todayFiat)} ${country.code}` : "—";
-    const text =
-      `PayQR — Daily close\n${country?.name || ""} · ${today}\n\n` +
-      `Sales: ${todayCount}\n` +
-      `Received: ${fiatLine}\n` +
-      `In USDC: ${todayUsdc.toFixed(2)} USDC`;
-    if (navigator.share) navigator.share({ title: "PayQR daily close", text }).catch(() => {});
-    else navigator.clipboard?.writeText(text);
-  }
+  // First-run checklist signals — all from real data, nothing assumed.
+  const setup = computeSetup({
+    tourSeen: tourSeen(),
+    registered: isRegistered,
+    payoutBlob: (info?.[0] as string) || "",
+    hasFirstSaleOrLink: rows.length > 0 || rememberedLinks(address).length > 0,
+    receivedCount: rows.filter((r) => r.status === "settled").length,
+  });
+  // Existing merchants who have already done everything never see the card; it
+  // is retired silently so it never nags (and so it disappears for new ones too).
+  useEffect(() => {
+    if (address && historyLoaded && info && setup.complete && !setupDismissed(address)) {
+      dismissSetup(address); setSetupHidden(true);
+    }
+  }, [address, historyLoaded, info, setup.complete]);
+  const showSetup = !setupHidden && !setup.complete && ready && isRegistered !== undefined && historyLoaded;
+
+  const queryClient = useQueryClient();
+  // Hide-balances toggle (remembered on this device).
+  const [hidden, setHidden] = useState(false);
+  useEffect(() => { try { setHidden(localStorage.getItem("payqr.hideBal") === "1"); } catch {} }, []);
+  const toggleHidden = () => setHidden((h) => { const n = !h; try { localStorage.setItem("payqr.hideBal", n ? "1" : "0"); } catch {} return n; });
 
   // Auth gate: a logged-out deep-link/refresh must NOT flash the real dashboard
-  // (zeroed balances) before useMerchant's redirect-to-login effect fires. Show
-  // the branded splash until auth resolves and the user is authenticated.
+  // before useMerchant's redirect-to-login effect fires.
   if (!ready || !authenticated) return <Splash />;
-  if (!country) return <><Nav /><div className="screen"><p className="muted" style={{ textAlign: "center" }}>{t("common.loading")}</p></div></>;
+  if (!country) return <><Nav home /><div className="screen"><LoadingState label={t("common.loading")} /></div></>;
+
+  const mask = (v: React.ReactNode) => (hidden ? "••••" : v);
+  const amountFiat = (usdc: number) => fiatOf(usdc) ?? (rateFailed ? t("dash2.rateUnavailable") : "—");
 
   return (
-    <>
-      <Nav
-        action={
-          <button className="tour-pill" onClick={() => setTourForce(true)}>
-            <Icon.Bulb />
-            <span>How it works</span>
-          </button>
-        }
-      />
+    <PullToRefresh onRefresh={async () => { await queryClient.invalidateQueries(); await Promise.allSettled([refetchBalance(), hist.refetch()]); }}>
+      <Nav home />
       <AppTour force={tourForce} onClose={() => setTourForce(false)} />
       <ConnectionBanner />
       {toast && (
-        <div className="settle-toast" onClick={() => router.push("/withdraw")}>
+        <Link href="/withdraw" className="settle-toast" role="status">
           <span className="st-ico"><Icon.Check width="16" height="16" /></span>
           <span>{toast}</span>
-          <span className="st-cta">Withdraw ›</span>
-        </div>
+          <span className="st-cta">{t("dash2.withdrawCta")}</span>
+        </Link>
       )}
       <div className="screen">
+        {welcome && (
+          <div className="ui-ok" role="status" style={{ marginTop: 0 }}>✓ {t("ob.success")}</div>
+        )}
         {isFrozen && (
-          <div className="frozen-banner">
+          <div className="frozen-banner" role="alert">
             {t("dash.frozen")}
           </div>
         )}
 
-        {/* Balance hero — one neutral card, two figures split by a line:
-            Account balance (all funds in the contract) | Withdrawable now
-            (matured/unlocked). Same style as the withdraw page. */}
-        <div className="wd-balances">
-          <div className="wd-bal-box">
-            <div className="wd-bal-label">{t("wd.accountBalance")}</div>
-            <div className="wd-bal-amt">${(accountUsdc || 0).toFixed(2)}</div>
-            <div className="wd-bal-sub">
-              {accountFiat != null ? `≈ ${fmtFiat(country, accountFiat)}` : `≈ ${country.symbol}0.00`}
+        {/* BALANCE — what the merchant can use now, what is still settling, and
+            the lifetime total. "Received" is never used as a synonym for
+            "available". While the read is loading these are skeletons, and if it
+            fails they say so — never a made-up $0.00. */}
+        <div className="bal-wrap">
+        <section className="bal glass-card" aria-label={t("wd.accountBalance")}>
+          <button className="bal-eye" onClick={toggleHidden} aria-pressed={hidden}
+            aria-label={hidden ? "Show balances" : "Hide balances"}>
+            {hidden ? (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c6 0 10 6 10 6a17 17 0 0 1-3.2 3.8M6.5 7.6C3.9 9.4 2 12 2 12s4 6 10 6c1.6 0 3-.4 4.3-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /></svg>
+            ) : (
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>
+            )}
+          </button>
+          <div className="bal-main-label">{t("dash2.available")}</div>
+          {balanceLoaded ? (
+            <>
+              <div className="bal-main">{mask(`$${availUsdc.toFixed(2)}`)} <span style={{ fontSize: 14, fontWeight: 600, color: "var(--muted)" }}>USDC</span></div>
+              <div className="bal-fiat">{availUsdc > 0 || rate ? mask(`≈ ${amountFiat(availUsdc)}`) : ""} · {t("dash2.availableHint")}</div>
+            </>
+          ) : balanceError ? (
+            <ErrorPanel compact error={t("dash2.loadFailed")} onRetry={() => refetchBalance()} />
+          ) : (
+            <><Skeleton w={150} h={34} r={8} /><div style={{ marginTop: 6 }}><Skeleton w={110} h={14} /></div></>
+          )}
+
+          <div className="bal-row">
+            <div className="bal-cell">
+              <div className="bal-cell-label">{t("dash2.settling")}</div>
+              <div className="bal-cell-amt">{balanceLoaded ? mask(`$${settlingUsdc.toFixed(2)}`) : <Skeleton w={70} h={18} />}</div>
+              <div className="bal-cell-hint">{t("dash2.settlingHint")}</div>
+            </div>
+            <div className="bal-cell">
+              <div className="bal-cell-label">{t("dash2.total")}</div>
+              <div className="bal-cell-amt">{balanceLoaded ? mask(`$${totalUsdc.toFixed(2)}`) : <Skeleton w={70} h={18} />}</div>
+              <div className="bal-cell-hint">{t("dash2.totalHint")}</div>
             </div>
           </div>
-          <div className="wd-bal-box">
-            <div className="wd-bal-label">{t("wd.withdrawable")}</div>
-            <div className="wd-bal-amt">${(availUsdc || 0).toFixed(2)}</div>
-            <div className="wd-bal-sub">
-              {fiatEquiv != null ? `≈ ${fmtFiat(country, fiatEquiv)}` : `≈ ${country.symbol}0.00`}
+
+          {/* Settling funds: the REAL date the next tranche unlocks. */}
+          {balanceLoaded && settlingUsdc > 0 && (
+            <div className="bal-next">
+              {nextBucket && nextUnlock
+                ? fill(t("dash2.nextUnlock"), {
+                    amount: fmtUsdc(nextBucket.amount),
+                    date: fmtDay(nextUnlock, lang, nextUnlock - now < 3 * 86400),
+                  })
+                : fill(t("dash2.settleNote"), { amount: settlingUsdc.toFixed(2) })}
             </div>
-          </div>
+          )}
+          {/* No funds settling yet: say how long a payment will take to unlock. */}
+          {balanceLoaded && settlingUsdc === 0 && regCode && (
+            <SettlementNote currency={regCode} className="bal-sn" />
+          )}
+        </section>
         </div>
 
         {prevBal.total > 0n && (
           <Link href="/withdraw" className="muted" style={{ display: "block", fontSize: 12.5, margin: "6px 2px 0", textDecoration: "none" }}>
-            Includes ${(Number(prevBal.total) / 1e6).toFixed(2)} on your previous terminal{prevBal.rows.length > 1 ? "s" : ""} · Withdraw ›
+            {fill(t(prevBal.rows.length > 1 ? "dash2.prevMany" : "dash2.prevOne"), { amount: (Number(prevBal.total) / 1e6).toFixed(2) })}
           </Link>
         )}
 
-        {/* action tiles — Wallet · Accept · Withdraw · Activity (p2p.me layout) */}
-        <div className="quick">
-          <button className="quick-item" onClick={() => setWalletOpen(true)} style={{ background: "none", border: "none", cursor: "pointer" }}>
-            <span className="quick-ico"><Icon.Wallet /></span>
-            <span>{t("nav.wallet")}</span>
-          </button>
-          <button className="quick-item" onClick={acceptPayment} style={{ background: "none", border: "none", cursor: "pointer" }}>
+        {/* First-run guide: only what is left to do, one clear next action. */}
+        {showSetup && (
+          <SetupChecklist
+            signals={{
+              tourSeen: tourSeen(), registered: isRegistered, payoutBlob: (info?.[0] as string) || "",
+              hasFirstSaleOrLink: rows.length > 0 || rememberedLinks(address).length > 0,
+              receivedCount: rows.filter((r) => r.status === "settled").length,
+            }}
+            currency={regCode || country.code}
+            onOpenTour={() => setTourForce(true)}
+            onDismiss={() => { dismissSetup(address); setSetupHidden(true); }}
+          />
+        )}
+
+        {/* quick access — Accept · Withdraw · Payment links */}
+        <div className="quick" role="group" aria-label={t("dash2.moreFaster")}>
+          <button className="quick-item" onClick={acceptPayment}>
             <span className="quick-ico"><Icon.Down /></span>
             <span>{t("nav.accept")}</span>
           </button>
-          <Link className="quick-item" href="/payment-links">
-            <span className="quick-ico"><Icon.Link /></span>
-            <span>{t("nav.paymentLinks")}</span>
-          </Link>
           <Link className="quick-item" href="/withdraw">
             <span className="quick-ico"><Icon.Up /></span>
             <span>{t("nav.withdraw")}</span>
           </Link>
-          <Link className="quick-item" href="/transactions">
-            <span className="quick-ico"><Icon.Chart /></span>
-            <span>{t("nav.activity")}</span>
+          <Link className="quick-item" href="/payment-links">
+            <span className="quick-ico"><Icon.Link /></span>
+            <span>{t("nav.paymentLinks")}</span>
           </Link>
         </div>
 
-        {/* promo carousel — swipe left/right between slides. Volume-challenge
-            campaign is 1st (Venezuela and Argentina), payment links 2nd, then ecosystem and counter QR;
-            all share the same dark-gradient card so the swipe reads as one
-            continuous banner. */}
-        {/* Built as a list, not literal children: the carousel renders every
-            child as a slide, so a hidden (false) one would leave an empty slide. */}
-        <PromoCarousel>
-          {[
-            ...(campaignActive(campaignFor(country.id)) ? [<CampaignPromo key="campaign" campaign={campaignFor(country.id)!} />] : []),
-            <div key="payment-links" className="promo">
-              <div className="promo-tag">{t("dash.plTag")}</div>
-              <div className="promo-h">{t("dash.plH")}</div>
-              <div className="promo-sub">{t("dash.plSub")}</div>
-              <span className="promo-qr"><Icon.Link /></span>
-            </div>,
-            <EcosystemPromo key="ecosystem" />,
-            <div key="counter-qr" className="promo">
-              <div className="promo-tag">{t("dash.cqTag")}</div>
-              <div className="promo-h">{t("dash.cqH")}</div>
-              <div className="promo-sub">{t("dash.cqSub")}</div>
-              <span className="promo-qr"><Icon.Qr /></span>
-            </div>,
-          ]}
-        </PromoCarousel>
-
-        {/* promo banner clone — white surface, settlement-window notice in place
-            of the scrolling ticker so it's readable at a glance (not scrolling),
-            with the lock duration highlighted since that's the number merchants
-            actually need to notice. Shown upfront, before the merchant's first
-            order, not only discovered after money is already locked. */}
-        <SettlementPromo country={country} />
-
-        {/* stuck sale — waiting too long for a payment partner. Offer a new sale
-            or a local dismiss (there's no merchant on-chain cancel; the protocol
-            times the order out itself). */}
+        {/* stuck sale — waiting too long for a payment partner. */}
         {stuck && (
-          <div className="stuck-card" style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, border: "1px solid var(--warn-border, #e0b100)", background: "var(--warn-soft, rgba(224,177,0,.08))", margin: "12px 0" }}>
+          <div className="ui-err ui-err-warn" role="status" style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span className="stuck-ico"><Icon.Clock /></span>
-            <div style={{ flex: 1 }}>
+            <div style={{ flex: 1, minWidth: 160 }}>
               <div style={{ fontWeight: 700 }}>{t("dash.stuckTitle")}</div>
               <div className="muted" style={{ fontSize: 12 }}>
-                #{stuck.orderId} · {fmtUsdc(stuck.amount)} USDC · {timeAgo(stuck.createdAt)}
+                #{stuck.orderId} · {fmtUsdc(stuck.amount)} USDC · {fmtAgo(new Date(stuck.createdAt).getTime(), lang)}
               </div>
             </div>
             <button className="btn small secondary" onClick={acceptPayment}>{t("dash.newSale")}</button>
@@ -337,65 +349,49 @@ export default function Dashboard() {
           </div>
         )}
 
-        {/* live settlement countdown — when locked funds free up */}
-        {Number(pending) > 0 && (
-          <div className="settle-card">
-            <span className="settle-ico"><Icon.Clock /></span>
-            <div className="settle-mid">
-              <div className="settle-amt">{fmtUsdc(pending)} USDC {t("dash.onTheWay")}</div>
-              <div className="settle-sub">
-                {nextUnlock != null
-                  ? <>{t("dash.nextUnlock")} <b>{unlockIn}</b> {t("dash.thenYours")}</>
-                  : "Almost ready — refreshing…"}
-              </div>
-            </div>
-          </div>
-        )}
-
-
         {/* recent payments */}
         <div className="recent-head">
           <b>{t("dash.recent")}</b>
           <Link href="/transactions" className="see-all">{t("dash.seeAll")} ›</Link>
         </div>
-        {recent.length === 0 ? (
-          <div className="recent-empty">
-            {t("dash.noPayments")}
+        {historyFailed && (
+          <ErrorPanel compact error={t("err.load")} onRetry={() => loadHistory.current()} />
+        )}
+        {!historyLoaded && !historyFailed ? (
+          <div className="recent-list" aria-busy="true">
+            {[0, 1, 2].map((i) => <div key={i} className="recent-row"><Skeleton w="100%" h={38} r={10} /></div>)}
+          </div>
+        ) : recent.length === 0 && !historyFailed ? (
+          <div className="dash-empty">
+            <b>{t("dash2.empty.title")}</b>
+            <p className="muted">{t("dash2.empty.body")}</p>
           </div>
         ) : (
           <div className="recent-list">
             {recent.map((tx) => {
-              const settled = tx.status === "settled";
-              const cancelled = tx.status === "cancelled";
-              // "matching" = accepted but still settling (locked ~10 min). Show
-              // this prominently as "Locked (settling)" — the state you asked for.
-              const settling = tx.status === "matching";
               const usdc = Number(tx.amount) / 1e6;
               const fiat = rate && country ? usdc * rate.rate : null;
-              const label = settled
-                ? t("dash.received")
-                : cancelled
-                  ? t("dash.cancelled")
-                  : t("dash.lockedSettling");
+              // ONE shared vocabulary (lib/status.ts) — the same labels as the
+              // Transactions page and receipts.
+              const st = resolveStatus({ status: tx.status, kind: "sale", completedAt: tx.completedAt }, lockSecs, now);
+              const when = st.unlockAt ? fmtDay(st.unlockAt, lang, (lockSecs ?? 0) < 3 * 86400) : "";
+              const label = st.key === "received_locked" && when ? fill(t("status.receivedOn"), { date: when })
+                : st.key === "received_locked" ? t("status.receivedSettling") : t(st.labelKey);
               return (
                 <div key={tx.orderId} className="recent-row">
-                  <span className={`rr-ico ${settled ? "in" : settling ? "wait" : "pend"}`}>
-                    {cancelled ? <Icon.Back /> : <Icon.Down />}
+                  <span className={`rr-ico ${st.tone === "success" ? "in" : st.key === "waiting" ? "wait" : "pend"}`}>
+                    {st.key === "cancelled" ? <Icon.Back /> : <Icon.Down />}
                   </span>
                   <div className="rr-mid">
-                    {/* FIAT is the headline (what the shopkeeper thinks in), with the
-                        USDC + order id as the secondary line — matches the requested
-                        "₹3,890 / 42.61 USDC · #333" layout. */}
                     <div className="rr-amt">
-                      {/* "≈": valued at TODAY's sell rate, not the historical
-                          charge — the exact USDC is on the line below. */}
+                      {/* "≈": valued at TODAY's sell rate, not the historical charge. */}
                       {fiat != null ? `≈ ${fmtFiat(country, fiat, { decimals: 2 })}` : `${fmtUsdc(tx.amount)} USDC`}
                     </div>
                     <div className="rr-sub">
-                      {fmtUsdc(tx.amount)} USDC · #{tx.orderId} · {timeAgo(tx.createdAt)}
+                      {fmtUsdc(tx.amount)} USDC · #{tx.orderId} · {fmtAgo(new Date(tx.createdAt).getTime(), lang)}
                     </div>
                   </div>
-                  <span className={`rr-status ${settled ? "ok" : cancelled ? "bad" : "wait"}`}>
+                  <span className={`st-badge st-${st.tone}`} title={st.estimated ? t("status.estimated") : undefined}>
                     {label}
                   </span>
                 </div>
@@ -403,22 +399,7 @@ export default function Dashboard() {
             })}
           </div>
         )}
-
-        {!ready && <p className="muted" style={{ textAlign: "center" }}>{t("common.loading")}</p>}
       </div>
-
-      {/* bottom action bar — both primary actions */}
-      <div className="bottombar">
-        <Link href="/withdraw" className="btn ghost barbtn">
-          <Icon.Up /><span>{t("nav.withdraw")}</span>
-        </Link>
-        <button className="btn barbtn" onClick={acceptPayment}>
-          <Icon.Plus /><span>{t("common.acceptPayment")}</span>
-        </button>
-      </div>
-
-      <WalletSheet open={walletOpen} onClose={() => setWalletOpen(false)}
-        address={address} country={country} rate={rate} />
-    </>
+    </PullToRefresh>
   );
 }

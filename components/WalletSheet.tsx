@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
-import { useReadContract, useBalance } from "wagmi";
+import { useReadContract, useBalance, usePublicClient } from "wagmi";
 import { useActiveWallet } from "thirdweb/react";
 import { Insight } from "thirdweb";
 import { thirdwebClient, THIRDWEB_CHAIN } from "../lib/thirdweb";
@@ -13,13 +13,21 @@ import { Icon } from "./Icons";
 import { useT } from "../lib/i18n";
 import { useSmartAccount } from "./useSmartAccount";
 import { useAuth } from "./useAuth";
+import { useStepUp } from "./useStepUp";
+import { useGuardedSend } from "./useGuardedSend";
+import { ConfirmDialog } from "./ui/ConfirmDialog";
+import { ErrorPanel } from "./ui/ErrorPanel";
+import { validateDestination, DESTINATION_PROBLEM_KEY, groupAddress } from "../lib/destination";
+import { fill } from "../lib/format";
+import type { UserError } from "../lib/errors";
+import { EXPLORER_URL } from "../lib/chain";
 
 // Heavy @walletconnect deps — only pulled in when the merchant opens the panel.
 const WalletConnectPanel = dynamic(
   () => import("./WalletConnectPanel").then((m) => m.WalletConnectPanel),
   { ssr: false, loading: () => <p className="muted" style={{ textAlign: "center", padding: "24px 0" }}>Loading…</p> }
 );
-import { CONTRACT_ADDRESS, fmtUsdc, friendlyError } from "../lib/contract";
+import { CONTRACT_ADDRESS, fmtUsdc } from "../lib/contract";
 import { STATIC_STALE_MS } from "../lib/cache";
 import { fmtFiat, clearLocalUserData } from "../lib/countries";
 import { ACTIVE_CHAIN } from "../lib/chain";
@@ -74,6 +82,16 @@ export function WalletSheet({
   const { t } = useT();
   const router = useRouter();
   const { sendTransaction } = useSmartAccount();
+  const publicClient = usePublicClient();
+  // Sending moves real USDC and cannot be undone: it goes through the same
+  // verification (step-up) as Withdraw, an explicit review of the FULL address,
+  // and a synchronous lock against double submission. Never retried.
+  const { requireStepUp, stepUpModal } = useStepUp();
+  const sender = useGuardedSend({ stepUp: requireStepUp });
+  const [confirmSend, setConfirmSend] = useState<null | { to: `0x${string}`; amount: bigint; amountLabel: string }>(null);
+  const [sendErr, setSendErr] = useState<UserError | string | null>(null);
+  const [sendOkTx, setSendOkTx] = useState<string | null>(null);
+  const [sendChecked, setSendChecked] = useState(false);
   const { logout } = useAuth();
   const activeWallet = useActiveWallet();
   const [tab, setTab] = useState<"home" | "receive" | "send" | "walletconnect" | "assets">("home");
@@ -158,8 +176,9 @@ export function WalletSheet({
 
   function copyAddr() {
     if (!address) return;
-    navigator.clipboard?.writeText(address);
-    setCopied(true); setTimeout(() => setCopied(false), 1400);
+    navigator.clipboard?.writeText(address)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1400); })
+      .catch(() => { setMsg(t("ui.copyFailed")); });
   }
 
   function buy() {
@@ -176,37 +195,56 @@ export function WalletSheet({
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  async function send() {
-    setMsg("");
-    if (!to.startsWith("0x") || to.length !== 42) return setMsg("Enter a valid wallet address.");
-    const n = Number(amt);
-    if (!(n > 0)) return setMsg("Enter an amount.");
-    if (!USDC) return setMsg("USDC address not configured.");
-    if (!sendTransaction) return setMsg("Wallet still connecting…");
-    setBusy(true);
-    try {
-      const amount = parseUnits(amt, 6);
-      // Send moves the WALLET's USDC. The headline balance lives in the terminal
-      // contract — without this check every send against it just reverts with a
-      // generic error, which reads as "the app is broken".
-      if (walletUsdcRaw != null && amount > walletUsdcRaw) {
-        setMsg(
-          `Your wallet holds ${fmtUsdc(walletUsdcRaw)} USDC. Sales stay in the terminal until withdrawn — use Withdraw (keep as USDC) first.`
-        );
-        return;
+  // Step 1: validate, then ask for confirmation. Nothing is sent here.
+  function send() {
+    setMsg(""); setSendErr(null); setSendOkTx(null);
+    const dest = validateDestination(to);
+    if ("problem" in dest) return setMsg(t(DESTINATION_PROBLEM_KEY[dest.problem]));
+    // Up to 6 decimals, digits only — rejects "1e3", negatives and 7+ decimals
+    // that would make parseUnits throw or silently round.
+    if (!/^\d+(\.\d{1,6})?$/.test(amt.trim()) || !(Number(amt) > 0)) return setMsg(t("wallet.invalidAmount"));
+    if (!USDC) return setMsg(t("wallet.usdcNotConfigured"));
+    if (!sendTransaction) return setMsg(t("wallet.notReady"));
+    const amount = parseUnits(amt.trim(), 6);
+    // Send moves the WALLET's USDC. The headline balance lives in the terminal
+    // contract — without this check every send against it just reverts.
+    if (walletUsdcRaw != null && amount > walletUsdcRaw) {
+      return setMsg(fill(t("wallet.insufficient"), { have: fmtUsdc(walletUsdcRaw) }));
+    }
+    setSendChecked(false);
+    setConfirmSend({ to: dest.address, amount, amountLabel: amt.trim() });
+  }
+
+  // Step 2: the confirmed, guarded send.
+  async function doSend() {
+    if (!confirmSend || !sendTransaction) return;
+    setSendErr(null);
+    const { to: dest, amount, amountLabel } = confirmSend;
+    const r = await sender.run(async () => {
+      const data = encodeFunctionData({ abi: ERC20_TRANSFER, functionName: "transfer", args: [dest, amount] });
+      const hash = await sendTransaction({ to: USDC, data });
+      // Wait for the chain: "Sent" is only claimed once it is actually mined.
+      if (publicClient && hash) {
+        const rc = await publicClient.waitForTransactionReceipt({ hash: hash as `0x${string}`, timeout: 120_000 });
+        if (rc.status === "reverted") throw new Error("transfer reverted");
       }
-      const data = encodeFunctionData({
-        abi: ERC20_TRANSFER, functionName: "transfer",
-        args: [to as `0x${string}`, amount],
-      });
-      await sendTransaction({ to: USDC, data });
-      setMsg("✓ Sent");
+      return hash as string | undefined;
+    }, { context: "wallet-send", fallbackKey: "err.send", uncertainKey: "err.uncertainSend" });
+
+    if (r.reason === "ok") {
+      setConfirmSend(null);
+      setSendOkTx(r.value || "");
+      setMsg(fill(t("wallet.sendDone"), { amount: amountLabel }));
       setTo(""); setAmt("");
-      setTimeout(() => { setTab("home"); setMsg(""); }, 1200);
-    } catch (e: any) {
-      // Friendly text, never a raw viem/SDK string; a wallet decline → "Cancelled."
-      setMsg(friendlyError(e, "Couldn't send. Please try again."));
-    } finally { setBusy(false); }
+      return;
+    }
+    if (r.reason === "stepup") { setSendErr(t("err.stepUp")); return; }
+    if (r.reason === "error") {
+      setSendErr(r.error);
+      // A definite failure closes the sheet so the form is editable; an
+      // UNCERTAIN one stays visible so the merchant reads "check before sending again".
+      if (!r.error.uncertain) setConfirmSend(null);
+    }
   }
 
   if (!open) return null;
@@ -223,9 +261,9 @@ export function WalletSheet({
               {address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "…"}
               <span className="wsheet-copy">{copied ? "✓" : <Icon.Copy width="13" height="13" />}</span>
             </button>
-            <div className="wsheet-type">Smart Account</div>
+            <div className="wsheet-type">{t("wallet.smartAccount")}</div>
           </div>
-          <button className="sheet-x" onClick={onClose} aria-label="Close">✕</button>
+          <button className="sheet-x" onClick={onClose} aria-label={t("ui.close")}>✕</button>
         </div>
 
         {/* HOME tab */}
@@ -236,7 +274,7 @@ export function WalletSheet({
               <span className="wsheet-bal-amt">${availUsdc.toFixed(2)}</span>
               <span className="wsheet-bal-sub">
                 {availFiat != null ? `≈ ${fmtFiat(country, availFiat)}` : ""}
-                {Number(pending) > 0 ? ` · ${fmtUsdc(pending)} ${t("tx.locked")}` : ""}
+                {Number(pending) > 0 ? ` · ${fill(t("dash2.settleNote"), { amount: fmtUsdc(pending) })}` : ""}
               </span>
             </div>
 
@@ -320,7 +358,7 @@ export function WalletSheet({
                     </span>
                     <div className="asset-mid">
                       <div className="asset-name">{tk.symbol || tk.name || "Token"}</div>
-                      <div className="asset-sub">In wallet · Base</div>
+                      <div className="asset-sub">{t("wallet.inWalletBase")}</div>
                     </div>
                     <div className="asset-right">
                       <div className="asset-amt">
@@ -345,7 +383,7 @@ export function WalletSheet({
                   <span className="asset-badge usdc">$</span>
                   <div className="asset-mid">
                     <div className="asset-name">USDC</div>
-                    <div className="asset-sub">In wallet · Base</div>
+                    <div className="asset-sub">{t("wallet.inWalletBase")}</div>
                   </div>
                   <div className="asset-right">
                     <div className="asset-amt">{(walletUsdc ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
@@ -360,7 +398,7 @@ export function WalletSheet({
                 <span className="asset-badge usdc">$</span>
                 <div className="asset-mid">
                   <div className="asset-name">USDC</div>
-                  <div className="asset-sub">In terminal · withdraw to move</div>
+                  <div className="asset-sub">{t("wallet.inTerminalHint")}</div>
                 </div>
                 <div className="asset-right">
                   <div className="asset-amt">{availUsdc.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
@@ -407,12 +445,19 @@ export function WalletSheet({
             {/* What Send can actually spend (the wallet's own USDC) vs the sales
                 balance still inside the terminal — the #1 source of failed sends. */}
             <p className="muted tiny" style={{ margin: "8px 0 0", textAlign: "center" }}>
-              In wallet: {walletUsdc != null ? walletUsdc.toFixed(2) : "…"} USDC
-              {available > 0n ? ` · In terminal (withdraw first): ${fmtUsdc(available)} USDC` : ""}
+              {fill(t("wallet.inWallet"), { amt: walletUsdc != null ? walletUsdc.toFixed(2) : "…" })}
+              {available > 0n ? ` · ${fill(t("wallet.inTerminal"), { amt: fmtUsdc(available) })}` : ""}
             </p>
-            {msg && <p className={msg.startsWith("✓") ? "success" : "error"} style={{ textAlign: "center" }}>{msg}</p>}
-            <button className="btn" style={{ width: "100%", marginTop: 14 }} disabled={busy} onClick={send}>
-              {busy ? t("wd.working") : `${t("wallet.send")} USDC`}
+            {msg && !sendOkTx && sendOkTx !== "" && <p className="error" role="alert" style={{ textAlign: "center" }}>{msg}</p>}
+            {sendOkTx !== null && (
+              <div className="ui-ok" role="status">
+                <div>✓ {msg}</div>
+                {sendOkTx && <a className="linklike" href={`${EXPLORER_URL}/tx/${sendOkTx}`} target="_blank" rel="noopener noreferrer">{t("wd.viewOnExplorer")} ↗</a>}
+              </div>
+            )}
+            {!confirmSend && <ErrorPanel error={sendErr} />}
+            <button className="btn" style={{ width: "100%", marginTop: 14 }} disabled={sender.busy} onClick={send}>
+              {sender.busy ? t("wd.working") : `${t("wallet.send")} USDC`}
             </button>
           </div>
         )}
@@ -422,6 +467,31 @@ export function WalletSheet({
           <WalletConnectPanel wallet={activeWallet} onBack={() => setTab("home")} />
         )}
       </div>
+      <ConfirmDialog
+        open={!!confirmSend}
+        tone="danger"
+        title={t("wallet.confirmSendTitle")}
+        confirmLabel={t("wallet.confirmSend")}
+        busy={sender.busy}
+        confirmDisabled={!sendChecked}
+        error={typeof sendErr === "string" ? sendErr : sendErr?.message}
+        onCancel={() => { setConfirmSend(null); setSendErr(null); }}
+        onConfirm={doSend}
+      >
+        {confirmSend && (
+          <>
+            <div className="confirm-amt">{confirmSend.amountLabel} USDC</div>
+            <p>{t("wallet.sendIrreversible")}</p>
+            <div className="confirm-row"><span>{t("dest.fullAddress")}</span></div>
+            <div className="addr-full">{groupAddress(confirmSend.to)}</div>
+            <label className="addr-check">
+              <input type="checkbox" checked={sendChecked} onChange={(e) => setSendChecked(e.target.checked)} />
+              <span>{t("dest.confirmCheck")}</span>
+            </label>
+          </>
+        )}
+      </ConfirmDialog>
+      {stepUpModal}
     </div>
   );
 }
