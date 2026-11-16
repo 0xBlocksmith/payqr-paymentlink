@@ -177,46 +177,36 @@ export default function Transactions() {
 
   const refresh = useCallback(async () => {
     if (!address || !proxies) return;
+    // All three sources start AT ONCE and each one updates the list the moment
+    // it answers — the list never waits for the slowest (the on-chain scan):
+    //   payments  (shared cached query — instant when Home already loaded it)
+    //   fiat withdrawals (subgraph)
+    //   USDC withdrawals (chain events + this device's ledger)
+    const replace = (kind: string, next: any[]) =>
+      setRows((cur) => [...cur.filter((r) => r.kind !== kind), ...next].sort(byTime));
+    const paymentsP = queryClient.fetchQuery(historyQuery(address, proxies)) as Promise<any[]>;
+    const withdrawalsP = proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([]);
+    const chainP = publicClient
+      ? fetchChainWithdrawals(publicClient, address).then((r) => ({ ok: true, r }), (e) => { console.error(e); return { ok: false, r: [] }; })
+      : Promise.resolve({ ok: true, r: [] });
     try {
-      // Payments (BUY orders — keyed by the merchant for POS sales, by the
-      // proxy for payment-link sales) + fiat withdrawals (SELL orders, keyed by
-      // the proxy). Payments go through the SHARED cached query, so a fresh
-      // copy from Home is reused instead of fetched twice.
-      const [payments, withdrawals] = await Promise.all([
-        queryClient.fetchQuery(historyQuery(address, proxies)) as Promise<any[]>,
-        proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([]),
-      ]);
-      const base = [...payments.map((r) => ({ ...r, kind: "payment" })), ...withdrawals];
-      // Show these NOW. The on-chain USDC-withdrawal scan below can take several
-      // RPC round trips and used to hold the whole list back until it finished.
-      setRows((cur) => {
-        const usdcRows = cur.filter((r) => r.kind === "usdc_withdraw");
-        return [...base, ...usdcRows].sort(byTime);
-      });
+      // fetchHistory/fetchWithdrawals throw on network AND subgraph faults so a
+      // failed poll never wipes real rows: keep the last good list and only flag
+      // the failure, so an EMPTY list says "couldn't load", not "no transactions".
+      const payments = await paymentsP;
+      replace("payment", payments.map((r) => ({ ...r, kind: "payment" })));
       setLoadError(false);
       setLoaded(true);
-      // USDC withdrawals create NO subgraph order, so they come from the chain's
-      // WithdrawalUSDC events merged with this device's ledger (one row per
-      // withdrawal, de-duplicated by tx hash). A failed chain read must not hide
-      // the ledger or the rest of the list — it only flags the list as possibly
-      // incomplete.
-      let chainWd = [];
-      let scanFailed = false;
-      try {
-        if (publicClient) chainWd = await fetchChainWithdrawals(publicClient, address);
-      } catch (e) { console.error(e); scanFailed = true; }
-      const usdcWd = mergeUsdcWithdrawals(chainWd, loadLedger(address));
-      setRows([...base, ...usdcWd].sort(byTime));
-      setWdScanFailed(scanFailed);
+      replace("withdraw", await withdrawalsP);
     } catch (e) {
-      // fetchHistory/fetchWithdrawals throw on network AND subgraph faults so a
-      // failed poll never wipes real rows. Keep the last good list; only flag
-      // the failure so an EMPTY list can say "couldn't load" instead of the
-      // misleading "No transactions yet".
       console.error(e);
       setLoadError(true);
+    } finally {
+      setLoaded(true);
     }
-    finally { setLoaded(true); }
+    const chain = await chainP;
+    replace("usdc_withdraw", mergeUsdcWithdrawals(chain.r as any[], loadLedger(address)));
+    setWdScanFailed(!chain.ok);
     // proxyKey stands in for proxies: same content, stable identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, proxyKey, publicClient, queryClient]);
