@@ -852,7 +852,7 @@ export default function Withdraw() {
               )}
               {result.status === "error" && result.retry === "whole" && (
                 <button className="btn ghost" style={{ marginBottom: 10 }}
-                  onClick={() => { setResult(null); setUsdcStep("confirm"); }}>{t("wd.tryAgain")}</button>
+                  onClick={() => { setResult(null); setDestChecked(false); setUsdcStep("confirm"); }}>{t("wd.tryAgain")}</button>
               )}
               <button className="btn" onClick={() => router.replace("/dashboard")}>{t("wd.toDash")}</button>
             </div>

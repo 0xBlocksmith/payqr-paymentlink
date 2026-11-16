@@ -9,7 +9,8 @@ import { useT } from "../lib/i18n";
 import { fill } from "../lib/format";
 
 /**
- * Step-up (2FA) before money leaves the account.
+ * Step-up (2FA) for sensitive actions. Used by dispute appeals; it is NOT part
+ * of the withdraw flows (removed there).
  *
  * The merchant logs in with phone or Google through a thirdweb in-app wallet.
  * To move funds we make them prove it again: a fresh one-time code by SMS
