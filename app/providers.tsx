@@ -10,6 +10,7 @@ import { ThemeProvider } from "../components/theme";
 import { AppUpdateProvider } from "../components/AppUpdate";
 import { UpdateBanner } from "../components/UpdateBanner";
 import { Splash } from "../components/Splash";
+import { FloatingNav } from "../components/FloatingNav";
 
 /**
  * thirdweb owns WALLET + AUTH + gasless smart account (see lib/thirdweb.ts,
@@ -88,6 +89,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           <AppUpdateProvider>
             {walletFree ? children : <WalletStack>{children}</WalletStack>}
             <UpdateBanner />
+            <FloatingNav />
           </AppUpdateProvider>
         </WagmiProvider>
       </QueryClientProvider>

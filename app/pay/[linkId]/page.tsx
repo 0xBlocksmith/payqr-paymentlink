@@ -720,8 +720,6 @@ export default function PayLink() {
           <NoPageScroll />
           <header className="pl-top">
             <img className="pl-logo pl-logo-payqr" src="/payqr-mark-sm.png" alt="PayQR" width={44} height={28} />
-            <span className="pl-top-line" aria-hidden="true" />
-            <img className="pl-logo pl-logo-p2p" src="/p2pdotme-sm.png" alt="p2p.me" width={28} height={34} />
           </header>
 
           <div className="pl-hero-main">

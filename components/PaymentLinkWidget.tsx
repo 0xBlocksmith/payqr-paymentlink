@@ -710,7 +710,13 @@ export function PaymentLinkWidget({
         /* QR: centred, a plain white tile — no card behind it. */
         .pc-qr-card { margin: 28px 0 8px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
         .pc-qr-label { display: none; }
-        .pc-qr-box { padding: 14px; background: #fff; border: 1px solid var(--pq-line); border-radius: 14px; line-height: 0; }
+        .pc-qr-box { padding: 18px; background: #fff; border: 1px solid var(--pq-line); border-radius: 24px; line-height: 0; }
+        .pc-qr-box svg { display: block; border-radius: 10px; background: #fff; }
+        /* The payer page is a LIGHT page. Without this, a dark app theme or the
+           browser's auto-dark mode darkens the area around the QR, which removes
+           its white quiet zone and makes it hard to scan. */
+        html:has(.pc-content) { color-scheme: only light; }
+        html[data-theme="dark"]:has(.pc-content) body { background: #f6f8ff; }
         .pc-qr-hint { font-size: 12.5px; color: var(--pq-muted); text-align: center; max-width: 30ch; }
 
         .pc-apps { margin: 14px 0 0; }

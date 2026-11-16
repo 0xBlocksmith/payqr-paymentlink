@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import { useLockPeriod } from "../../components/useLockPeriod";
+import { useRegisteredCurrency } from "../../components/useRegisteredCurrency";
+import { fill, fmtDay } from "../../lib/format";
+import { resolveStatus } from "../../lib/status";
+import { Countdown } from "../../components/ui/Countdown";
+import { PullToRefresh } from "../../components/ui/PullToRefresh";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useReadContract } from "wagmi";
@@ -17,6 +23,7 @@ import { useT } from "../../lib/i18n";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { decryptPayout } from "../../lib/payoutCrypto";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
+import { DisputeAppeal } from "../../components/DisputeAppeal";
 import { useDisputeOrderStates, OrderDisputeManager, useSupportSigner } from "../../components/OrderDisputeManager";
 import { useMerchantProxies } from "../../components/useMerchantProxies";
 
@@ -62,12 +69,23 @@ const FILTERS = [
 ];
 
 export default function Transactions() {
-  const { t } = useT();
+  const { t, lang } = useT();
   const router = useRouter();
   const { ready, authenticated, address } = useMerchant();
   const { getIdentity } = useRelayIdentity();
   const supportSigner = useSupportSigner();
   const [country, setCountry] = useState(null);
+  const { code: regCode } = useRegisteredCurrency(address);
+  const { secs: lockSecs } = useLockPeriod(regCode || null);
+  const nowSec = Math.floor(Date.now() / 1000);
+  // The soonest still-locked payment: shown under the summary cards with a live countdown.
+  const { data: bucketData, refetch: refetchBuckets } = useReadContract({
+    address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "getMerchantBuckets",
+    args: [address], query: { enabled: !!address, refetchInterval: 15000 },
+  });
+  const nextBucket = ((bucketData as any[]) || [])
+    .filter((b) => b.amount > 0n && Number(b.unlockTimestamp) > nowSec)
+    .sort((x, y) => Number(x.unlockTimestamp) - Number(y.unlockTimestamp))[0] || null;
   const [rate, setRate] = useState(null);
   const [rows, setRows] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -286,7 +304,7 @@ export default function Transactions() {
   if (!country) return <><Nav back /><div className="screen"><p className="muted" style={{ textAlign: "center" }}>{t("common.loading")}</p></div></>;
 
   return (
-    <>
+    <PullToRefresh onRefresh={async () => { await refresh(); }}>
       <Nav back />
       <div className="screen">
         <h1 style={{ textAlign: "center", marginBottom: 2 }}>{t("tx.title")}</h1>
@@ -305,6 +323,22 @@ export default function Transactions() {
             <strong>{totalUsdc.toFixed(2)}</strong>
           </div>
         </div>
+
+        {nextBucket && (
+          <section className="next-avail" aria-label={t("tx.nextAvail")}>
+            <div className="next-avail-h">{t("tx.nextAvail")}</div>
+            <div className="settle-row">
+              <div className="settle-l">
+                <span className="settle-amt">${fmtUsdc(nextBucket.amount)} USDC</span>
+                <span className="settle-date">
+                  {fill(t("dash3.availableOnDate"), { date: fmtDay(Number(nextBucket.unlockTimestamp), lang, Number(nextBucket.unlockTimestamp) - nowSec < 3 * 86400) })}
+                </span>
+              </div>
+              <Countdown unlock={Number(nextBucket.unlockTimestamp)} doneLabel={t("dash3.availableNow")}
+                onDone={() => refetchBuckets()} />
+            </div>
+          </section>
+        )}
 
         {/* range + filter menus, then search */}
         <div className="hist-tools">
@@ -386,6 +420,15 @@ export default function Transactions() {
               // Tapping a row opens the IN-APP receipt (not Basescan). Rows without
               // a receipt link yet (no tx hash) render as a plain, non-clickable row.
               const href = receiptHref(tx);
+              // Same status the dashboard shows: "Received · Available on <date>"
+              // plus a live countdown while it is still settling.
+              const st = isWithdraw ? null
+                : resolveStatus({ status: tx.status, kind: "sale", completedAt: tx.completedAt }, lockSecs, nowSec);
+              const when = st?.unlockAt ? fmtDay(st.unlockAt, lang, (lockSecs ?? 0) < 3 * 86400) : "";
+              const footLabel = st
+                ? (st.key === "received_locked" && when ? fill(t("status.receivedOn"), { date: when })
+                  : st.key === "received_locked" ? t("status.receivedSettling") : t(st.labelKey))
+                : t(stateKey);
               const inner = (
                 <>
                   <span className={`hist-ico ${cls}`}>
@@ -394,16 +437,21 @@ export default function Transactions() {
                       : <Icon.Down width="18" height="18" />}
                   </span>
                   <div className="hist-mid">
-                    <div className="hist-fiat">
-                      {/* "≈": rows are valued at TODAY's buy rate for the UI
-                          country — an estimate, not the historical charge. */}
-                      {isWithdraw ? "− " : ""}{fiat != null ? `≈ ${fmtFiat(country, fiat, { decimals: 2 })}` : "—"}
+                    <div className="hist-top">
+                      <div className="hist-fiat">
+                        {/* "≈": rows are valued at TODAY's buy rate for the UI
+                            country — an estimate, not the historical charge. */}
+                        {isWithdraw ? "− " : ""}{fiat != null ? `≈ ${fmtFiat(country, fiat, { decimals: 2 })}` : "—"}
+                      </div>
+                      <span className="hist-time">{timeAgo(tx.createdAt)}</span>
                     </div>
                     <div className="hist-crypto">{sub}</div>
-                  </div>
-                  <div className="hist-right">
-                    <span className={`hist-badge ${cls}`}>{t(stateKey)}</span>
-                    <span className="hist-time">{timeAgo(tx.createdAt)}</span>
+                    <div className={`rr-foot st-${st ? st.tone : "info"}`}>
+                      <i aria-hidden="true" /><span className="rr-lbl">{footLabel}</span>
+                    </div>
+                    {st?.unlockAt ? (
+                      <div className="hist-cd"><Countdown unlock={st.unlockAt} doneLabel={t("dash3.availableNow")} /></div>
+                    ) : null}
                   </div>
                 </>
               );
@@ -432,6 +480,12 @@ export default function Transactions() {
                       signer={supportSigner}
                     />
                   )}
+                  {disputeRow && !tx.isLink && tx.dispute === "open" && (
+                    <DisputeAppeal
+                      orderId={tx.orderId}
+                      enabled={disputeRow.order.user?.toLowerCase() === (supportSigner?.address ?? "").toLowerCase()}
+                    />
+                  )}
                   {!isWithdraw && tx.isLink && tx.dispute && tx.dispute !== "none" && (
                     <div className="sub" style={{ margin: "4px 0 10px", fontSize: 12.5 }}>
                       {tx.dispute === "open" ? "Payment under review by support · " : "Review by support finished · "}
@@ -458,18 +512,6 @@ export default function Transactions() {
         {pdfMsg && <p className="error" style={{ textAlign: "center" }}>{pdfMsg}</p>}
       </div>
 
-      {/* Same orientation + styling as the dashboard bar: Withdraw (ghost) LEFT,
-          Accept (primary) RIGHT — so the buttons never swap between screens. */}
-      {/* <Link>, not <a href> — a raw anchor does a FULL document navigation,
-          which reboots the PWA (Splash + thirdweb reconnect) on every tap. */}
-      <div className="bottombar">
-        <Link className="btn ghost barbtn" href="/withdraw">
-          <Icon.Up /><span>{t("nav.withdraw")}</span>
-        </Link>
-        <Link className="btn barbtn" href="/qr">
-          <Icon.Plus /><span>{t("common.acceptPayment")}</span>
-        </Link>
-      </div>
-    </>
+    </PullToRefresh>
   );
 }

@@ -185,6 +185,17 @@ export function loadCountry(): Country {
   }
 }
 
+/** The language a country's merchants expect: India reads English; Brazil
+ *  Portuguese; Argentina and Venezuela Spanish. Picking a country switches to it. */
+export function defaultLangForCountry(id: string | null | undefined): "en" | "pt" | "es" {
+  switch (id) {
+    case "brazil": return "pt";
+    case "argentina":
+    case "venezuela": return "es";
+    default: return "en";
+  }
+}
+
 export function saveCountry(id: string): void {
   try { localStorage.setItem(KEY, id); } catch {}
 }
@@ -223,9 +234,18 @@ export function clearLocalUserData(): void {
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && (k.startsWith("payqr.relay:") || k.startsWith("payqr.merchantProfile:"))) toRemove.push(k);
+      // Every app key (relay identities, merchant profile, ledgers, pending links,
+      // setup state, last-seen address …) — not just the ones listed above, so a
+      // new key can never be forgotten here. Only the appearance choice survives.
+      if (k && (k.startsWith("payqr.") || k.startsWith("@P2PME:")) && k !== "payqr.theme") toRemove.push(k);
     }
     toRemove.forEach((k) => localStorage.removeItem(k));
+  } catch { /* ignore */ }
+  // The 2FA "recently verified" marker and any other per-tab state.
+  try { sessionStorage.clear(); } catch { /* ignore */ }
+  // Offline copies of pages this account opened must not outlive the session.
+  try {
+    if (typeof caches !== "undefined") void caches.keys().then((ks) => Promise.all(ks.map((k) => caches.delete(k))));
   } catch { /* ignore */ }
 }
 

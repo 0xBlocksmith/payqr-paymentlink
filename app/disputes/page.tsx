@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
+import { PullToRefresh } from "../../components/ui/PullToRefresh";
 import { PaymentHistoryWithSupport } from "@p2pdotme/widgets/support";
 import { Nav } from "../../components/Nav";
 import { useSmartAccount } from "../../components/useSmartAccount";
@@ -15,6 +16,7 @@ import { DIAMOND_ADDRESS, SUBGRAPH_URL, SUPPORT_BRIDGE_URL, SUPPORT_ORIGIN_APP, 
 // The library's own history-with-support widget — no custom dispute UI.
 export default function Disputes() {
   const { t } = useT();
+  const [rev, setRev] = useState(0); // bumping this remounts the history widget = a fresh fetch
   const { ready, address } = useSmartAccount();
   const { signer } = useCheckoutSigner();
   const supportSigner = useSupportSigner();
@@ -27,16 +29,17 @@ export default function Disputes() {
   );
 
   return (
-    <>
+    <PullToRefresh onRefresh={async () => { setRev((r) => r + 1); await new Promise((r) => setTimeout(r, 700)); }}>
       <Nav back />
       <div className="screen">
         <h1 style={{ textAlign: "center", marginBottom: 14 }}>{t("nav.disputes")}</h1>
         {!ready || !signer || !supportSigner || !proxies ? (
-          <p className="muted" style={{ textAlign: "center" }}>Loading…</p>
+          <p className="muted" style={{ textAlign: "center" }}>{t("ds.loading")}</p>
         ) : !SUPPORT_BRIDGE_URL ? (
-          <p className="muted" style={{ textAlign: "center" }}>Support isn’t available yet.</p>
+          <p className="muted" style={{ textAlign: "center" }}>{t("ds.unavailable")}</p>
         ) : (
           <PaymentHistoryWithSupport
+            key={rev}
             signer={signer}
             subgraphUrl={SUBGRAPH_URL}
             usdcAddress={USDC_ADDRESS as `0x${string}`}
@@ -60,6 +63,6 @@ export default function Disputes() {
           />
         )}
       </div>
-    </>
+    </PullToRefresh>
   );
 }

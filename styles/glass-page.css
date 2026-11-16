@@ -1,0 +1,201 @@
+/* /login layout — page-specific. All look-and-feel comes from styles/glass.css;
+   this file only arranges things. Background + header mirror the /p payer page. */
+
+.lg-page {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  font-family: var(--font-sans), system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* the /p background: a soft blue wash from the top fading to white */
+  background:
+    radial-gradient(120% 55% at 50% -10%, #dfe8ff 0%, rgba(223, 232, 255, 0) 70%),
+    linear-gradient(180deg, #f6f8ff 0%, #ffffff 100%);
+  overflow-x: hidden;
+  letter-spacing: 0;   /* the app body is slightly negative; this page reads softer at normal spacing */
+}
+/* Two faint blue lights BEHIND the content, so the glass has something to
+   refract. Same blue family as the page — no new colour. */
+.lg-lights { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 0; }
+.lg-lights::before, .lg-lights::after { content: ""; position: absolute; border-radius: 50%; filter: blur(46px); }
+.lg-lights::before { width: 300px; height: 300px; right: -90px; top: 150px; background: rgba(75, 120, 238, 0.20); }
+.lg-lights::after { width: 260px; height: 260px; left: -100px; bottom: 120px; background: rgba(29, 91, 224, 0.13); }
+
+.lg-inner {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 440px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 18px 20px 0;
+  box-sizing: border-box;
+}
+
+/* header — same bar as /p (logo on the left), language on the right */
+.lg-top { display: flex; align-items: center; justify-content: space-between; min-height: 44px; flex: none; }
+.lg-logo { display: block; height: 28px; width: auto; object-fit: contain; mix-blend-mode: multiply; }
+.lg-actions { display: flex; align-items: center; gap: 8px; }
+.lg-rel { position: relative; }
+.lg-lang-pop { top: calc(100% + 8px); right: 0; min-width: 176px; }
+.lg-country-pop { bottom: calc(100% + 8px); left: 0; right: 0; }
+
+.lg-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(16px, 3.4vh, 26px);
+  padding: 14px 0 22px;
+}
+.lg-h1 {
+  margin: 0;
+  text-align: center;
+  font-size: clamp(24px, 7vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  color: var(--g-ink);
+  text-wrap: balance;
+}
+.lg-sub { margin: 8px 0 0; text-align: center; font-size: 15px; font-weight: 500; line-height: 1.4; color: var(--g-muted); }
+
+/* ── The journey: ONE glass band, full viewport width ─────────────────────
+   local payment → smart contract (settlement period + countdown) → USDC.
+   The track runs through all three stages; there are no per-stage cards. */
+.lg-hero { width: 100vw; margin-left: calc(50% - 50vw); padding: 0 16px; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.lg-band { --icon: clamp(50px, 13.5vw, 62px); --ring: calc(var(--icon) * 1.36); --pad: 20px;
+  position: relative; width: 100%; max-width: 980px; box-sizing: border-box; padding: var(--pad) 0 10px; }
+@media (min-width: 760px) { .lg-band { --icon: 70px; --pad: 34px; padding-bottom: 30px; } }
+/* desktop: the header spans the same width as the journey; the footer stays a comfortable column */
+@media (min-width: 760px) {
+  .lg-inner { max-width: 980px; }
+  .lg-inner .lg-foot { width: 100%; max-width: 440px; align-self: center; box-sizing: border-box; background: none; }
+}
+
+/* soft light behind the contract — it brightens while the contract is working */
+.lg-glow { position: absolute; left: 50%; top: -10%; width: 70%; height: 130%; transform: translateX(-50%); pointer-events: none;
+  background: radial-gradient(closest-side, rgba(75, 120, 238, 0.16), rgba(75, 120, 238, 0)); }
+
+/* the track: spans from the centre of stage 1 to the centre of stage 3 */
+.lg-track { position: absolute; z-index: 0; top: calc(var(--pad) + var(--ring) / 2 - 1px); height: 2px;
+  left: calc(6px + (100% - 12px) * 0.13889); width: calc((100% - 12px) * 0.72222); }
+.lg-track-base, .lg-track-fill { position: absolute; top: 0; height: 2px; border-radius: 2px; }
+.lg-track-base { left: 0; right: 0; background: linear-gradient(90deg, rgba(75, 120, 238, 0.06), rgba(75, 120, 238, 0.22) 50%, rgba(75, 120, 238, 0.06)); }
+.lg-track-fill { background: linear-gradient(90deg, rgba(75, 120, 238, 0.55), rgba(58, 100, 220, 0.75)); }
+
+/* tokens that travel along the track */
+.lg-tok { position: absolute; top: 1px; z-index: 2; will-change: left, opacity, transform; }
+.lg-tok--pay { min-height: 30px; min-width: 30px; padding: 0 8px; justify-content: center; font-size: 13px; }
+.lg-tok--usdc { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(180deg, rgba(104, 142, 242, 0.96), rgba(78, 116, 230, 0.96));
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.6), 0 8px 18px -8px rgba(58, 100, 220, 0.45); }
+.lg-tok--usdc svg { width: 18px; height: 18px; }
+
+.lg-cols { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1.6fr 1fr; align-items: start; justify-items: center; padding: 0 6px; }
+.lg-col { display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; text-align: center; }
+.lg-ico-box { position: relative; width: var(--ring); height: var(--ring); display: grid; place-items: center; flex: none; }
+.lg-ico { width: var(--icon); height: var(--icon); border-radius: 50%; display: grid; place-items: center; color: var(--g-blue-2); transition: transform 0.2s var(--g-ease); }
+.lg-ico svg { width: 50%; height: 50%; }
+.lg-ico--contract { color: var(--g-blue); }
+.lg-ring { position: absolute; inset: 0; width: 100%; height: 100%; }
+.lg-badge { position: absolute; top: calc((var(--ring) - var(--icon)) / 2 - 5px); right: calc((var(--ring) - var(--icon)) / 2 - 5px);
+  width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(180deg, var(--g-blue-1), var(--g-blue-2)); box-shadow: 0 0 0 2px #fff, 0 6px 12px -4px rgba(58, 100, 220, 0.6);
+  transition: opacity 0.25s var(--g-ease), transform 0.25s var(--g-ease); }
+.lg-badge svg { width: 12px; height: 12px; }
+.lg-lab { font-size: clamp(12px, 3.3vw, 14px); font-weight: 500; line-height: 1.3; color: var(--g-ink); }
+.lg-lab small { display: block; margin-top: 1px; font-size: 0.9em; font-weight: 400; color: var(--g-faint); }
+
+/* the settlement period + countdown: the focal point of the contract stage */
+.lg-period { display: flex; flex-direction: column; align-items: center; gap: 1px; margin-top: 2px; }
+.lg-eyebrow { font-size: 12px; font-weight: 500; color: var(--g-muted); }
+.lg-per { line-height: 1; font-variant-numeric: tabular-nums; }
+.lg-per b { font-size: clamp(28px, 8.4vw, 34px); font-weight: 700; letter-spacing: -0.03em;
+  background: linear-gradient(180deg, var(--g-blue-1), var(--g-blue-2)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.lg-per i { font-style: normal; font-size: clamp(14px, 3.8vw, 16px); font-weight: 500; margin-left: 5px; color: var(--g-ink); }
+.lg-cd { min-width: 11ch; text-align: center; font-size: clamp(12px, 3.3vw, 13.5px); font-weight: 500; color: var(--g-muted); font-variant-numeric: tabular-nums; }
+.lg-link { background: none; border: 0; padding: 4px; font: inherit; font-size: 12.5px; font-weight: 500; color: var(--g-blue); text-decoration: underline; cursor: pointer; min-height: 32px; }
+.lg-skel { display: inline-block; width: 96px; height: 34px; border-radius: 12px; background: rgba(75, 120, 238, 0.16); animation: lgPulse 1.3s ease-in-out infinite; }
+.lg-demo { margin: 0; font-size: 11.5px; font-weight: 400; color: var(--g-faint); text-align: center; }
+
+/* bottom: country + primary action, pinned */
+.lg-foot {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 -20px;
+  padding: 18px 20px calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(246, 248, 255, 0) 0%, rgba(246, 248, 255, 0.86) 34%, rgba(246, 248, 255, 0.96) 100%);
+}
+.lg-field-cap { font-size: 12.5px; font-weight: 500; color: var(--g-muted); margin: 0 0 6px 6px; }
+.lg-flag { width: 24px; height: 17px; border-radius: 4px; object-fit: cover; flex: none; box-shadow: 0 0 0 1px rgba(15, 27, 61, 0.12); }
+.lg-field-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.lg-caret { width: 16px; height: 16px; color: var(--g-faint); flex: none; transition: transform var(--g-t) var(--g-ease); }
+[aria-expanded="true"] > .lg-caret { transform: rotate(180deg); }
+.lg-terms { margin: 2px 0 0; text-align: center; font-size: 12px; line-height: 1.45; color: var(--g-faint); }
+.lg-terms a { color: var(--g-blue); font-weight: 500; }
+.lg-err { text-align: center; color: var(--g-ink); background: rgba(255, 255, 255, 0.62); border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 0 0 1px rgba(217, 45, 32, 0.12), 0 10px 26px -18px rgba(29, 60, 140, 0.18); border-radius: 20px; padding: 12px 16px;
+  -webkit-backdrop-filter: blur(14px) saturate(160%); backdrop-filter: blur(14px) saturate(160%); }
+.lg-err--wait { box-shadow: 0 0 0 1px rgba(217, 138, 9, 0.22), 0 10px 26px -18px rgba(29, 60, 140, 0.18); }
+.lg-err--calm { box-shadow: 0 0 0 1px rgba(75, 120, 238, 0.14), 0 10px 26px -18px rgba(29, 60, 140, 0.18); }
+.lg-err-msg { margin: 0; font-size: 14px; line-height: 1.5; font-weight: 500; }
+.lg-err-ref { margin: 6px 0 0; font-size: 12px; line-height: 1.4; color: var(--g-faint); }
+.lg-err-detail { margin-top: 8px; text-align: left; font-size: 12px; color: var(--g-muted); }
+.lg-err-detail summary { cursor: pointer; }
+.lg-err-detail code { display: block; margin-top: 4px; white-space: pre-wrap; word-break: break-word; font-size: 11.5px; }
+
+/* short phones: tighten so the primary action never pushes content off-screen */
+@media (max-height: 700px) { .lg-main { gap: 12px; padding-top: 4px; } }
+@media (min-width: 640px) { .lg-inner { padding-top: 32px; } .lg-foot { margin: 0; padding-left: 0; padding-right: 0; } }
+
+@keyframes lgFade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@keyframes lgPulse { 50% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) { .lg-skel { animation: none; } .lg-ico, .lg-badge { transition: none; } .lg-caret { transition: none; } }
+
+/* ── /onboarding: the same full-screen shell, a soft form in the middle ── */
+.ob-main { justify-content: flex-start; padding-top: clamp(8px, 3vh, 28px); gap: clamp(16px, 3vh, 24px); }
+.ob-form { display: flex; flex-direction: column; gap: 20px; width: 100%; max-width: 520px; margin: 0 auto; }
+.ob-country { align-self: center; }
+.ob-country .lg-flag { width: 20px; height: 14px; }
+.ob-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ob-hint { margin: 8px 0 0 6px; font-size: 12.5px; color: var(--g-faint); }
+.ob-err { margin: 6px 0 0 6px; font-size: 13px; color: var(--g-danger); }
+.ob-notes { display: grid; gap: 8px; margin: 2px 6px 0; font-size: 13px; line-height: 1.5; color: var(--g-muted); }
+.glass-root .sn { font-size: 13px; color: var(--g-muted); }
+.ob-foot-actions { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+
+/* ═══ DARK MODE (login / onboarding shell) ═══════════════════════════════ */
+[data-theme="dark"] .lg-page {
+  background:
+    radial-gradient(120% 55% at 50% -10%, #1a2a52 0%, rgba(26, 42, 82, 0) 70%),
+    linear-gradient(180deg, #0c1220 0%, #0a0e16 100%);
+}
+[data-theme="dark"] .lg-lights::before { background: rgba(75, 120, 238, 0.26); }
+[data-theme="dark"] .lg-lights::after { background: rgba(58, 100, 220, 0.20); }
+/* the mark has a white ground that `multiply` removes on light; invert + screen does it on dark */
+[data-theme="dark"] .lg-logo { mix-blend-mode: screen; filter: invert(1) hue-rotate(180deg); }
+[data-theme="dark"] .lg-foot {
+  background: linear-gradient(180deg, rgba(10, 14, 22, 0) 0%, rgba(10, 14, 22, 0.86) 34%, rgba(10, 14, 22, 0.96) 100%);
+}
+[data-theme="dark"] .lg-badge { box-shadow: 0 0 0 2px #0a0e16, 0 6px 12px -4px rgba(58, 100, 220, 0.6); }
+[data-theme="dark"] .lg-glow { background: radial-gradient(closest-side, rgba(107, 148, 255, 0.22), rgba(107, 148, 255, 0)); }
+[data-theme="dark"] .lg-flag { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18); }
+[data-theme="dark"] .lg-err {
+  background: rgba(28, 36, 58, 0.6); border-color: rgba(255, 255, 255, 0.12);
+}
+[data-theme="dark"] .lg-tok--usdc { box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25), 0 8px 18px -8px rgba(58, 100, 220, 0.6); }
+[data-theme="dark"] .lg-skel { background: rgba(125, 162, 255, 0.2); }
+
+/* Let the page's own background reach the screen edges: the <html> colour behind
+   the gesture bar is set from JS per theme (usePageChrome); the body must not
+   paint a different colour over it. */
+html:has(.lg-page) body { background: transparent; }
+.lg-page { padding-bottom: env(safe-area-inset-bottom); }

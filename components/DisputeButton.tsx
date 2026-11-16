@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Icon } from "./Icons";
 import { useT } from "../lib/i18n";
 import { useSmartAccount } from "./useSmartAccount";
-import { fetchHistory } from "../lib/history";
+import { useHistory } from "./useHistory";
 import { fmtUsdc } from "../lib/contract";
 import { SUPPORT_BRIDGE_URL } from "../lib/p2p";
 import { useDisputeOrderStates, OrderDisputeManager, useSupportSigner } from "./OrderDisputeManager";
@@ -34,17 +34,15 @@ function timeAgo(iso: string) {
 function DisputePicker({ onClose }: { onClose: () => void }) {
   const { address, ready } = useSmartAccount();
   const supportSigner = useSupportSigner();
-  const [rows, setRows] = useState<any[] | null>(null);
-  const [error, setError] = useState(false);
-
-  useEffect(() => {
-    if (!ready || !address) return;
-    let on = true;
-    fetchHistory(address)
-      .then((list) => { if (on) setRows(list.sort((a, b) => b.placedAt - a.placedAt).slice(0, 20)); })
-      .catch(() => { if (on) setError(true); });
-    return () => { on = false; };
-  }, [ready, address]);
+  // Shared, cached history (counter sales only: no proxies, as before) — the same
+  // query family the dashboard and Transactions use, so opening this sheet no
+  // longer re-runs the subgraph queries from scratch every time.
+  const hist = useHistory(ready ? address : null, []);
+  const error = hist.isError && !hist.data;
+  const rows: any[] | null = useMemo(
+    () => (hist.data ? [...hist.data].sort((a: any, b: any) => b.placedAt - a.placedAt).slice(0, 20) : null),
+    [hist.data]
+  );
 
   const orderIds = useMemo(() => (rows || []).map((r) => r.orderId), [rows]);
   const { rows: disputeRows } = useDisputeOrderStates(orderIds);

@@ -7,7 +7,17 @@ import { Nav } from "../../../components/Nav";
 import { Splash } from "../../../components/Splash";
 import { useMerchant } from "../../../components/useMerchant";
 import { useRelayIdentity } from "../../../components/useRelayIdentity";
-import { CONTRACT_ADDRESS, LINK_ROUTER_ADDRESS, INTEGRATOR_ABI, friendlyError, currencyFromBytes32 } from "../../../lib/contract";
+import { CONTRACT_ADDRESS, LINK_ROUTER_ADDRESS, INTEGRATOR_ABI, currencyFromBytes32 } from "../../../lib/contract";
+import { toUserError, ValidationError, type UserError } from "../../../lib/errors";
+import { savePendingLink, loadPendingLink, clearPendingLink, type PendingLink } from "../../../lib/pendingLink";
+import { useGuardedSend } from "../../../components/useGuardedSend";
+import { ConfirmDialog } from "../../../components/ui/ConfirmDialog";
+import { ErrorPanel } from "../../../components/ui/ErrorPanel";
+import { SettlementNote } from "../../../components/ui/SettlementNote";
+import { useCopy } from "../../../components/useCopy";
+import { fill, fmtLockWindow } from "../../../lib/format";
+import { fetchLink } from "../../../lib/paymentLinks";
+import { usePriceConfig } from "../../../components/usePriceConfig";
 import { stringToHex } from "viem";
 import { useReadContract } from "wagmi";
 import { countryForCurrency, fmtFiat, COUNTRIES } from "../../../lib/countries";
@@ -52,7 +62,7 @@ import { Icon } from "../../../components/Icons";
 export default function CreatePaymentLink() {
   const router = useRouter();
   const { ready, authenticated, address, isRegistered, sendBatchTransaction, signTypedData } = useMerchant();
-  const { t } = useT();
+  const { t, lang } = useT();
   const { getIdentity } = useRelayIdentity();
   const publicClient = usePublicClient();
 
@@ -163,15 +173,7 @@ export default function CreatePaymentLink() {
   // The live price, held in state rather than fetched only at submit, so the
   // equivalence below can update as the merchant types. Re-fetched when the
   // link's currency changes, since the rate is per-currency.
-  const [priceCfg, setPriceCfg] = useState<Awaited<ReturnType<typeof fetchPriceConfig>>>(null);
-  useEffect(() => {
-    if (!linkCurrency) return;
-    let alive = true;
-    fetchPriceConfig(linkCurrency)
-      .then((cfg) => { if (alive) setPriceCfg(cfg); })
-      .catch(() => { if (alive) setPriceCfg(null); });
-    return () => { alive = false; };
-  }, [linkCurrency]);
+  const { cfg: priceCfg, failed: priceFailed } = usePriceConfig(linkCurrency);
 
   // Whether the relayer can hold a fixed LOCAL price. Without it a local
   // amount is fixed in USDC on-chain instead — safe, since the contract
@@ -190,31 +192,42 @@ export default function CreatePaymentLink() {
   const equivalentHint = (() => {
     const typed = Number(amountFiat);
     if (!typed || typed <= 0) return "";
-    if (!priceCfg) return "Fetching today's rate…";
+    if (!priceCfg) return priceFailed ? t("link.rateUnavailable") : t("qr.fetchingRate");
     const usdc6 =
       amountUnit === "usdc" ? usdcForUsdcTarget(typed, priceCfg) : usdcForFiat(typed, priceCfg);
     if (usdc6 <= 0n) return "";
     const over = capUsdc6 !== null && usdc6 > capUsdc6;
     if (over) {
       const capFiat = fiatForUsdc(capUsdc6!, priceCfg);
-      return `Over your ${fmtFiat(country, capFiat)} limit per payment.`;
+      return fill(t("link.overLimit"), { limit: fmtFiat(country, capFiat) });
     }
     // A local amount is what the customer pays, always; the USDC it credits is
     // today's figure and moves with the rate (after p2p.me's small-order fee).
-    if (amountUnit === "usdc") return `Customer pays ≈ ${fmtFiat(country, fiatForUsdc(usdc6, priceCfg))} today`;
+    if (amountUnit === "usdc") return fill(t("link.customerPaysApprox"), { fiat: fmtFiat(country, fiatForUsdc(usdc6, priceCfg)) });
     return localPriceSupported === false
-      ? `Customer pays ≈ ${fmtFiat(country, typed)} (can vary slightly with the rate) · you receive ${(Number(usdc6) / 1e6).toFixed(2)} USDC`
-      : `Customer always pays ${fmtFiat(country, typed)} · you receive ≈ ${(Number(usdc6) / 1e6).toFixed(2)} USDC at today's rate`;
+      ? fill(t("link.paysVaries"), { fiat: fmtFiat(country, typed), usdc: (Number(usdc6) / 1e6).toFixed(2) })
+      : fill(t("link.paysFixed"), { fiat: fmtFiat(country, typed), usdc: (Number(usdc6) / 1e6).toFixed(2) });
   })();
   const [description, setDescription] = useState("");
+  const descBytes = new TextEncoder().encode(description).length;
   const [singleUse, setSingleUse] = useState(true);
   const [expiresInDays, setExpiresInDays] = useState<"" | "1" | "7" | "30">("7");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [created, setCreated] = useState<{ linkId: string; url: string } | null>(null);
+  const [error, setError] = useState<UserError | string>("");
+  // Synchronous lock: a double tap on "Create" can never start two links.
+  const creator = useGuardedSend();
+  // A link whose creation tx was submitted but whose outcome is unknown. While
+  // this exists the form is locked, so a timeout can never lead to a duplicate.
+  const [pendingLink, setPendingLink] = useState<PendingLink | null>(null);
+  const [startOverOpen, setStartOverOpen] = useState(false);
+  const [checkMsg, setCheckMsg] = useState("");
+  const [created, setCreated] = useState<{
+    linkId: string; url: string;
+    summary?: { mode: "fixed" | "variable"; amount: string; currency: string; single: boolean; expiresDays: string };
+  } | null>(null);
+  const copier = useCopy();
   const [posterDataUrl, setPosterDataUrl] = useState<string | null>(null);
   const [sharing, setSharing] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
 
   if (!ready || !authenticated) return <Splash />;
 
@@ -224,17 +237,28 @@ export default function CreatePaymentLink() {
         <Nav back backHref="/payment-links" />
         <div className="screen">
           <div className="card">
-            <div className="label">Payment Links</div>
-            <div className="sub">This feature isn't configured on this deployment yet.</div>
+            <div className="label">{t("pl.title")}</div>
+            <div className="sub">{t("plx.notConfigured")}</div>
           </div>
         </div>
       </>
     );
   }
 
-  async function handleCreate() {
+  // Guarded entry point (see useGuardedSend): the lock is taken synchronously,
+  // so the ONLY way to a second createLink is a deliberate "Start over".
+  function handleCreate() {
+    if (pendingLink) return;
+    return creator.run(createLinkFlow, { skipStepUp: true });
+  }
+
+  async function createLinkFlow() {
     setError("");
     setBusy(true);
+    // "submitted" = the batch tx may now exist on-chain. Before that point a
+    // failure is certain (nothing was made); after it, only a known revert or a
+    // wallet cancel is certain.
+    let stage: "prep" | "submitted" = "prep";
     try {
       // Re-read rather than trusting the state used for the live hint: the rate
       // moves, and the number actually written on-chain should be priced at
@@ -246,8 +270,8 @@ export default function CreatePaymentLink() {
       let fixedLocal6: bigint | null = null;
       if (amountMode === "fixed") {
         const typed = Number(amountFiat);
-        if (!typed || typed <= 0) throw new Error("Enter a valid amount.");
-        if (!cfg) throw new Error("Could not price this amount right now. Try again shortly.");
+        if (!typed || typed <= 0) throw new ValidationError(t("plx.badAmount"));
+        if (!cfg) throw new ValidationError(t("plx.cantPrice"));
         // usdcForUsdcTarget inverts the small-order fee so "5 USDC" charges the
         // customer five, not five plus a fee. A local amount is priced again at
         // payment time; today's USDC here only checks it against the cap.
@@ -255,12 +279,12 @@ export default function CreatePaymentLink() {
         const floor = amountUnit === "usdc" ? minimumUsdc(cfg) : minimumFiat(cfg);
         if (typed < floor) {
           const shown = Math.ceil(floor * 100) / 100;
-          throw new Error(
+          throw new ValidationError(
             `That amount is too small — the minimum is ${amountUnit === "usdc" ? `${shown.toFixed(2)} USDC` : fmtFiat(country, shown)}.`
           );
         }
         const usdc6 = amountUnit === "usdc" ? usdcForUsdcTarget(typed, cfg) : usdcForFiat(typed, cfg);
-        if (usdc6 <= 0n) throw new Error("That amount is too small.");
+        if (usdc6 <= 0n) throw new ValidationError(t("plx.tooSmall"));
         if (amountUnit === "usdc") amountUsdc6 = usdc6;
         // Asked now, not trusted from the page's first load: a local price sent
         // to a relayer that can't keep it would leave the link pay-anything.
@@ -272,7 +296,7 @@ export default function CreatePaymentLink() {
         // createLink revert ExceedsPerTxCap after they have signed.
         if (capUsdc6 !== null && usdc6 > capUsdc6) {
           const capFiat = fiatForUsdc(capUsdc6, cfg);
-          throw new Error(
+          throw new ValidationError(
             `That is above your limit of ${fmtFiat(country, capFiat)} per payment. ` +
               `Lower the amount, or use a Counter QR and let the customer pay in parts.`
           );
@@ -290,7 +314,7 @@ export default function CreatePaymentLink() {
       const linkId = computeLinkId(address as `0x${string}`, salt);
 
       if (!signTypedData || !sendBatchTransaction) {
-        throw new Error("Wallet isn't ready yet. Please try again in a moment.");
+        throw new ValidationError(t("plx.walletNotReady"));
       }
 
       // Signed before the link exists — the signature only names the id — and
@@ -317,7 +341,7 @@ export default function CreatePaymentLink() {
       // (FieldTooLong) at roughly 250 bytes of text — about 85 characters in
       // Hindi. Refuse it here, before the merchant signs anything.
       if (description && new TextEncoder().encode(description).length > 250) {
-        throw new Error("That description is too long — please shorten it.");
+        throw new ValidationError("That description is too long — please shorten it.");
       }
       if (description) {
         const identity = await getIdentity();
@@ -360,9 +384,20 @@ export default function CreatePaymentLink() {
       // registerAgent reads getLink to check ownership, so a link that
       // doesn't exist yet within the same batch makes it revert — never send
       // these as two separate transactions (see provisionLinkWallet's doc).
+      // Write the link id down FIRST. If the connection drops or the receipt
+      // times out from here on, this record is what stops the merchant from
+      // creating a second link for the same intent, and what lets the page find
+      // the first one.
+      const rec: PendingLink = { linkId, url: buildPayLinkUrl(linkId), at: Date.now() };
+      savePendingLink(address, rec);
+      stage = "submitted";
       const hash = await sendBatchTransaction(batch);
-      const receipt = await publicClient!.waitForTransactionReceipt({ hash });
-      if (receipt.status === "reverted") throw new Error("The transaction reverted.");
+      const receipt = await publicClient!.waitForTransactionReceipt({ hash, timeout: 120_000 });
+      if (receipt.status === "reverted") {
+        clearPendingLink(address); // a reverted batch created nothing
+        throw new Error("create reverted");
+      }
+      clearPendingLink(address);
 
       // Record the id locally, now that the link definitely exists on-chain.
       // The list page cannot reliably rediscover it: getMerchantLinks is not
@@ -374,13 +409,60 @@ export default function CreatePaymentLink() {
 
       // A plain URL: the price, if any, is the relayer's, not the link's.
       const url = buildPayLinkUrl(linkId);
-      setCreated({ linkId, url });
+      setCreated({
+        linkId, url,
+        summary: {
+          mode: amountMode, currency: linkCurrency, single: singleUse, expiresDays: expiresInDays,
+          amount: amountMode === "fixed"
+            ? (amountUnit === "usdc" ? `${Number(amountFiat).toFixed(2)} USDC` : fmtFiat(country, Number(amountFiat)))
+            : "",
+        },
+      });
     } catch (e: any) {
-      setError(friendlyError(e, e?.message || "Could not create the link. Please try again."));
+      const ue = toUserError(e, { context: "create-link", fallbackKey: "err.createLink", uncertainKey: stage === "submitted" ? "err.uncertainLink" : undefined });
+      if (stage === "submitted" && !ue.uncertain && (ue.kind === "unknown" || ue.kind === "network")) {
+        // Unknown failure AFTER submit: the batch may still land. Keep the record.
+        ue.uncertain = true;
+        ue.message = t("err.uncertainLink");
+      }
+      if (stage === "submitted" && ue.uncertain) {
+        setPendingLink(loadPendingLink(address));
+      } else if (stage === "submitted") {
+        clearPendingLink(address); // cancel or a known revert: nothing was created
+      }
+      setError(ue);
     } finally {
       setBusy(false);
     }
   }
+
+  // Look for the exact link id we wrote down. Read-only; safe to repeat.
+  async function checkPendingLink(silent = false) {
+    const rec = loadPendingLink(address);
+    if (!rec || !publicClient) return;
+    try {
+      const link = await fetchLink(publicClient, rec.linkId as `0x${string}`);
+      if (link.owner && !/^0x0+$/i.test(link.owner)) {
+        rememberLink(address as `0x${string}`, rec.linkId as `0x${string}`);
+        clearPendingLink(address);
+        setPendingLink(null); setError(""); setCheckMsg("");
+        setCreated({ linkId: rec.linkId, url: rec.url });
+      } else if (!silent) {
+        setCheckMsg(t("link.notFoundYet"));
+      }
+    } catch {
+      if (!silent) setCheckMsg(t("err.network"));
+    }
+  }
+
+  useEffect(() => { setPendingLink(loadPendingLink(address)); }, [address]);
+  useEffect(() => {
+    if (!pendingLink) return;
+    checkPendingLink(true);
+    const id = setInterval(() => { if (document.visibilityState === "visible") checkPendingLink(true); }, 15_000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingLink?.linkId, publicClient]);
 
   async function handleShare() {
     if (!created || sharing) return;
@@ -438,48 +520,74 @@ ${created.url}`;
   }
 
   function copyLink() {
-    if (!created) return;
-    navigator.clipboard?.writeText(created.url).catch(() => {});
-    setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 1500);
+    if (created) copier.copy(created.url, "created");
   }
 
   if (created) {
+    const sm = created.summary;
+    const copied = copier.copiedKey === "created";
     return (
       <>
         <Nav back backHref="/payment-links" />
         <div className="screen pl-done">
           <div className="pl-done-head">
-            <div className="pl-done-title">Payment link created</div>
+            <div className="pl-done-title">{t("link.createdTitle")}</div>
             <div className="pl-done-url">
               <span>{created.url}</span>
               <button
                 type="button"
-                className={`pl-done-copy${linkCopied ? " copied" : ""}`}
+                className={`pl-done-copy${copied ? " copied" : ""}`}
                 onClick={copyLink}
-                aria-label="Copy payment link"
-                title={linkCopied ? "Copied" : "Copy link"}
+                aria-label={t("link.copyAria")}
+                title={copied ? t("ui.copied") : t("link.copyLink")}
               >
-                {linkCopied ? <Icon.Check width="14" height="14" /> : <Icon.Copy width="14" height="14" />}
+                {copied ? <Icon.Check width="14" height="14" /> : <Icon.Copy width="14" height="14" />}
               </button>
             </div>
+            {copier.failedKey === "created" && <p className="error" role="alert">{t("ui.copyFailed")}</p>}
           </div>
+
+          {/* What was created, in plain words. */}
+          {sm && (
+            <div className="pl-card pl-summary">
+              <div className="pl-sum-row"><span>{t("link.type")}</span><b>{sm.mode === "fixed" ? t("link.fixed") : t("link.counter")}</b></div>
+              <div className="pl-sum-row"><span>{t("link.amount")}</span><b>{sm.mode === "fixed" ? sm.amount : t("link.customerTypes")}</b></div>
+              <div className="pl-sum-row"><span>{t("link.currency")}</span><b>{sm.currency}</b></div>
+              <div className="pl-sum-row"><span>{t("link.uses")}</span><b>{sm.single ? t("link.single") : t("link.multi")}</b></div>
+              <div className="pl-sum-row"><span>{t("link.expires")}</span><b>{sm.expiresDays ? fmtLockWindow(Number(sm.expiresDays) * 86400, lang) : t("link.never")}</b></div>
+            </div>
+          )}
 
           <PaymentLinkPoster
             url={created.url}
             fileName={`payqr-${created.linkId}.png`}
-            downloadLabel="Download Counter QR"
+            downloadLabel={t(sm?.mode === "variable" ? "link.downloadCounter" : "link.downloadQr")}
             onPosterReady={setPosterDataUrl}
           />
 
+          {/* What happens next — the merchant's side of the payment. */}
+          <div className="pl-card">
+            <div className="pl-section-label">{t("link.nextTitle")}</div>
+            <ul className="pl-next">
+              <li>{fill(t("link.next1"), { method: country.fiat })}</li>
+              <li>{t("link.next2")}</li>
+              <li><SettlementNote currency={registeredCurrency} /></li>
+              <li>{t("link.next3")}</li>
+            </ul>
+          </div>
+
           <div className="pl-done-actions">
             <button className="btn" onClick={handleShare} disabled={sharing}>
-              {sharing ? "Sharing…" : "Share"}
+              {sharing ? t("link.sharing") : t("link.share")}
             </button>
             <button className="btn secondary" onClick={() => router.push("/payment-links")}>
-              Done
+              {t("ui.done")}
             </button>
           </div>
+          <button className="linklike" style={{ margin: "10px auto 0", display: "block" }}
+            onClick={() => { setCreated(null); setAmountFiat(""); setDescription(""); setPosterDataUrl(null); }}>
+            {t("link.another")}
+          </button>
         </div>
       </>
     );
@@ -489,9 +597,8 @@ ${created.url}`;
     <>
       <Nav back backHref="/payment-links" />
       <div className="screen pl-create">
-        <div className="pl-head">
-          <div className="pl-title">New payment link</div>
-          <div className="pl-subtitle">Set an amount, share the link or QR, get paid.</div>
+        <div className="pl-head" style={{ textAlign: "center" }}>
+          <div className="pl-title">{t("link.title")}</div>
         </div>
 
         {/* CURRENCY. Applies to BOTH link types: a fixed link is priced in it,
@@ -501,7 +608,7 @@ ${created.url}`;
             when there is only one choice, so the common case stays one tap. */}
         {supported.length > 1 && (
           <div className="pl-card">
-            <div className="pl-section-label">Currency</div>
+            <div className="pl-section-label">{t("link.currency")}</div>
             <div className="chip-row">
               {supported.map((code) => (
                 <button
@@ -516,16 +623,15 @@ ${created.url}`;
             </div>
             {linkCurrency !== registeredCurrency && (
               <div className="pl-hint">
-                Charged in {linkCurrency}; you are still paid in USDC at the protocol&apos;s
-                live rate. Your {registeredCurrency} per-payment limit still applies.
+                {fill(t("link.chargedIn"), { cur: linkCurrency, reg: registeredCurrency })}
               </div>
             )}
           </div>
         )}
 
         <div className="pl-card">
-          <div className="pl-section-label">Amount</div>
-          <div className="seg">
+          <div className="pl-section-label">{t("link.amount")}</div>
+          <div className="seg" role="group" aria-label={t("link.type")}>
             <button
               type="button"
               className={`seg-opt ${amountMode === "fixed" ? "on" : ""}`}
@@ -535,7 +641,7 @@ ${created.url}`;
                 setExpiresInDays("7");
               }}
             >
-              Fixed amount
+              {t("link.fixed")}
             </button>
             <button
               type="button"
@@ -549,8 +655,12 @@ ${created.url}`;
                 setExpiresInDays("");
               }}
             >
-              Counter QR
+              {t("link.counter")}
             </button>
+          </div>
+          {/* Say what each one IS, so the merchant picks on purpose. */}
+          <div className="pl-hint" style={{ marginBottom: 8 }}>
+            {amountMode === "fixed" ? t("link.fixedDesc") : t("link.counterDesc")}
           </div>
 
           {amountMode === "fixed" ? (
@@ -563,7 +673,10 @@ ${created.url}`;
                   className="pl-amount-input"
                   type="number"
                   inputMode="decimal"
+                  min="0"
+                  step="0.01"
                   placeholder="0.00"
+                  aria-label={t("link.amount")}
                   value={amountFiat}
                   onChange={(e) => setAmountFiat(e.target.value)}
                 />
@@ -595,47 +708,37 @@ ${created.url}`;
               {equivalentHint && <div className="pl-hint">{equivalentHint}</div>}
             </>
           ) : (
-            <div className="pl-hint">Customer types in the amount to pay at checkout — handy as a counter QR for walk-in sales.</div>
+            <div className="pl-hint">{t("link.variableHint")}</div>
           )}
-        </div>
-
-        <div className="pl-card">
-          <div className="pl-section-label">Description</div>
-          <input
-            className="input"
-            type="text"
-            maxLength={200}
-            placeholder="e.g. Order #482 (optional)"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-          />
-          <div className="pl-hint">Encrypted before it's stored — only you can read it.</div>
         </div>
 
         <div className="pl-card">
           <div className="pl-row-split">
             <div className="pl-field-half">
-              <div className="pl-section-label">Uses</div>
+              <div className="pl-section-label">{t("link.uses")}</div>
               <div className="seg">
                 <button
                   type="button"
                   className={`seg-opt ${singleUse ? "on" : ""}`}
                   onClick={() => setSingleUse(true)}
                 >
-                  Single use
+                  {t("link.single")}
                 </button>
                 <button
                   type="button"
                   className={`seg-opt ${!singleUse ? "on" : ""}`}
                   onClick={() => setSingleUse(false)}
                 >
-                  Multi-use
+                  {t("link.multi")}
                 </button>
               </div>
+              {amountMode === "variable" && singleUse && (
+                <div className="pl-hint" style={{ color: "var(--warn)" }}>{t("link.counterSingleWarn")}</div>
+              )}
             </div>
           </div>
 
-          <div className="pl-section-label" style={{ marginTop: 18 }}>Expires</div>
+          <div className="pl-section-label" style={{ marginTop: 18 }}>{t("link.expires")}</div>
           <div className="chip-row">
             {(["1", "7", "30", ""] as const).map((d) => (
               <button
@@ -644,17 +747,47 @@ ${created.url}`;
                 className={`chip ${expiresInDays === d ? "on" : ""}`}
                 onClick={() => setExpiresInDays(d)}
               >
-                {d === "" ? "Never" : `${d} days`}
+                {d === "" ? t("link.never") : fmtLockWindow(Number(d) * 86400, lang)}
               </button>
             ))}
           </div>
         </div>
 
-        {error && <div className="error" style={{ marginTop: 4 }}>{error}</div>}
+        {/* STILL CONFIRMING: the creation tx was submitted but its outcome is
+            unknown. The form below is locked so a timeout can never produce a
+            duplicate link; the page keeps checking for the exact link id. */}
+        {pendingLink && (
+          <div className="ui-err ui-err-warn" role="status">
+            <div className="ui-err-msg"><b>{t("link.confirmingTitle")}</b></div>
+            <div className="ui-err-msg" style={{ marginTop: 4 }}>{t("err.uncertainLink")}</div>
+            {checkMsg && <div className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>{checkMsg}</div>}
+            <div className="ui-err-actions">
+              <button className="btn small" onClick={() => checkPendingLink(false)}>{t("link.checkNow")}</button>
+              <button className="btn small ghost" onClick={() => setStartOverOpen(true)}>{t("link.startOver")}</button>
+            </div>
+          </div>
+        )}
+        {!pendingLink && <ErrorPanel error={error} />}
+        {!pendingLink && checkMsg && <p className="error" role="alert">{checkMsg}</p>}
 
-        <button className="btn pl-submit" disabled={busy} onClick={handleCreate}>
-          {busy ? "Creating…" : "Create payment link"}
+        {/* Before creating: what happens to the money. */}
+        <div className="pl-card"><SettlementNote currency={registeredCurrency} /></div>
+
+        <button className="btn pl-submit" disabled={busy || creator.busy || !!pendingLink} onClick={handleCreate}>
+          {busy || creator.busy ? t("link.creating") : t("link.create")}
         </button>
+        {(busy || creator.busy) && <p className="muted" style={{ textAlign: "center", fontSize: 12.5 }}>{t("ui.stillWorking")}</p>}
+
+        <ConfirmDialog
+          open={startOverOpen}
+          tone="danger"
+          title={t("link.startOverTitle")}
+          confirmLabel={t("link.startOver")}
+          onCancel={() => setStartOverOpen(false)}
+          onConfirm={() => { clearPendingLink(address); setPendingLink(null); setError(""); setCheckMsg(""); setStartOverOpen(false); }}
+        >
+          <p>{t("link.startOverBody")}</p>
+        </ConfirmDialog>
       </div>
     </>
   );

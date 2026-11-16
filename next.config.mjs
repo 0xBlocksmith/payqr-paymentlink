@@ -1,6 +1,22 @@
 import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants.js";
 
 /**
+ * An id for THIS build. Baked into the bundle (NEXT_PUBLIC_BUILD_ID), served at
+ * /build.json and written into the service worker (app/sw.js/route.ts), so the
+ * app can tell a newer deploy exists. CI supplies the commit; a local build gets
+ * a timestamp. Stored back on process.env so every Next worker process in this
+ * build sees the SAME value (a per-process timestamp would not match).
+ */
+function buildId() {
+  if (process.env.PAYQR_BUILD_ID) return process.env.PAYQR_BUILD_ID;
+  const ci = process.env.COMMIT_REF || process.env.GITHUB_SHA || process.env.VERCEL_GIT_COMMIT_SHA || "";
+  const id = ci ? ci.slice(0, 12) : `local-${Date.now()}`;
+  process.env.PAYQR_BUILD_ID = id;
+  return id;
+}
+const BUILD_ID = buildId();
+
+/**
  * Refuse to BUILD (or run dev) with settings that would silently run the app
  * against the wrong chain or the testnet. NEXT_PUBLIC_* values are baked into
  * the bundle at build time, so this is the one moment they can be checked
@@ -139,6 +155,7 @@ function reportOnlyCsp() {
 
 const nextConfig = {
   reactStrictMode: true,
+  env: { NEXT_PUBLIC_BUILD_ID: BUILD_ID },
   // The app now typechecks clean (npm run typecheck passes), so let the build
   // ENFORCE types — a future bad thirdweb/viem API call fails the build instead
   // of silently shipping. ESLint is still skipped (no lint config wired up).
@@ -193,6 +210,14 @@ const nextConfig = {
           { key: "X-Frame-Options", value: "DENY" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // Always HTTPS, for two years, subdomains included. Stops a downgrade /
+          // SSL-strip on a hostile network (cafe Wi-Fi) from ever seeing a session.
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
+          // Keeps other sites' windows from holding a handle on this one, while
+          // still letting the Google / wallet sign-in popups talk back to it.
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
+          { key: "X-Permitted-Cross-Domain-Policies", value: "none" },
+          { key: "X-DNS-Prefetch-Control", value: "off" },
           {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=(), payment=()",

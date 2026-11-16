@@ -45,6 +45,10 @@ function summarize(report: Record<string, unknown>) {
 }
 
 export async function POST(req: Request): Promise<Response> {
+  // Refuse an oversized body BEFORE reading it: anyone can POST here, and
+  // buffering a huge one first would let a single request eat the function's memory.
+  const declared = Number(req.headers.get("content-length") || 0);
+  if (declared > MAX_BODY_BYTES) return new NextResponse(null, { status: 204 });
   const text = await req.text().catch(() => "");
   if (!text || text.length > MAX_BODY_BYTES) return new NextResponse(null, { status: 204 });
 

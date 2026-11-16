@@ -11,10 +11,15 @@ import { useMerchant } from "../../components/useMerchant";
 import { Splash } from "../../components/Splash";
 import { useSmartAccount } from "../../components/useSmartAccount";
 import { APP_VERSION } from "../../lib/version";
-import { useRelayIdentity } from "../../components/useRelayIdentity";
 import { Icon } from "../../components/Icons";
-import { CONTRACT_ADDRESS, INTEGRATOR_ABI, friendlyError, currencyFromBytes32 } from "../../lib/contract";
-import { encryptPayout, decryptPayout, PAYOUT_PLACEHOLDER } from "../../lib/payoutCrypto";
+import { CONTRACT_ADDRESS, INTEGRATOR_ABI, currencyFromBytes32 } from "../../lib/contract";
+import { toUserError, type UserError } from "../../lib/errors";
+import { useGuardedSend } from "../../components/useGuardedSend";
+import { useCopy } from "../../components/useCopy";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
+import { ErrorPanel } from "../../components/ui/ErrorPanel";
+import { LoadingState } from "../../components/ui/LoadingState";
+import { SettlementNote } from "../../components/ui/SettlementNote";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import {
   COUNTRIES, LANGUAGES, VE_BANKS, loadCountry, clearLocalUserData, fmtSymbolCode,
@@ -22,6 +27,7 @@ import {
 import { useTheme } from "../../components/theme";
 import { useAppUpdate } from "../../components/AppUpdate";
 import { useT } from "../../lib/i18n";
+import { fill } from "../../lib/format";
 import { EXPLORER_URL } from "../../lib/chain";
 
 const THEMES = [
@@ -54,11 +60,13 @@ export default function Settings() {
     wasChecking.current = checking;
   }, [checking, updateReady]);
   const [country, setCountry] = useState(null);
-  const [copied, setCopied] = useState(false);
+  const copier = useCopy();
+  const saver = useGuardedSend();
+  const [logoutOpen, setLogoutOpen] = useState(false);
+  const [savedOk, setSavedOk] = useState(false);
 
   useEffect(() => { setCountry(loadCountry()); }, []);
 
-  const { getIdentity } = useRelayIdentity();
   const { data: info, refetch: refetchInfo } = useReadContract({
     address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "getMerchantInfo",
     args: [address], query: { enabled: !!address, staleTime: STATIC_STALE_MS },
@@ -76,44 +84,18 @@ export default function Settings() {
   const regCode = currencyFromBytes32(info?.[2] as string);
   const payCountry = COUNTRIES.find((c) => c.code === regCode) || country;
 
-  // Decrypt the payout handle client-side for display. null = can't decrypt on
-  // this device (different/absent relay key) — the UI then shows a neutral
-  // "•••• (saved)" instead of the raw ciphertext.
-  const [payoutId, setPayoutId] = useState<string | null>(null);
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!encPayout || encPayout === "0x") { if (alive) setPayoutId(null); return; }
-      try {
-        const id = await getIdentity();
-        const plain = await decryptPayout(encPayout, id);
-        // The onboarding sentinel round-trips like a real handle — treat it as
-        // "not set yet", never display it as the merchant's saved payout ID.
-        if (alive) setPayoutId(plain === PAYOUT_PLACEHOLDER ? null : plain);
-      } catch { if (alive) setPayoutId(null); }
-    })();
-    return () => { alive = false; };
-  }, [encPayout, getIdentity]);
 
-  // ── Edit profile (shop name + payout handle) via updateProfile ──
+  // ── Edit profile (shop name + sector) via updateProfile ──
   const [editing, setEditing] = useState(false);
   const [edShop, setEdShop] = useState("");
-  const [edPayout, setEdPayout] = useState("");
   const [edSector, setEdSector] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
-  const [profileMsg, setProfileMsg] = useState("");
+  const [profileMsg, setProfileMsg] = useState("");            // validation text (ours)
+  const [saveErr, setSaveErr] = useState<UserError | null>(null); // a failed/uncertain save
 
-  // Pago Móvil is three fields packed as "phone|Cédula/RIF|bank code".
-  const splitPm = (v: string) => [...v.split("|"), "", "", ""].slice(0, 3);
-  const pm = splitPm(editing ? edPayout : payoutId || "");
-  function setPm(i: number, v: string) {
-    const next = [...pm];
-    next[i] = v.replace(/\|/g, "").trim();
-    setEdPayout(next.join("|"));
-  }
   function startEdit() {
-    setEdShop(shopName); setEdPayout(payoutId || ""); setEdSector(businessSector);
-    setProfileMsg(""); setEditing(true);
+    setEdShop(shopName); setEdSector(businessSector);
+    setProfileMsg(""); setSaveErr(null); setSavedOk(false); setEditing(true);
   }
   async function saveProfile() {
     setProfileMsg("");
@@ -127,42 +109,42 @@ export default function Settings() {
     // non-Latin characters is longer than it looks.
     if (new TextEncoder().encode(edSector.trim()).length > 31)
       return setProfileMsg(t("set.errSectorLong"));
-    if (!edPayout.trim()) return setProfileMsg(t("set.errPayoutRequired").replace("{label}", payCountry.payoutLabel));
-    if (payCountry.validatePayout && !payCountry.validatePayout(edPayout.trim())) {
-      return setProfileMsg(t("set.errPayoutInvalid").replace("{label}", payCountry.payoutLabel).replace("{example}", payCountry.payoutPlaceholder));
-    }
     if (!sendTransaction) return setProfileMsg(t("set.walletConnecting"));
-    setSavingProfile(true);
-    try {
-      // Encrypt the new handle to the merchant's own relay key before it goes
-      // on-chain (contract stores opaque `bytes`, never plaintext).
-      const identity = await getIdentity();
-      const encNew = await encryptPayout(edPayout.trim(), identity);
+    setSaveErr(null);
+    // Guarded: a double tap can't send two updates. The receipt wait has a
+    // timeout and an unknown outcome is reported as such (never "failed", never
+    // an invitation to press Save again blindly).
+    const r = await saver.run(async () => {
+      // The payout handle is no longer collected. updateProfile still takes the
+      // field, so resend whatever is already stored (empty "0x" when none) — the
+      // same empty value registration pushes.
+      const encNew = (encPayout && encPayout !== "0x" ? encPayout : "0x") as `0x${string}`;
       const data = encodeFunctionData({
         abi: INTEGRATOR_ABI, functionName: "updateProfile",
         args: [encNew, edShop.trim(), stringToHex(edSector.trim(), { size: 32 })],
       });
       const hash = await sendTransaction({ to: CONTRACT_ADDRESS, data });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
-      if (receipt.status === "reverted") throw new Error(t("set.saveRevert"));
-      setProfileMsg(t("set.saved")); setEditing(false); refetchInfo();
-    } catch (err) {
-      // friendlyError → "Cancelled." on a wallet decline, a plain sentence on a
-      // revert — never a raw viem/SDK string.
-      setProfileMsg(friendlyError(err, t("set.saveFail")));
-    } finally { setSavingProfile(false); }
+      const receipt = await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
+      if (receipt.status === "reverted") throw new Error("updateProfile reverted");
+    }, { context: "update-profile", fallbackKey: "set.saveFail", uncertainKey: "err.uncertainProfile", skipStepUp: true });
+
+    if (r.reason === "ok") {
+      setEditing(false); setSavedOk(true); refetchInfo();
+      setTimeout(() => setSavedOk(false), 5000);
+    } else if (r.reason === "error") {
+      setSaveErr(r.error);
+      if (r.error.uncertain) refetchInfo();
+    }
   }
 
   function pickLang(code) { setLang(code); }
   function copyAddr() {
-    if (!address) return;
-    navigator.clipboard?.writeText(address);
-    setCopied(true); setTimeout(() => setCopied(false), 1400);
+    if (address) copier.copy(address, "addr");
   }
 
   // Auth gate: never flash the settings/profile shell for a logged-out deep-link.
   if (!ready || !authenticated) return <Splash />;
-  if (!country) return <><Nav back /><div className="screen"><p className="muted" style={{ textAlign: "center" }}>{t("common.loading")}</p></div></>;
+  if (!country) return <><Nav back /><div className="screen"><LoadingState label={t("common.loading")} /></div></>;
 
   return (
     <>
@@ -190,75 +172,32 @@ export default function Settings() {
 
           {editing ? (
             <>
-              <label className="set-k" style={{ display: "block", marginTop: 6 }}>{t("set.shopName")}</label>
-              <input className="input" value={edShop} onChange={(e) => setEdShop(e.target.value)}
+              <label htmlFor="set-shop" className="set-k" style={{ display: "block", marginTop: 6 }}>{t("set.shopName")}</label>
+              <input id="set-shop" className="input" value={edShop} autoComplete="organization" onChange={(e) => setEdShop(e.target.value)}
                 placeholder={t("set.shopNamePlaceholder")} />
-              <label className="set-k" style={{ display: "block", marginTop: 10 }}>{t("set.sector")}</label>
-              <input className="input" value={edSector} onChange={(e) => setEdSector(e.target.value)}
+              <label htmlFor="set-sector" className="set-k" style={{ display: "block", marginTop: 10 }}>{t("set.sector")}</label>
+              <input id="set-sector" className="input" value={edSector} onChange={(e) => setEdSector(e.target.value)}
                 placeholder={t("set.sectorPlaceholder")} maxLength={31} />
-              {payCountry.code === "VEN" ? (
-                <>
-                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>Pago Móvil</label>
-                  <label className="set-k" style={{ display: "block", marginTop: 6 }}>Teléfono</label>
-                  <input className="input" inputMode="tel" placeholder="04141234567"
-                    value={pm[0]} onChange={(e) => setPm(0, e.target.value)} />
-                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>Cédula o RIF</label>
-                  <input className="input" placeholder="V12345678"
-                    value={pm[1]} onChange={(e) => setPm(1, e.target.value)} />
-                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>Banco</label>
-                  <select className="input"
-                    value={VE_BANKS.some((b) => b.code === pm[2]) ? pm[2] : ""}
-                    onChange={(e) => setPm(2, e.target.value)}>
-                    <option value="">Selecciona tu banco</option>
-                    {VE_BANKS.map((b) => <option key={b.code} value={b.code}>{b.code} · {b.name}</option>)}
-                  </select>
-                </>
-              ) : (
-                <>
-                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>{payCountry.payoutLabel}</label>
-                  <input className="input" value={edPayout} onChange={(e) => setEdPayout(e.target.value)}
-                    placeholder={payCountry.payoutPlaceholder} />
-                </>
-              )}
               <p className="tiny" style={{ color: "var(--muted)", margin: "8px 0 0" }}>
                 {t("set.currencyLocked").replace("{currency}", payCountry.code)}
               </p>
-              {profileMsg && <p className={profileMsg.includes("✓") ? "success" : "error"} style={{ marginTop: 6 }}>{profileMsg}</p>}
+              {profileMsg && <p className="error" role="alert" style={{ marginTop: 6 }}>{profileMsg}</p>}
+              <ErrorPanel error={saveErr} />
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-                <button className="btn" style={{ flex: 1 }} disabled={savingProfile} onClick={saveProfile}>
-                  {savingProfile ? t("set.saving") : t("set.save")}
+                <button className="btn" style={{ flex: 1 }} disabled={saver.busy || (saveErr?.uncertain ?? false)} onClick={saveProfile}>
+                  {saver.busy ? t("set.saving") : t("set.save")}
                 </button>
-                <button className="btn ghost" style={{ flex: 1 }} disabled={savingProfile}
-                  onClick={() => { setEditing(false); setProfileMsg(""); }}>{t("set.cancel")}</button>
+                <button className="btn ghost" style={{ flex: 1 }} disabled={saver.busy}
+                  onClick={() => { setEditing(false); setProfileMsg(""); setSaveErr(null); }}>{t("set.cancel")}</button>
               </div>
+              {saver.busy && <p className="muted" style={{ textAlign: "center", fontSize: 12.5 }}>{t("ui.stillWorking")}</p>}
             </>
           ) : (
             <>
-              <div className="set-item">
-                <span className="set-k">{t("set.shopName")}</span>
-                <span className="set-v">{shopName || "—"}</span>
-              </div>
-              {payCountry.code === "VEN" && payoutId ? (
-                <>
-                  {[["Teléfono", pm[0]], ["Cédula o RIF", pm[1]],
-                    ["Banco", VE_BANKS.find((b) => b.code === pm[2]) ? `${pm[2]} · ${VE_BANKS.find((b) => b.code === pm[2]).name}` : pm[2]],
-                  ].map(([k, v]) => (
-                    <div className="set-item" key={k}>
-                      <span className="set-k">{k}</span>
-                      <span className="set-v">{v || "—"}</span>
-                    </div>
-                  ))}
-                </>
-              ) : (
-              <div className="set-item">
-                <span className="set-k">{payCountry.code === "VEN" ? "Pago Móvil" : payCountry.payoutLabel}</span>
-                {/* payoutId is decrypted client-side. A saved blob we can't decrypt
-                    on this device shows a neutral "saved" marker, never ciphertext. */}
-                <span className="set-v">
-                  {payoutId || (encPayout && encPayout !== "0x" ? t("set.payoutSaved") : "—")}
-                </span>
-              </div>
-              )}
+              {/* Shown in the READ view — where the merchant actually lands after a
+                  successful save (it used to be set inside the edit form, which
+                  closed in the same moment, so "Saved" was never seen). */}
+              {savedOk && <div className="ui-ok" role="status">{t("set.saved")}</div>}
             </>
           )}
 
@@ -267,26 +206,11 @@ export default function Settings() {
             {address ? (
               <button className="set-addr" onClick={copyAddr}>
                 {`${address.slice(0, 6)}…${address.slice(-4)}`}
-                <span className="set-copy">{copied ? "copied ✓" : "⧉"}</span>
+                <span className="set-copy">{copier.copiedKey === "addr" ? `${t("ui.copied")} ✓` : copier.failedKey === "addr" ? t("ui.copyFailed") : "⧉"}</span>
               </button>
             ) : (
               <span className="set-v" style={{ color: "var(--muted)" }}>{t("set.connecting")}</span>
             )}
-          </div>
-          {address && (
-            <a className="set-link" href={`${SCAN}/address/${address}`} target="_blank" rel="noopener noreferrer">
-              {t("set.viewOnScan")}
-            </a>
-          )}
-        </div>
-
-        {/* country — the merchant's registered country only. It is locked on-chain
-            at registration, so there is nothing to pick. */}
-        <div className="set-group">
-          <div className="set-glabel">{t("set.country")}</div>
-          <div className="set-row sel" style={{ cursor: "default" }}>
-            <span className="set-flag">{payCountry.flag}</span>
-            <span className="set-rt">{payCountry.name}<small>{payCountry.fiat} · {fmtSymbolCode(payCountry)}</small></span>
           </div>
         </div>
 
@@ -320,8 +244,7 @@ export default function Settings() {
 
         {/* App / OTA updates */}
         <div className="set-group">
-          <div className="set-glabel">{t("set.app")}</div>
-          {updateReady ? (
+                    {updateReady ? (
             <button className="set-update-row ready" onClick={applyUpdate}>
               <span className="set-ico"><Icon.Repeat width="18" height="18" /></span>
               <span className="set-update-txt">{t("ota.updateReady")}</span>
@@ -338,27 +261,23 @@ export default function Settings() {
           )}
         </div>
 
-        <button
-          className="btn ghost set-logout"
-          onClick={() => {
+        <button className="btn ghost set-logout" onClick={() => setLogoutOpen(true)}>
+          {t("set.logout")}
+        </button>
+        <ConfirmDialog
+          open={logoutOpen}
+          title={t("set.logoutTitle")}
+          confirmLabel={t("set.logout")}
+          onCancel={() => setLogoutOpen(false)}
+          onConfirm={() => {
             // Wipe per-merchant local state BEFORE leaving so nothing leaks to the
             // next account on a shared device (relay key, pending sale, prefs).
             clearLocalUserData();
             logout().finally(() => router.replace("/login"));
           }}
         >
-          {t("set.logout")}
-        </button>
-        <p className="tiny" style={{ textAlign: "center", color: "var(--muted)", margin: "12px 0 0" }}>
-          PayQR {APP_VERSION} · Gas-free · Settles in USDC
-        </p>
-      </div>
-
-      {/* <Link>, not <a href> — a raw anchor full-reloads the PWA on every tap. */}
-      <div className="bottombar">
-        <Link className="btn" href="/dashboard" style={{ flex: 1, textAlign: "center", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-          <Icon.Plus /> {t("common.back")}
-        </Link>
+          <p>{t("set.logoutBody")}</p>
+        </ConfirmDialog>
       </div>
     </>
   );

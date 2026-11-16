@@ -27,10 +27,14 @@ export const metadata = {
 };
 
 export const viewport = {
-  themeColor: "#ffffff",
+  // No static themeColor: Next re-writes that meta on every navigation, which
+  // reset the status bar to white in dark mode. components/theme.tsx owns it.
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
+  // Pinch-zoom stays ON (WCAG 1.4.4). The old maximumScale:1 blocked zoom for
+  // low-vision users; the iOS "zoom on focus" it was guarding against is handled
+  // instead by 16px inputs on touch devices (see globals.css).
+  maximumScale: 5,
 };
 
 export default function RootLayout({ children }) {

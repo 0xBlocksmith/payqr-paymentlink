@@ -9,6 +9,15 @@ import { useT } from "../lib/i18n";
 // in an embedded iframe so they never leave PayQR (with an escape hatch to open
 // it in a real tab).
 const ECOSYSTEM_URL = process.env.NEXT_PUBLIC_ECOSYSTEM_URL || "https://p2p.store";
+// allow-scripts + allow-same-origin together let a framed page remove its own
+// sandbox IF it shares our origin. It is a different site today; this makes sure
+// a misconfigured same-origin URL can never grant that.
+const SANDBOX = (() => {
+  const base = "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox";
+  try {
+    return new URL(ECOSYSTEM_URL).origin === (typeof window !== "undefined" ? window.location.origin : "") ? base : `${base} allow-same-origin`;
+  } catch { return base; }
+})();
 
 /** Full-height bottom sheet that embeds the P2P app store in an iframe. */
 function EcosystemSheet({ onClose }: { onClose: () => void }) {
@@ -45,7 +54,7 @@ function EcosystemSheet({ onClose }: { onClose: () => void }) {
             onLoad={() => setLoaded(true)}
             className="eco-frame"
             allow="clipboard-read; clipboard-write"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox"
+            sandbox={SANDBOX}
             referrerPolicy="strict-origin-when-cross-origin"
           />
         </div>

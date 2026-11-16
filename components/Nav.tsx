@@ -1,56 +1,57 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AccountMenu } from "./AccountMenu";
-import { ThemeButton } from "./ThemeButton";
-import { InstallButton } from "./InstallButton";
-import { DisputeButton } from "./DisputeButton";
-import { SideMenu } from "./SideMenu";
+import { Icon } from "./Icons";
 import { EcosystemButton } from "./EcosystemPanel";
-import { Icon, Logo } from "./Icons";
+import { usePillVisible } from "./FloatingNav";
+import { useT } from "../lib/i18n";
+import { LOGO_LIGHT, LOGO_DARK } from "../lib/logoData";
 
-export function Nav({ action = null, back = false, backHref = "/dashboard", menu = true }) {
+/**
+ * No header bar. Only the dashboard (`home`) shows a top row: the PayQR logo on
+ * the left (light / dark artwork swapped by theme), the P2P mark + Explore
+ * button on the right. Every other page has no logo at all; sub-flows keep a
+ * small floating back control. (`menu` / `action` are accepted for call-site
+ * compatibility and ignored.)
+ */
+export function Nav({ back = false, backHref = "/dashboard", home = false, onWallet }: { back?: boolean; backHref?: string; home?: boolean; onWallet?: () => void; menu?: boolean; action?: unknown }) {
   const router = useRouter();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const { t } = useT();
+  const pill = usePillVisible();
+  const showBack = back && !pill;
+  if (!home && !showBack) return null;
   return (
-    <nav className="nav">
-      {back ? (
+    <header className="nav-lite">
+      {showBack && (
         <button
-          className="nav-back"
-          aria-label="Back"
-          // replace, not push: "back" should unwind, not grow the history stack
-          // (dashboard → qr → back(push dashboard) → hardware-back landed on qr
-          // again, stacking dashboard/qr/dashboard/… forever).
+          className="nav-back nav-back-float"
+          aria-label={t("nav.back")}
+          // replace, not push: "back" should unwind, not grow the history stack.
           onClick={() => (backHref ? router.replace(backHref) : router.back())}
         >
           <Icon.Back />
         </button>
-      ) : menu ? (
-        <button className="nav-back" aria-label="Menu" onClick={() => setMenuOpen(true)}>
-          <Icon.Menu />
-        </button>
-      ) : null}
-      <Link href="/dashboard" className="brand" aria-label="PayQR">
-        <Logo size={24} className="brand-mark" />
-      </Link>
-      {/* `action` (the "How it works" pill) rides in the RIGHT cluster, not a
-          separately-centered absolute box: pinned to the viewport's 50% it kept
-          its own position while the icon cluster grew from the right, so at some
-          widths the pill and the ecosystem button ended up flush against each
-          other with no gap. In-flow it sits next to the store icon and inherits
-          the cluster's gap at every width. (Was `center` — renamed, since it no
-          longer centers anything.) */}
-      <div className="nav-right">
-        {action}
-        <EcosystemButton />
-        <InstallButton />
-        <DisputeButton />
-        <ThemeButton />
-        <AccountMenu />
-      </div>
-      <SideMenu open={menuOpen} onClose={() => setMenuOpen(false)} />
-    </nav>
+      )}
+      {home && (
+        <>
+          <Link href="/dashboard" className="brand nav-logo" aria-label="PayQR">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="logo-light" src={LOGO_LIGHT.src} width={LOGO_LIGHT.width * 30 / LOGO_LIGHT.height} height={30} alt="PayQR" decoding="sync" />
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="logo-dark" src={LOGO_DARK.src} width={LOGO_DARK.width * 30 / LOGO_DARK.height} height={30} alt="PayQR" decoding="sync" />
+          </Link>
+          <div className="nav-right">
+            <EcosystemButton />
+            {onWallet && (
+              <button type="button" className="eco-btn" onClick={onWallet}
+                aria-label={t("nav.wallet")} title={t("nav.wallet")}>
+                <Icon.Wallet width="20" height="20" />
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </header>
   );
 }

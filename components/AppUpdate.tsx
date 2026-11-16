@@ -38,8 +38,28 @@ const Ctx = createContext<UpdateCtx>({
 // stay open all day; 30 min keeps them current without hammering the network.
 const POLL_MS = 30 * 60 * 1000;
 
+// The id of the build THIS page is running (baked in at build time) …
+const RUNNING_BUILD = process.env.NEXT_PUBLIC_BUILD_ID || "dev";
+
+/** … versus the id of the build the server is serving right now. A difference
+ *  means a newer release exists — independent of the service worker, which can
+ *  lag or be unavailable (private mode, blocked), so "Check for updates" never
+ *  reports "up to date" while a new version is live. */
+export async function serverHasNewBuild(): Promise<boolean> {
+  try {
+    const res = await fetch(`/build.json?t=${Date.now()}`, { cache: "no-store" });
+    if (!res.ok) return false;
+    const { id } = (await res.json()) as { id?: string };
+    return !!id && id !== "dev" && id !== RUNNING_BUILD;
+  } catch {
+    return false; // offline: not "up to date", just unknown — don't claim an update
+  }
+}
+
 export function AppUpdateProvider({ children }: { children: React.ReactNode }) {
-  const [updateReady, setUpdateReady] = useState(false);
+  const [swWaiting, setSwWaiting] = useState(false);
+  const [newBuild, setNewBuild] = useState(false);
+  const updateReady = swWaiting || newBuild;
   const [checking, setChecking] = useState(false);
   const regRef = useRef<ServiceWorkerRegistration | null>(null);
   // Guards the one-time reload after the new worker takes control, so we never
@@ -51,7 +71,7 @@ export function AppUpdateProvider({ children }: { children: React.ReactNode }) {
   // on the very first install there's a waiting worker but no old version to
   // replace, so prompting "update available" then would be wrong.
   const noteWaiting = useCallback((reg: ServiceWorkerRegistration) => {
-    if (reg.waiting && navigator.serviceWorker.controller) setUpdateReady(true);
+    if (reg.waiting && navigator.serviceWorker.controller) setSwWaiting(true);
   }, []);
 
   useEffect(() => {
@@ -93,41 +113,56 @@ export function AppUpdateProvider({ children }: { children: React.ReactNode }) {
     else window.addEventListener("load", register, { once: true });
 
     // Periodic + on-focus update checks.
-    const poll = setInterval(() => { regRef.current?.update().catch(() => {}); }, POLL_MS);
-    const onVisible = () => {
-      if (document.visibilityState === "visible") regRef.current?.update().catch(() => {});
+    const recheck = () => {
+      regRef.current?.update().catch(() => {});
+      serverHasNewBuild().then((n) => { if (n) setNewBuild(true); });
     };
+    const poll = setInterval(recheck, POLL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") recheck();
+    };
+    // Also look once shortly after load, so a stale tab opened from a cached
+    // shell notices the release without waiting for the first interval.
+    const first = setTimeout(recheck, 4000);
     document.addEventListener("visibilitychange", onVisible);
 
     return () => {
       cancelled = true;
       clearInterval(poll);
+      clearTimeout(first);
       document.removeEventListener("visibilitychange", onVisible);
       navigator.serviceWorker.removeEventListener("controllerchange", onControllerChange);
     };
   }, [noteWaiting]);
 
-  // Manual "check for updates": ask the browser to re-fetch the SW. If a new
-  // one is found it flows through updatefound → statechange → updateReady.
+  // Manual "check for updates": ask the browser to re-fetch the service worker
+  // AND compare the server's build id with the one running. Either finding a
+  // newer release surfaces the update prompt.
   const checkNow = useCallback(() => {
     const reg = regRef.current;
-    if (!reg) return;
     setChecking(true);
-    reg.update()
-      .then(() => noteWaiting(reg))
-      .catch(() => {})
+    Promise.allSettled([
+      reg ? reg.update() : Promise.resolve(),
+      serverHasNewBuild().then((n) => { if (n) setNewBuild(true); }),
+    ])
+      .then(() => { if (reg) noteWaiting(reg); })
       .finally(() => setChecking(false));
   }, [noteWaiting]);
 
-  // Apply: tell the waiting worker to activate; controllerchange then reloads.
-  // Fallback: if there's no waiting worker (edge case), just reload.
+  // Apply. With a waiting worker: activate it and let controllerchange reload.
+  // Otherwise (a newer build is live but its worker hasn't finished installing,
+  // or workers are unavailable): drop this app's caches and reload from the
+  // network — navigations are network-first, so that lands on the new build.
   const applyUpdate = useCallback(() => {
     const reg = regRef.current;
     if (reg?.waiting) {
       reg.waiting.postMessage({ type: "SKIP_WAITING" });
-    } else {
-      window.location.reload();
+      return;
     }
+    const reload = () => window.location.reload();
+    if ("caches" in window) {
+      caches.keys().then((ks) => Promise.all(ks.map((k) => caches.delete(k)))).catch(() => {}).finally(reload);
+    } else reload();
   }, []);
 
   return (

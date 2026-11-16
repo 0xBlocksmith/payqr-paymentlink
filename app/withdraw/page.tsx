@@ -1,7 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { SlideToConfirm } from "../../components/ui/SlideToConfirm";
 import dynamic from "next/dynamic";
+import { useRouter } from "next/navigation";
+import { EXPLORER_URL } from "../../lib/chain";
+import { fill } from "../../lib/format";
 import { encodeFunctionData } from "viem";
 import { useReadContract, usePublicClient } from "wagmi";
 import { Nav } from "../../components/Nav";
@@ -55,7 +59,10 @@ export default function Withdraw() {
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const router = useRouter();
   const [done, setDone] = useState("");
+  // The screen shown right after the slide: processing -> success / failed.
+  const [result, setResult] = useState<null | { status: "processing" | "success" | "error"; amount: number; dest: string; tx?: string; msg?: string }>(null);
   const [wdCode, setWdCode] = useState("");          // the currency to withdraw IN
   const [otherOpts, setOtherOpts] = useState([]);    // all countries (+ live flag)
   const [otherOpen, setOtherOpen] = useState(false);
@@ -70,7 +77,7 @@ export default function Withdraw() {
   // USDC-withdraw multi-step flow: null (form) → "address" (review destination)
   //   → "confirm" (final dialog) → success (`done` set). The amount to send is
   // captured when entering the flow so it can't shift underneath the merchant.
-  const [usdcStep, setUsdcStep] = useState<null | "address" | "confirm">(null);
+  const [usdcStep, setUsdcStep] = useState<null | "address" | "confirm" | "result">(null);
   const [usdcSend, setUsdcSend] = useState<{ raw: bigint; usdc: number }>({ raw: 0n, usdc: 0 });
   // USDC destination: "self" = keep in the merchant's own connected wallet (the
   // contract pays out to msg.sender directly); "external" = forward to a pasted
@@ -386,6 +393,14 @@ export default function Withdraw() {
   async function confirmUsdcWithdraw() {
     setError("");
     setBusy("usdc");
+    const destLabel = usdcDest === "external" && extAddrValid
+      ? `${extAddrTrim.slice(0, 8)}…${extAddrTrim.slice(-6)}`
+      : (address ? `${t("tx.toYourWallet")} (${address.slice(0, 6)}…${address.slice(-4)})` : t("tx.toYourWallet"));
+    const amountNow = usdcSend.usdc;
+    // Open the status page the moment the slide completes — not after the chain.
+    setUsdcStep("result");
+    setResult({ status: "processing", amount: amountNow, dest: destLabel });
+    let finalHash: string | undefined;
     try {
       // For an EXTERNAL send, snapshot the wallet's USDC balance BEFORE the
       // withdraw so step 2 forwards exactly what step 1 actually deposited — not
@@ -411,6 +426,7 @@ export default function Withdraw() {
       const hash = await sendTransaction({ to: CONTRACT_ADDRESS, data });
       const receipt = await publicClient.waitForTransactionReceipt({ hash });
       if (receipt.status === "reverted") throw new Error("Withdrawal failed on-chain.");
+      finalHash = hash;
 
       if (usdcDest === "external" && extAddrValid) {
         // Measure what actually landed and forward only that (capped at the
@@ -430,6 +446,7 @@ export default function Withdraw() {
         const xfer = buildUsdcTransfer({ to: extAddrTrim as `0x${string}`, amountRaw: fwd });
         const xh = await sendTransaction({ to: xfer.to, data: xfer.data });
         const xrc = await publicClient.waitForTransactionReceipt({ hash: xh });
+        finalHash = xh;
         if (xrc.status === "reverted") {
           // The funds are safe in the merchant's own wallet — only the forward
           // failed. Tell them plainly so they know the money isn't lost.
@@ -437,21 +454,12 @@ export default function Withdraw() {
             "Your USDC was withdrawn to your wallet, but forwarding it to the address failed. The funds are safe in your wallet — you can send them again from there."
           );
         }
-        setUsdcStep(null);
-        setDone(
-          `${usdcSend.usdc.toFixed(2)} USDC sent to ${extAddrTrim.slice(0, 8)}…${extAddrTrim.slice(-6)}.`
-        );
-      } else {
-        setUsdcStep(null);
-        setDone(
-          `${usdcSend.usdc.toFixed(2)} USDC sent to your wallet ${address ? `(${address.slice(0,6)}…${address.slice(-4)})` : ""}. If you don't see it, add the USDC token to your wallet.`
-        );
       }
+      setResult({ status: "success", amount: amountNow, dest: destLabel, tx: finalHash });
       setAmount(""); setExtAddr(""); setUsdcDest("self"); refetch();
     } catch (err) {
       console.error(err);
-      setUsdcStep(null);
-      setError(friendlyError(err, "Withdrawal failed. Please try again."));
+      setResult({ status: "error", amount: amountNow, dest: destLabel, tx: finalHash, msg: friendlyError(err, "Withdrawal failed. Please try again.") });
     } finally {
       setBusy("");
     }
@@ -477,16 +485,22 @@ export default function Withdraw() {
           onError={(m) => setError(m)}
         />
       )}
-      <div className="screen">
+      <div className="screen" hidden={usdcStep === "confirm" || usdcStep === "result"}>
+        <div className="wd-head">
+          {usdcStep === "address" && (
+            <button type="button" className="wd-back-big" aria-label={t("common.back")} disabled={!!busy}
+              onClick={() => { setUsdcStep(null); setError(""); }}>
+              <Icon.Back width="22" height="22" />
+            </button>
+          )}
+          <h1>{t("nav.withdraw")}</h1>
+        </div>
         {/* USDC WITHDRAW — STEP 2: choose WHERE the USDC goes. Either keep it in
             the merchant's OWN connected wallet (the contract pays out to
             msg.sender), or forward it to a pasted external address (two sponsored
             steps: withdrawUSDC into the wallet, then an ERC-20 transfer on to it). */}
         {usdcStep === "address" && (
           <div className="wd-usdc-step">
-            <button className="wallet-back" onClick={() => { setUsdcStep(null); setError(""); }}>
-              <Icon.Back width="16" height="16" /> {t("wd.usdcTitle")}
-            </button>
             <div className="wd-usdc-amt">
               <span className="wd-usdc-amt-val">{usdcSend.usdc.toFixed(2)} USDC</span>
               <span className="wd-usdc-amt-sub">{t("wd.usdcChooseDest")}</span>
@@ -535,11 +549,13 @@ export default function Withdraw() {
             )}
 
             {error && <p className="error" style={{ textAlign: "center", marginTop: 10 }}>{error}</p>}
+            <div className="wd-slide">
             <button className="btn" style={{ width: "100%", marginTop: 16 }}
               disabled={!address || !!busy || (usdcDest === "external" && !extAddrValid)}
               onClick={() => setUsdcStep("confirm")}>
               {t("common.continue")}
             </button>
+            </div>
           </div>
         )}
 
@@ -654,40 +670,25 @@ export default function Withdraw() {
               <Icon.Back width="16" height="16" /> {t("wd.sendToBank")} {wdCountry?.fiat}
             </button>
 
-            <div className="wd-card">
-              <label className="wd-label">{t("wd.amount")} ({country.code})</label>
-              <div className="wd-amt-row">
-                {/* Amount entered in LOCAL FIAT (₹/R$/…) with the currency symbol; the
-                    USDC equivalent is shown small below. */}
-                <div className="wd-fiat-input" style={{ display: "flex", alignItems: "center", flex: 1, gap: 6 }}>
-                  <span className="wd-fiat-sym" style={{ fontWeight: 700, color: "var(--muted)" }}>{country.symbol}</span>
-                  <input className="input" type="number" min="0" step="0.01"
-                    placeholder={maxFiat != null ? maxFiat.toFixed(2) : "0.00"} value={amount}
-                    onChange={(e) => { setAmount(e.target.value); setMaxSelected(false); }} style={{ flex: 1 }} />
-                </div>
-                {/* Max SHOWS the max fiat value (so the field isn't confusingly blank)
-                    but flags `maxSelected` so submit still uses the EXACT on-chain
-                    bigint (fee reserved) rather than the rounded display string —
-                    which could round a half-cent over the real max and revert. */}
-                <button className="btn secondary small" type="button"
-                  onClick={() => {
-                    setAmount(maxFiat != null ? maxFiat.toFixed(2) : "");
-                    setMaxSelected(true);
-                    setError("");
-                  }}>{t("wd.max")}</button>
+            <div className="wd-amt">
+              <div className="wd-amt-in">
+                <span className="wd-amt-sym">{country.symbol}</span>
+                <input className="wd-amt-field" type="number" inputMode="decimal" min="0" step="0.01"
+                  aria-label={`${t("wd.amount")} (${country.code})`} placeholder="0.00" value={amount}
+                  onChange={(e) => { setAmount(e.target.value); setMaxSelected(false); }} />
               </div>
-              {/* small USDC equivalent of whatever fiat is typed */}
-              <div className="wd-usdc-hint muted" style={{ fontSize: 12, marginTop: 6 }}>
-                ≈ {usdcNum > 0 ? usdcNum.toFixed(2) : maxFiatUsdc.toFixed(2)} USDC
-                {typedFiat === "" && <span> · {t("wd.max")}</span>}
+              <div className="wd-amt-sub">
+                ≈ {usdcNum > 0 ? usdcNum.toFixed(2) : "0.00"} USDC
+                {maxFiatUsdc < availNum - 1e-9 && <> · {t("wd.feeReserved").replace("{fee}", `${cashoutFee.fee.toFixed(2)} USDC`)}</>}
               </div>
-              {/* When Max had to hold back the fee, explain WHY it's less than the
-                  full balance — otherwise it looks like funds went missing. */}
-              {maxFiatUsdc < availNum - 1e-9 && (
-                <div className="wd-usdc-hint muted" style={{ fontSize: 11.5, marginTop: 4 }}>
-                  {t("wd.feeReserved").replace("{fee}", `${cashoutFee.fee.toFixed(2)} USDC`)}
-                </div>
-              )}
+              <div className="wd-pcts" role="group" aria-label={t("wd.amount")}>
+                {[25, 50, 100].map((p) => (
+                  <button key={p} type="button" className="wd-pct" disabled={maxFiat == null}
+                    onClick={() => { setAmount(maxFiat != null ? (maxFiat * p / 100).toFixed(2) : ""); setMaxSelected(p === 100); setError(""); }}>
+                    {p === 100 ? t("wd.max") : `${p}%`}
+                  </button>
+                ))}
+              </div>
               {overBalance && <p className="error">{t("wd.exceeds")}</p>}
             </div>
 
@@ -731,11 +732,13 @@ export default function Withdraw() {
               <p className="muted" style={{ textAlign: "center", fontSize: 12, marginTop: 10 }}>{t("wd.fetchingRate")}</p>
             )}
 
+            <div className="wd-slide">
             <button className="btn" style={{ width: "100%", marginTop: 16 }}
               disabled={!!busy || !ready || availNum <= 0 || overBalance || (typedFiat !== "" && !rate)}
               onClick={() => withdraw("fiat")}>
               {busy === "fiat" ? t("wd.working") : `${t("wd.sendToBank")} ${wdCountry?.fiat}`}
             </button>
+            </div>
           </>
         )}
 
@@ -747,57 +750,111 @@ export default function Withdraw() {
               <button className="wallet-back" onClick={() => setDestChoice(null)}>
                 <Icon.Back width="16" height="16" /> {t("wd.usdcTitle")}
               </button>
-            ) : (
-              /* No chooser to go back to when fiat is hidden — keep the title as
-                 a plain heading so the form still says what it does. */
-              <div className="wd-dest-head">{t("wd.usdcTitle")}</div>
-            )}
+            ) : null}
 
-            <div className="wd-card">
-              <label className="wd-label">Withdraw to wallet</label>
-              <div className="wd-amt-row">
-                <div className="wd-fiat-input" style={{ display: "flex", alignItems: "center", flex: 1, gap: 6 }}>
-                  <input className="input" type="number" min="0" step="0.01"
-                    placeholder={availNum.toFixed(2)} value={amount}
-                    onChange={(e) => { setAmount(e.target.value); setMaxSelected(false); }} style={{ flex: 1 }} />
-                  <span className="wd-fiat-sym" style={{ fontWeight: 700, color: "var(--muted)" }}>USDC</span>
-                </div>
-                {/* Max SHOWS the full balance (so the field isn't confusingly
-                    blank) but flags `maxSelected` so submit still sends the
-                    EXACT on-chain `available` bigint, not a .toFixed(2) string
-                    that could round a fraction of a cent OVER the balance. */}
-                <button className="btn secondary small" type="button"
-                  onClick={() => { setAmount(availNum.toFixed(2)); setMaxSelected(true); setError(""); }}>{t("wd.max")}</button>
+            <div className="wd-amt">
+              <div className="wd-amt-in">
+                <input className="wd-amt-field" type="number" inputMode="decimal" min="0" step="0.01"
+                  aria-label="Withdraw to wallet" placeholder="0.00" value={amount}
+                  onChange={(e) => { setAmount(e.target.value); setMaxSelected(false); }} />
+                <span className="wd-amt-sym">USDC</span>
               </div>
-              {(typedFiat === "" || maxSelected) && (
-                <div className="wd-usdc-hint muted" style={{ fontSize: 12, marginTop: 6 }}>{t("wd.max")}</div>
-              )}
+              <div className="wd-amt-sub">Withdraw to wallet</div>
+              <div className="wd-pcts" role="group" aria-label="Withdraw to wallet">
+                {[25, 50, 100].map((p) => (
+                  <button key={p} type="button" className="wd-pct"
+                    onClick={() => { setAmount((availNum * p / 100).toFixed(2)); setMaxSelected(p === 100); setError(""); }}>
+                    {p === 100 ? t("wd.max") : `${p}%`}
+                  </button>
+                ))}
+              </div>
               {overBalance && <p className="error">{t("wd.exceeds")}</p>}
             </div>
 
             {error && <p className="error" style={{ textAlign: "center" }}>{error}</p>}
             {done && <p className="success" style={{ textAlign: "center" }}>✓ {done}</p>}
 
+            <div className="wd-slide">
             <button className="btn" style={{ width: "100%", marginTop: 16 }}
               disabled={!!busy || !ready || availNum <= 0 || overBalance}
               onClick={() => withdraw("usdc")}>
               {t("common.continue")}
             </button>
+            </div>
           </>
         )}
         </>
         )}
       </div>
 
-      {/* USDC WITHDRAW — STEP 3: final confirm dialog before the on-chain send. */}
+      {/* RESULT PAGE — opens the instant the slide completes: processing, then success or failure. */}
+      {usdcStep === "result" && result && (
+        <div className="screen wd-result">
+          <div className="wd-head">
+            <button type="button" className="wd-back-big" aria-label={t("wd.toDash")}
+              disabled={result.status === "processing"}
+              onClick={() => router.replace("/dashboard")}>
+              <Icon.Back width="22" height="22" />
+            </button>
+            <h1>{t("nav.withdraw")}</h1>
+          </div>
+
+          <div className="wd-res" role="status" aria-live="polite">
+            <div className={`wd-res-ico ${result.status}`} aria-hidden="true">
+              {result.status === "processing" && <span className="wd-res-spin" />}
+              {result.status === "success" && (
+                <svg viewBox="0 0 24 24" width="44" height="44" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path className="wd-check" d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+              )}
+              {result.status === "error" && (
+                <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              )}
+            </div>
+            <h2 className="wd-res-title">
+              {result.status === "processing" ? t("wd.proc.title") : result.status === "success" ? t("wd.ok.title") : t("wd.err.title")}
+            </h2>
+            <div className="wd-res-amt">{result.amount.toFixed(2)} <span>USDC</span></div>
+            {result.status === "processing" && <p className="wd-res-sub">{t("wd.proc.sub")}</p>}
+            {result.status === "success" && (
+              <>
+                <p className="wd-res-sub">{fill(t("wd.ok.sub"), { amount: result.amount.toFixed(2), dest: result.dest })}</p>
+                <p className="wd-res-hint">{t("wd.ok.hint")}</p>
+              </>
+            )}
+            {result.status === "error" && <p className="wd-res-sub error">{result.msg}</p>}
+            {result.tx && (
+              <a className="linklike" href={`${EXPLORER_URL}/tx/${result.tx}`} target="_blank" rel="noopener noreferrer">
+                {t("wd.viewOnExplorer")} ↗
+              </a>
+            )}
+          </div>
+
+          {result.status !== "processing" && (
+            <div className="wd-slide">
+              {result.status === "error" && (
+                <button className="btn ghost" style={{ marginBottom: 10 }}
+                  onClick={() => { setResult(null); setUsdcStep("confirm"); }}>{t("wd.tryAgain")}</button>
+              )}
+              <button className="btn" onClick={() => router.replace("/dashboard")}>{t("wd.toDash")}</button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* USDC WITHDRAW — STEP 3: review + confirm, as a page. */}
       {usdcStep === "confirm" && (
-        <div className="confirm-overlay" onClick={() => busy ? null : setUsdcStep("address")}>
-          <div className="confirm-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="confirm-h">{t("wd.usdcConfirmTitle")}</div>
-            <div className="confirm-amt">{usdcSend.usdc.toFixed(2)} USDC</div>
-            <p className="confirm-sub">
-              {usdcDest === "external" ? t("wd.usdcConfirmBodyExt") : t("wd.usdcConfirmBody")}
-            </p>
+        <div className="screen wd-confirm">
+          <div className="wd-head">
+            <button type="button" className="wd-back-big" aria-label={t("common.back")} disabled={!!busy} onClick={() => setUsdcStep("address")}>
+              <Icon.Back width="22" height="22" />
+            </button>
+            <h1>{t("wd.usdcConfirmTitle")}</h1>
+          </div>
+          <div className="wd-confirm-amt">{usdcSend.usdc.toFixed(2)} <span>USDC</span></div>
+          <div className="wd-confirm-card">
+            <div className="confirm-row">
+              <span>{t("wd.confirmFrom")}</span>
+              <b>PayQR</b>
+            </div>
             <div className="confirm-row">
               <span>{t("wd.destAddress")}</span>
               <b style={{ fontFamily: "monospace" }}>
@@ -812,15 +869,14 @@ export default function Withdraw() {
                 <b>{t("wd.usdcTwoSteps")}</b>
               </div>
             )}
-            {error && <p className="error" style={{ textAlign: "center", marginTop: 8 }}>{error}</p>}
-            <div className="confirm-actions">
-              <button className="btn ghost" disabled={!!busy} onClick={() => setUsdcStep("address")}>
-                {t("common.cancel")}
-              </button>
-              <button className="btn" disabled={!!busy} onClick={confirmUsdcWithdraw}>
-                {busy === "usdc" ? t("wd.working") : t("wd.usdcConfirmCta")}
-              </button>
-            </div>
+          </div>
+          <p className="confirm-sub" style={{ textAlign: "center" }}>
+            {usdcDest === "external" ? t("wd.usdcConfirmBodyExt") : t("wd.usdcConfirmBody")}
+          </p>
+          {error && <p className="error" style={{ textAlign: "center", marginTop: 8 }}>{error}</p>}
+          <div className="wd-slide">
+            <SlideToConfirm label={t("wd.usdcConfirmCta")} busy={busy === "usdc"} disabled={!!busy}
+              onConfirm={confirmUsdcWithdraw} />
           </div>
         </div>
       )}

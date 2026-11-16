@@ -7,7 +7,17 @@ import { usePublicClient } from "wagmi";
 import { Nav } from "../../components/Nav";
 import { Splash } from "../../components/Splash";
 import { useMerchant } from "../../components/useMerchant";
-import { CONTRACT_ADDRESS, INTEGRATOR_ABI, PREV_CONTRACT_ADDRESSES, CROSS_VERSION_ABI, isPrevContract, friendlyError, currencyFromBytes32 } from "../../lib/contract";
+import { CONTRACT_ADDRESS, INTEGRATOR_ABI, PREV_CONTRACT_ADDRESSES, CROSS_VERSION_ABI, isPrevContract, currencyFromBytes32 } from "../../lib/contract";
+import { toUserError, type UserError } from "../../lib/errors";
+import { useGuardedSend } from "../../components/useGuardedSend";
+import { useCopy } from "../../components/useCopy";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
+import { ErrorPanel } from "../../components/ui/ErrorPanel";
+import { Skeleton } from "../../components/ui/LoadingState";
+import { SettlementNote } from "../../components/ui/SettlementNote";
+import { useRegisteredCurrency } from "../../components/useRegisteredCurrency";
+import { fill } from "../../lib/format";
+import { useT } from "../../lib/i18n";
 import { useMerchantProxies } from "../../components/useMerchantProxies";
 import { countryForCurrency, fmtFiat } from "../../lib/countries";
 import { PAYMENT_LINKS_ENABLED, LinkStatus, fetchMerchantLinkIds, fetchIndexedMerchantLinkIds, fetchMerchantLinkEvents, fetchLink, buildPayLinkUrl, rememberedLinks, type LinkPrice } from "../../lib/paymentLinks";
@@ -74,7 +84,15 @@ export default function PaymentLinksList() {
   // Each fixed-price link's price, from the relayer's link index — so it shows
   // on every device, not only the one that created the link.
   const [linkPrices, setLinkPrices] = useState<Map<string, LinkPrice>>(new Map());
-  const [error, setError] = useState("");
+  const [error, setError] = useState<UserError | string>("");
+  const { t, lang } = useT();
+  const copier = useCopy();
+  const { code: regCode } = useRegisteredCurrency(address);
+  // Revoke is irreversible (it kills a printed QR), so it always goes through a
+  // confirmation and a synchronous lock.
+  const revoker = useGuardedSend();
+  const [revokeTarget, setRevokeTarget] = useState<null | { linkId: string; contract: `0x${string}` }>(null);
+  const [revokeError, setRevokeError] = useState<UserError | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [qrFor, setQrFor] = useState<string | null>(null);
   // Keyed by currency code — a fixed link's on-chain `amount` is 6-dec
@@ -231,7 +249,7 @@ export default function PaymentLinksList() {
       rows.reverse(); // newest first
       setLinks([...rows, ...prevRows]);
     } catch (e: any) {
-      setError(friendlyError(e, "Could not load your payment links."));
+      setError(toUserError(e, { context: "load-links", fallbackKey: "err.load" }));
       setLinks([]);
     }
   }, [address, publicClient]);
@@ -341,7 +359,7 @@ export default function PaymentLinksList() {
       a.click();
       a.remove();
     } catch {
-      setError("Could not create the QR image. Please try again.");
+      setError(t("plx.qrFail"));
     } finally {
       setQrFor(null);
     }
@@ -360,7 +378,7 @@ ${url}`;
       try {
         const blob = await (await fetch(await composePosterDataUrl(url))).blob();
         const file = new File([blob], "payqr-payment-link.png", { type: "image/png" });
-        const payload = { files: [file], title: "PayQR payment link", text };
+        const payload = { files: [file], title: t("plx.shareTitle"), text };
         if (navigator.canShare(payload)) {
           await navigator.share(payload);
           navigator.clipboard?.writeText(url).catch(() => {});
@@ -372,7 +390,7 @@ ${url}`;
     }
     if (navigator.share) {
       try {
-        await navigator.share({ title: "PayQR payment link", text, url });
+        await navigator.share({ title: t("plx.shareTitle"), text, url });
         return;
       } catch (e: any) {
         // Closing the sheet is a choice, not a failure — don't fall through to
@@ -385,10 +403,15 @@ ${url}`;
 
   if (!ready || !authenticated) return <Splash />;
 
-  async function revoke(linkId: string, contract: `0x${string}` = CONTRACT_ADDRESS) {
+  // Called only from the confirmation dialog. Never retried: if the receipt
+  // wait times out the outcome is UNKNOWN (the revoke may still land), so the
+  // merchant is told to refresh and check rather than to press Revoke again.
+  async function confirmRevoke() {
+    if (!revokeTarget) return;
+    const { linkId, contract } = revokeTarget;
+    setRevokeError(null);
     setBusyId(linkId);
-    setError("");
-    try {
+    const r = await revoker.run(async () => {
       const { encodeFunctionData } = await import("viem");
       const data = encodeFunctionData({
         abi: INTEGRATOR_ABI,
@@ -396,12 +419,14 @@ ${url}`;
         args: [linkId as `0x${string}`],
       });
       const hash = await sendTransaction({ to: contract, data });
-      await publicClient!.waitForTransactionReceipt({ hash });
-      await load();
-    } catch (e: any) {
-      setError(friendlyError(e, "Could not revoke this link."));
-    } finally {
-      setBusyId(null);
+      const rc = await publicClient!.waitForTransactionReceipt({ hash, timeout: 120_000 });
+      if (rc.status === "reverted") throw new Error("revoke reverted");
+    }, { context: "revoke-link", fallbackKey: "err.revoke", uncertainKey: "err.uncertainRevoke", skipStepUp: true });
+    setBusyId(null);
+    if (r.reason === "ok") { setRevokeTarget(null); await load(); return; }
+    if (r.reason === "error") {
+      setRevokeError(r.error);
+      if (r.error.uncertain) load(); // show whatever the chain says now
     }
   }
 
@@ -411,8 +436,8 @@ ${url}`;
         <Nav back backHref="/dashboard" />
         <div className="screen">
           <div className="card">
-            <div className="label">Payment Links</div>
-            <div className="sub">This feature isn't configured on this deployment yet.</div>
+            <div className="label">{t("pl.title")}</div>
+            <div className="sub">{t("plx.notConfigured")}</div>
           </div>
         </div>
       </>
@@ -423,38 +448,29 @@ ${url}`;
     <>
       <Nav back backHref="/dashboard" />
       <div className="screen">
-        <div className="row" style={{ justifyContent: "space-between", marginBottom: 16 }}>
-          <div className="label" style={{ fontSize: 18, fontWeight: 700 }}>Payment Links</div>
-          <Link href="/payment-links/create" className="btn small">+ New link</Link>
+        <div className="pl-top">
+          <h1 className="pl-h1">{t("pl.title")}</h1>
+          <Link href="/payment-links/create" className="pill-btn">+ {t("pl.new").replace(/^\+\s*/, "")}</Link>
         </div>
 
-        {error && <div className="sub" style={{ color: "var(--warn)", marginBottom: 12 }}>{error}</div>}
+        <ErrorPanel error={error} onRetry={() => { setError(""); load(); }} />
 
         {/* Three questions, three tabs. They were previously answered by one
             list that mixed them: which links can I hand out right now, what has
             actually been paid, and how is the whole thing doing. */}
-        <div className="seg" style={{ marginBottom: 16 }}>
-          <button
-            type="button"
-            className={`seg-opt ${tab === "links" ? "on" : ""}`}
-            onClick={() => setTab("links")}
-          >
-            Links
-          </button>
-          <button
-            type="button"
-            className={`seg-opt ${tab === "payments" ? "on" : ""}`}
-            onClick={() => setTab("payments")}
-          >
-            Payments
-          </button>
-          <button
-            type="button"
-            className={`seg-opt ${tab === "summary" ? "on" : ""}`}
-            onClick={() => setTab("summary")}
-          >
-            Summary
-          </button>
+        <div className="seg" role="tablist" aria-label={t("pl.title")} style={{ marginBottom: 16 }}>
+          {([["links", "pl.tabLinks"], ["payments", "pl.tabPayments"], ["summary", "pl.tabSummary"]] as const).map(([id, key]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              className={`seg-opt ${tab === id ? "on" : ""}`}
+              onClick={() => setTab(id)}
+            >
+              {t(key)}
+            </button>
+          ))}
         </div>
 
         {tab === "summary" && (
@@ -464,38 +480,36 @@ ${url}`;
                 that will be refused — but "how many have I made" is a different
                 question, and hiding the answer there made it unanswerable. */}
             <div className="card" style={{ marginBottom: 12 }}>
-              <div className="sub" style={{ marginBottom: 10, fontWeight: 700 }}>Links</div>
-              <StatRow label="Created (all time)" value={String(links?.length ?? 0)} />
-              <StatRow label="Active now" value={String(liveLinks.length)} />
-              <StatRow label="Used up" value={String(usedUpCount)} />
-              <StatRow label="Expired" value={String(expiredCount)} />
-              <StatRow label="Revoked" value={String(revokedCount)} />
+              <div className="sub" style={{ marginBottom: 10, fontWeight: 700 }}>{t("plx.links")}</div>
+              <StatRow label={t("plx.created")} value={String(links?.length ?? 0)} />
+              <StatRow label={t("plx.activeNow")} value={String(liveLinks.length)} />
+              <StatRow label={t("plx.usedUp")} value={String(usedUpCount)} />
+              <StatRow label={t("plx.expired")} value={String(expiredCount)} />
+              <StatRow label={t("plx.revoked")} value={String(revokedCount)} />
               {prevLinks.length > 0 && (
-                <StatRow label="On earlier versions" value={String(prevLinks.length)} />
+                <StatRow label={t("plx.earlierVersions")} value={String(prevLinks.length)} />
               )}
             </div>
 
             <div className="card" style={{ marginBottom: 12 }}>
-              <div className="sub" style={{ marginBottom: 10, fontWeight: 700 }}>Money</div>
+              <div className="sub" style={{ marginBottom: 10, fontWeight: 700 }}>{t("plx.money")}</div>
               {/* Paid and pending are kept apart on purpose. Pending is not a
                   smaller kind of paid — it is money that may never arrive, and
                   adding the two into one "total" is how a merchant ends up
                   shipping goods against a payment that gets cancelled. */}
               <StatRow
-                label={`Received (${paidOrders.length})`}
+                label={fill(t("plx.received"), { n: paidOrders.length })}
                 value={`${(totalReceived / 1e6).toFixed(2)} USDC`}
                 strong
               />
               <StatRow
-                label={`Pending (${pendingOrders.length})`}
+                label={fill(t("plx.pending"), { n: pendingOrders.length })}
                 value={`${(totalPending / 1e6).toFixed(2)} USDC`}
               />
-              <StatRow label={`Cancelled (${cancelledOrders.length})`} value="—" />
+              <StatRow label={fill(t("plx.cancelled"), { n: cancelledOrders.length })} value="—" />
               {oldestPendingAge && (
                 <div className="sub" style={{ marginTop: 10, opacity: 0.75 }}>
-                  Oldest pending payment started {oldestPendingAge} ago. A payment that
-                  never completes is cancelled by the protocol and the money never leaves
-                  the customer.
+                  {fill(t("plx.oldestPending"), { age: oldestPendingAge })}
                 </div>
               )}
             </div>
@@ -514,31 +528,31 @@ ${url}`;
             <div className="row" style={{ justifyContent: "space-between" }}>
               <div>
                 <div className="value" style={{ fontSize: 22 }}>{liveLinks.length}</div>
-                <div className="sub">Active links</div>
+                <div className="sub">{t("pl.activeLinks")}</div>
               </div>
               <div>
                 <div className="value" style={{ fontSize: 22 }}>{paidOrders.length}</div>
-                <div className="sub">Paid</div>
+                <div className="sub">{t("pl.paid")}</div>
               </div>
               <div style={{ textAlign: "right" }}>
                 <div className="value" style={{ fontSize: 22 }}>
                   {(totalReceived / 1e6).toFixed(2)}
                 </div>
-                <div className="sub">USDC received</div>
+                <div className="sub">{t("pl.usdcReceived")}</div>
               </div>
             </div>
-            {hiddenCount > 0 && (
-              <div className="sub" style={{ marginTop: 10, opacity: 0.7 }}>
-                {hiddenCount} expired, used-up or revoked link{hiddenCount === 1 ? "" : "s"} hidden.
-                They stay on-chain and can never be paid again.
-              </div>
-            )}
           </div>
         )}
 
-        {links !== null && liveLinks.length === 0 && (
+        {/* While the links load the page used to be blank; and a failed load looked
+            identical to "no links". Now: skeleton → list, and the empty state only
+            shows when the load SUCCEEDED with zero links. */}
+        {links === null && !error && (
+          <div className="card" aria-busy="true"><Skeleton w="60%" h={22} /><div style={{ marginTop: 10 }}><Skeleton w="90%" h={14} /></div></div>
+        )}
+        {links !== null && liveLinks.length === 0 && !error && (
           <div className="card">
-            <div className="sub">No active payment links. Create one to share with a customer.</div>
+            <div className="sub">{t("pl.noActive")}</div>
           </div>
         )}
 
@@ -558,7 +572,7 @@ ${url}`;
                 {fixedLocal
                   ? fmtFiat(country, Number(fixedLocal.amount6) / 1e6)
                   : l.amount === 0n
-                    ? "Any amount"
+                    ? t("pl.anyAmount")
                     : priceCfgs[l.currency]
                       ? fmtFiat(country, fiatForUsdc(l.amount, priceCfgs[l.currency]))
                       : "…"}
@@ -566,15 +580,10 @@ ${url}`;
                     behave differently enough that the merchant needs to know
                     which one they are looking at: one is an invoice, the other
                     is a standing counter QR. */}
-                {l.amount === 0n && !fixedLocal && (
-                  <span className="sub" style={{ fontSize: 13, marginLeft: 8, opacity: 0.8 }}>
-                    Counter QR — customer enters it
-                  </span>
-                )}
               </div>
               <div className="sub">
-                {l.maxUses === 0 ? "Multi-use" : l.maxUses === 1 ? "Single use" : `Up to ${l.maxUses} uses`}
-                {l.maxUses !== 0 && ` (${l.uses}/${l.maxUses} used)`} ·{" "}
+                {l.maxUses === 0 ? t("link.multi") : l.maxUses === 1 ? t("link.single") : fill(t("pl.upToUses"), { n: l.maxUses })}
+                {l.maxUses !== 0 && ` ${fill(t("pl.usedOf"), { u: l.uses, m: l.maxUses })}`} ·{" "}
                 {/* "Used up" is a THIRD dead state, and it was missing. The check
                     was revoked / expired / Active, so a single-use link that had
                     already been paid still read "Active" here — while the pay page
@@ -583,7 +592,7 @@ ${url}`;
                     customer scanning it was turned away. Same condition the
                     contract enforces in PaymentLinksLib.consume and that
                     linkBlockedReason already implements. */}
-                {!isActive ? "Revoked" : expired ? "Expired" : exhausted ? "Used up" : "Active"}
+                {!isActive ? t("plx.revoked") : expired ? t("plx.expired") : exhausted ? t("plx.usedUp") : t("plx.active")}
               </div>
               {/* Expiry was read from chain into state and then never shown, so
                   a merchant could not tell a link with an hour left from one
@@ -591,34 +600,35 @@ ${url}`;
                   difference between working tomorrow and not. */}
               <div className="sub" style={{ marginTop: 2, opacity: 0.75 }}>
                 {l.expiresAt === 0n
-                  ? "Never expires"
-                  : (expired ? "Expired " : "Expires ") +
-                    new Date(Number(l.expiresAt) * 1000).toLocaleString()}
+                  ? t("plx.neverExpires")
+                  : fill(t(expired ? "plx.expiredOn" : "plx.expiresOn"), {
+                      date: new Date(Number(l.expiresAt) * 1000).toLocaleString(lang),
+                    })}
               </div>
               <div className="row" style={{ marginTop: 10 }}>
                 <button className="btn small ghost" disabled={qrFor === l.linkId} onClick={() => downloadQr(l.linkId, url)}>
-                  {qrFor === l.linkId ? "Preparing…" : "Download QR"}
+                  {qrFor === l.linkId ? t("pl.preparing") : t("link.downloadQr")}
                 </button>
                 {/* Re-share. The create screen offers this once, at the moment
                     a link is made, and never again — so sending the same link to
                     a second customer meant copying a 66-character hex id out of
                     the row by hand. */}
                 <button className="btn small ghost" onClick={() => share(url)}>
-                  Share
+                  {t("link.share")}
                 </button>
                 <button
                   className="btn small ghost"
-                  onClick={() => navigator.clipboard?.writeText(url).catch(() => {})}
+                  onClick={() => copier.copy(url, l.linkId)}
                 >
-                  Copy link
+                  {copier.copiedKey === l.linkId ? t("ui.copied") : copier.failedKey === l.linkId ? t("ui.copyFailed") : t("link.copyLink")}
                 </button>
                 {isActive && (
                   <button
                     className="btn small ghost"
                     disabled={busyId === l.linkId}
-                    onClick={() => revoke(l.linkId)}
+                    onClick={() => { setRevokeError(null); setRevokeTarget({ linkId: l.linkId, contract: CONTRACT_ADDRESS }); }}
                   >
-                    {busyId === l.linkId ? "Revoking…" : "Revoke"}
+                    {busyId === l.linkId ? t("link.revoking") : t("link.revoke")}
                   </button>
                 )}
               </div>
@@ -634,11 +644,10 @@ ${url}`;
         {prevLinks.length > 0 && (
           <>
             <div className="label" style={{ fontSize: 15, fontWeight: 700, margin: "22px 0 4px" }}>
-              Earlier links ({prevLinks.length})
+              {fill(t("plx.earlierTitle"), { n: prevLinks.length })}
             </div>
             <div className="sub" style={{ marginBottom: 10, opacity: 0.75 }}>
-              Created on an earlier version of PayQR. They no longer accept payments —
-              create a new link to replace one.
+              {t("plx.earlierNote")}
             </div>
             {prevLinks.map((l) => {
               const country = countryForCurrency(l.currency);
@@ -649,23 +658,23 @@ ${url}`;
                 <div className="card" key={`${l.contract}:${l.linkId}`} style={{ marginBottom: 10, opacity: 0.85 }}>
                   <div className="value" style={{ fontSize: 17 }}>
                     {l.amount === 0n
-                      ? "Any amount"
+                      ? t("pl.anyAmount")
                       : priceCfgs[l.currency]
                         ? fmtFiat(country, fiatForUsdc(l.amount, priceCfgs[l.currency]))
                         : "…"}
                   </div>
                   <div className="sub">
-                    {l.maxUses === 0 ? "Multi-use" : `${l.uses}/${l.maxUses} used`} ·{" "}
-                    {!active ? "Revoked" : expired ? "Expired" : exhausted ? "Used up" : "Retired"}
+                    {l.maxUses === 0 ? t("plx.multiUse") : fill(t("plx.usedCount"), { u: l.uses, m: l.maxUses })} ·{" "}
+                    {!active ? t("plx.revoked") : expired ? t("plx.expired") : exhausted ? t("plx.usedUp") : t("plx.retired")}
                   </div>
                   {active && (
                     <div className="row" style={{ marginTop: 8 }}>
                       <button
                         className="btn small ghost"
                         disabled={busyId === l.linkId}
-                        onClick={() => revoke(l.linkId, l.contract)}
+                        onClick={() => { setRevokeError(null); setRevokeTarget({ linkId: l.linkId, contract: l.contract }); }}
                       >
-                        {busyId === l.linkId ? "Revoking…" : "Revoke"}
+                        {busyId === l.linkId ? t("link.revoking") : t("link.revoke")}
                       </button>
                     </div>
                   )}
@@ -694,13 +703,13 @@ ${url}`;
           records the merchant's PROXY. See fetchLinkOrders.
         */}
         <div className="row" style={{ justifyContent: "space-between", margin: "26px 0 12px" }}>
-          <div className="label" style={{ fontSize: 16, fontWeight: 700 }}>Payments received</div>
+          <div className="label" style={{ fontSize: 16, fontWeight: 700 }}>{t("plx.paymentsReceived")}</div>
           {paidOrders.length > 0 && <span className="sub">{paidOrders.length}</span>}
         </div>
 
         {ordersError && (
           <div className="sub" style={{ color: "var(--warn)", marginBottom: 12 }}>
-            Couldn&apos;t load payments right now.
+            {t("plx.loadFail")}
           </div>
         )}
 
@@ -712,8 +721,7 @@ ${url}`;
         {orders !== null && paidOrders.length === 0 && !ordersError && (
           <div className="card">
             <div className="sub">
-              No payments received yet. A payment appears here once the customer&apos;s
-              money has actually settled.
+              {t("plx.noPayments")}
             </div>
           </div>
         )}
@@ -735,22 +743,22 @@ ${url}`;
                   )}
                   {(Number(o.amount) / 1e6).toFixed(2)} USDC
                 </div>
-                <div className="sub" style={{ color: "var(--ok, #0f9d6f)", fontWeight: 600 }}>Paid</div>
+                <div className="sub" style={{ color: "var(--ok, #0f9d6f)", fontWeight: 600 }}>{t("plx.paid")}</div>
               </div>
               {/* A dispute can be opened even after a payment settled. The
                   receipt has the support link for it. */}
               {o.dispute === "open" && (
                 <div className="sub" style={{ marginTop: 4, color: "var(--warn, #b45309)", fontWeight: 600 }}>
-                  Payment under review by support
+                  {t("plx.underReview")}
                 </div>
               )}
               {o.dispute === "resolved" && (
-                <div className="sub" style={{ marginTop: 4, opacity: 0.8 }}>Review by support finished</div>
+                <div className="sub" style={{ marginTop: 4, opacity: 0.8 }}>{t("plx.reviewDone")}</div>
               )}
               <div className="sub" style={{ marginTop: 4, opacity: 0.8 }}>
-                Order #{o.orderId} ·{" "}
-                {new Date((o.completedAt || o.placedAt) * 1000).toLocaleString()}
-                {href ? " · View receipt ›" : ""}
+                {fill(t("plx.order"), { id: o.orderId })} ·{" "}
+                {new Date((o.completedAt || o.placedAt) * 1000).toLocaleString(lang)}
+                {href ? ` · ${t("plx.viewReceipt")}` : ""}
               </div>
             </>
           );
@@ -773,6 +781,19 @@ ${url}`;
           </>
         )}
       </div>
+      <ConfirmDialog
+        open={!!revokeTarget}
+        tone="danger"
+        title={t("link.revokeTitle")}
+        confirmLabel={t("link.revoke")}
+        busy={revoker.busy}
+        error={revokeError ? revokeError.message : undefined}
+        onCancel={() => { setRevokeTarget(null); setRevokeError(null); }}
+        onConfirm={confirmRevoke}
+      >
+        <p>{t("link.revokeBody")}</p>
+        {revokeTarget && <p className="muted tiny" style={{ wordBreak: "break-all" }}>{revokeTarget.linkId}</p>}
+      </ConfirmDialog>
     </>
   );
 }

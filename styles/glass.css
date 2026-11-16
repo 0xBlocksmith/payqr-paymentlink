@@ -1,0 +1,383 @@
+/* ═══════════════════════════════════════════════════════════════════════
+   PayQR GLASS — design system v0 (reference implementation: /login)
+
+   STATUS: pending approval. Imported ONLY by app/login/page.tsx. Every class
+   is prefixed `glass-` and every token lives on `.glass-root`, so nothing here
+   can leak into the rest of the app until a page opts in by wrapping itself
+   in `.glass-root`.
+
+   PALETTE: identical to the payer page (/p): blue #1d5be0 → #3a64dc, ink
+   #0f1b3d, muted #5b6b8c, hairline #e1e8f5, wash #f6f8ff → #ffffff. No new
+   colours — glass is made from WHITE at different opacities plus the same
+   blue used as light/glow.
+
+   THE RECIPE (one, used everywhere — do not hand-tune per element):
+     surface  = translucent white fill + backdrop blur/saturate
+              + bright 1px top-lit edge + faint blue outer hairline
+              + soft drop shadow + inner top highlight
+     lighting = a diagonal sheen (::before) so every piece is lit from the
+                top-left the same way
+     glow     = blue, only on PRIMARY / highlighted elements
+   ─ Radii:   control = pill · panel = 28 · tile = 20 · popover = 20 · option = 14
+   ─ Heights: icon button 44 · small 40 · default 48 · large 54 (all ≥ 44 touch)
+   ─ States:  hover (brighter, lifts 1px) · active (presses 1px, shadow
+              tightens) · focus-visible (3px blue ring) · disabled (50%)
+   ═══════════════════════════════════════════════════════════════════════ */
+
+.glass-root {
+  /* palette (same values as /p) */
+  --g-blue: #1d5be0;
+  --g-blue-1: #4b78ee;
+  --g-blue-2: #3a64dc;
+  --g-blue-soft: #eef4ff;
+  --g-ink: #0f1b3d;
+  --g-muted: #5b6b8c;
+  --g-faint: #8a97b3;
+  --g-line: #e1e8f5;
+  --g-wash: #f6f8ff;
+  --g-danger: #d92d20;
+
+  /* glass recipe */
+  --g-fill: rgba(255, 255, 255, 0.58);
+  --g-fill-hover: rgba(255, 255, 255, 0.72);
+  --g-fill-press: rgba(255, 255, 255, 0.82);
+  --g-fill-panel: rgba(255, 255, 255, 0.66);
+  --g-edge: rgba(255, 255, 255, 0.7);          /* bright lit border */
+  --g-hairline: rgba(29, 91, 224, 0.07);       /* faint blue outer ring */
+  --g-blur: 18px;
+  --g-saturate: 170%;
+  --g-shadow: 0 10px 26px -16px rgba(29, 60, 140, 0.16), 0 1px 3px rgba(29, 60, 140, 0.03);
+  --g-shadow-hover: 0 14px 30px -16px rgba(29, 60, 140, 0.20), 0 2px 5px rgba(29, 60, 140, 0.04);
+  --g-shadow-press: 0 4px 12px -10px rgba(29, 60, 140, 0.18), 0 1px 2px rgba(29, 60, 140, 0.03);
+  --g-inset: inset 0 1px 0 rgba(255, 255, 255, 0.85), inset 0 -1px 0 rgba(29, 91, 224, 0.03);
+  --g-glow: 0 0 0 1px rgba(75, 120, 238, 0.16), 0 10px 24px -12px rgba(58, 100, 220, 0.34);
+  --g-glow-hover: 0 0 0 1px rgba(75, 120, 238, 0.22), 0 14px 28px -12px rgba(58, 100, 220, 0.40);
+  --g-sheen: linear-gradient(155deg, rgba(255, 255, 255, 0.40) 0%, rgba(255, 255, 255, 0) 46%);
+  --g-ring: 0 0 0 3px rgba(58, 100, 220, 0.22);
+
+  /* shape + motion */
+  --g-r-pill: 999px;
+  --g-r-panel: 32px;
+  --g-r-tile: 22px;
+  --g-r-pop: 20px;
+  --g-r-opt: 14px;
+  --g-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --g-t: 0.18s;
+
+  color: var(--g-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Surface ─────────────────────────────────────────────────────────── */
+.glass {
+  position: relative;
+  isolation: isolate;
+  background: var(--g-fill);
+  -webkit-backdrop-filter: blur(var(--g-blur)) saturate(var(--g-saturate));
+  backdrop-filter: blur(var(--g-blur)) saturate(var(--g-saturate));
+  border: 1px solid var(--g-edge);
+  box-shadow: 0 0 0 1px var(--g-hairline), var(--g-shadow), var(--g-inset);
+}
+/* the lighting: one sheen, same direction on every glass piece */
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--g-sheen);
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* ── Panel (highlighted content block) ───────────────────────────────── */
+.glass-panel {
+  border-radius: var(--g-r-panel);
+  background: var(--g-fill-panel);
+  box-shadow: 0 0 0 1px var(--g-hairline), 0 18px 40px -24px rgba(58, 100, 220, 0.28),
+    0 1px 3px rgba(29, 60, 140, 0.03), var(--g-inset);
+}
+
+/* Accent panel: the same panel, tinted with the brand blue and lit, for the ONE
+   thing on a screen that must stand out (for example a key figure). */
+.glass-panel--accent {
+  background: linear-gradient(135deg, rgba(75, 120, 238, 0.24) 0%, rgba(255, 255, 255, 0.66) 58%);
+  border-color: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 0 0 1px rgba(75, 120, 238, 0.30), 0 26px 50px -20px rgba(58, 100, 220, 0.60),
+    0 2px 6px rgba(29, 60, 140, 0.06), var(--g-inset);
+}
+
+/* Chip: a small, non-interactive glass label (status, rail, amount). */
+.glass-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 13px;
+  border-radius: var(--g-r-pill);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--g-ink);
+  white-space: nowrap;
+}
+.glass-chip svg { width: 15px; height: 15px; color: var(--g-blue-2); }
+
+/* ── Tile (icon holder) ──────────────────────────────────────────────── */
+.glass-tile {
+  width: 64px;
+  height: 64px;
+  border-radius: var(--g-r-tile);
+  display: grid;
+  place-items: center;
+  color: var(--g-blue-2);
+}
+.glass-tile svg { width: 30px; height: 30px; }
+.glass-tile--sm { width: 40px; height: 40px; border-radius: 14px; }
+.glass-tile--sm svg { width: 20px; height: 20px; }
+.glass-tile--glow { box-shadow: 0 0 0 1px var(--g-hairline), var(--g-glow), var(--g-inset); }
+
+/* ── Buttons ─────────────────────────────────────────────────────────── */
+.glass-btn,
+.glass-icon-btn {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font: inherit;
+  font-weight: 500;
+  color: var(--g-ink);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  background: var(--g-fill);
+  -webkit-backdrop-filter: blur(var(--g-blur)) saturate(var(--g-saturate));
+  backdrop-filter: blur(var(--g-blur)) saturate(var(--g-saturate));
+  border: 1px solid var(--g-edge);
+  box-shadow: 0 0 0 1px var(--g-hairline), var(--g-shadow), var(--g-inset);
+  transition: background var(--g-t) var(--g-ease), box-shadow var(--g-t) var(--g-ease),
+    transform 0.09s var(--g-ease), filter var(--g-t) var(--g-ease);
+}
+.glass-btn::before,
+.glass-icon-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--g-sheen);
+  pointer-events: none;
+  z-index: -1;
+}
+.glass-btn { min-height: 48px; padding: 0 20px; border-radius: var(--g-r-pill); font-size: 15px; }
+.glass-btn--sm { min-height: 40px; padding: 0 14px; font-size: 13.5px; }
+.glass-btn--lg { min-height: 54px; padding: 0 24px; font-size: 16px; }
+.glass-btn--block { width: 100%; }
+.glass-icon-btn { width: 44px; height: 44px; padding: 0; border-radius: 50%; color: var(--g-blue-2); }
+.glass-icon-btn svg { width: 20px; height: 20px; }
+
+.glass-btn:hover:not(:disabled),
+.glass-icon-btn:hover:not(:disabled) {
+  background: var(--g-fill-hover);
+  box-shadow: 0 0 0 1px var(--g-hairline), var(--g-shadow-hover), var(--g-inset);
+  transform: translateY(-1px);
+}
+.glass-btn:active:not(:disabled),
+.glass-icon-btn:active:not(:disabled) {
+  background: var(--g-fill-press);
+  box-shadow: 0 0 0 1px var(--g-hairline), var(--g-shadow-press), var(--g-inset);
+  transform: translateY(1px) scale(0.99);
+}
+.glass-btn:focus-visible,
+.glass-icon-btn:focus-visible,
+.glass-opt:focus-visible { outline: none; box-shadow: 0 0 0 1px var(--g-hairline), var(--g-ring), var(--g-shadow); }
+.glass-btn:disabled,
+.glass-icon-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+.glass-btn[aria-expanded="true"] { background: var(--g-fill-press); }
+
+/* Primary: the one glowing, tinted-blue glass control per screen. */
+.glass-btn--primary {
+  color: #fff;
+  background: linear-gradient(180deg, rgba(104, 142, 242, 0.94) 0%, rgba(78, 116, 230, 0.94) 100%);
+  border-color: rgba(255, 255, 255, 0.45);
+  box-shadow: var(--g-glow), inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+  font-weight: 600;
+}
+.glass-btn--primary::before { background: linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0) 55%); }
+.glass-btn--primary:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(114, 150, 244, 0.96) 0%, rgba(86, 122, 232, 0.96) 100%);
+  box-shadow: var(--g-glow-hover), inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -1px 0 rgba(0, 0, 0, 0.04);
+}
+.glass-btn--primary:active:not(:disabled) {
+  background: linear-gradient(180deg, rgba(82, 120, 232, 0.96) 0%, rgba(70, 106, 222, 0.96) 100%);
+  box-shadow: 0 0 0 1px rgba(75, 120, 238, 0.2), 0 5px 14px -8px rgba(58, 100, 220, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3), inset 0 -1px 0 rgba(0, 0, 0, 0.05);
+}
+.glass-btn--primary:focus-visible { box-shadow: var(--g-glow), var(--g-ring); }
+
+/* Field-style button (a selector): left-aligned label + trailing caret. */
+.glass-btn--field { justify-content: space-between; text-align: left; font-weight: 600; }
+
+/* ── Popover + options ───────────────────────────────────────────────── */
+.glass-pop {
+  position: absolute;
+  z-index: 20;
+  padding: 6px;
+  border-radius: var(--g-r-pop);
+  background: var(--g-fill-hover);
+  box-shadow: 0 0 0 1px var(--g-hairline), 0 18px 40px -20px rgba(29, 60, 140, 0.26), var(--g-inset);
+  animation: glassPop var(--g-t) var(--g-ease);
+}
+.glass-opt {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: var(--g-r-opt);
+  background: transparent;
+  color: var(--g-ink);
+  font: inherit;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--g-t) var(--g-ease);
+}
+.glass-opt:hover { background: rgba(255, 255, 255, 0.7); }
+.glass-opt:active { background: rgba(255, 255, 255, 0.9); }
+.glass-opt[aria-selected="true"] { background: rgba(75, 120, 238, 0.12); color: var(--g-blue); }
+.glass-opt small { display: block; font-weight: 400; font-size: 12px; color: var(--g-muted); }
+
+@keyframes glassPop {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ── Adopters: existing components re-skinned INSIDE a glass page only ── */
+.glass-root .install-btn {
+  width: 44px; height: 44px; padding: 0; border-radius: 50%;
+  display: grid; place-items: center; color: var(--g-blue-2);
+  background: var(--g-fill);
+  -webkit-backdrop-filter: blur(var(--g-blur)) saturate(var(--g-saturate));
+  backdrop-filter: blur(var(--g-blur)) saturate(var(--g-saturate));
+  border: 1px solid var(--g-edge);
+  box-shadow: 0 0 0 1px var(--g-hairline), var(--g-shadow), var(--g-inset);
+  transition: background var(--g-t) var(--g-ease), transform 0.09s var(--g-ease), box-shadow var(--g-t) var(--g-ease);
+}
+.glass-root .install-btn:hover { background: var(--g-fill-hover); transform: translateY(-1px); }
+.glass-root .install-btn:active { background: var(--g-fill-press); transform: translateY(1px) scale(0.99); }
+.glass-root .install-btn:focus-visible { outline: none; box-shadow: 0 0 0 1px var(--g-hairline), var(--g-ring); }
+.glass-root .install-btn svg { width: 20px; height: 20px; }
+
+/* ── Fallbacks ───────────────────────────────────────────────────────── */
+/* No backdrop-filter, or the user asked for less transparency: use near-opaque
+   fills so text contrast never depends on what is behind the glass. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-root { --g-fill: rgba(255, 255, 255, 0.94); --g-fill-hover: #fff; --g-fill-press: #fff; --g-fill-panel: rgba(255, 255, 255, 0.96); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .glass-root { --g-fill: rgba(255, 255, 255, 0.96); --g-fill-hover: #fff; --g-fill-press: #fff; --g-fill-panel: #fff; --g-blur: 0px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .glass-btn, .glass-icon-btn, .glass-opt, .glass-root .install-btn { transition: none; }
+  .glass-btn:hover:not(:disabled), .glass-icon-btn:hover:not(:disabled), .glass-btn:active:not(:disabled), .glass-icon-btn:active:not(:disabled) { transform: none; }
+  .glass-pop { animation: none; }
+}
+
+/* ── Input: a soft glass text field ──────────────────────────────────── */
+.glass-label { display: block; margin: 0 0 8px 6px; font-size: 13.5px; font-weight: 500; color: var(--g-muted); }
+.glass-input {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 52px;
+  padding: 0 18px;
+  border-radius: 20px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--g-ink);
+  background: var(--g-fill);
+  -webkit-backdrop-filter: blur(var(--g-blur)) saturate(var(--g-saturate));
+  backdrop-filter: blur(var(--g-blur)) saturate(var(--g-saturate));
+  border: 1px solid var(--g-edge);
+  box-shadow: 0 0 0 1px var(--g-hairline), inset 0 1px 2px rgba(29, 60, 140, 0.04);
+  transition: background var(--g-t) var(--g-ease), box-shadow var(--g-t) var(--g-ease);
+}
+.glass-input::placeholder { color: var(--g-faint); font-weight: 400; }
+.glass-input:hover:not(:disabled) { background: var(--g-fill-hover); }
+.glass-input:focus { outline: none; background: var(--g-fill-hover); box-shadow: 0 0 0 1px rgba(75, 120, 238, 0.30), var(--g-ring); }
+.glass-input[aria-invalid="true"] { box-shadow: 0 0 0 1px rgba(217, 45, 32, 0.35); }
+.glass-input:disabled { opacity: 0.6; }
+
+/* ── Selectable chip: a suggestion the user can tap (toggle) ─────────── */
+.glass-chip--btn {
+  min-height: 40px;
+  padding: 0 15px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background var(--g-t) var(--g-ease), box-shadow var(--g-t) var(--g-ease), color var(--g-t) var(--g-ease), transform 0.09s var(--g-ease);
+}
+.glass-chip--btn:hover { background: var(--g-fill-hover); transform: translateY(-1px); }
+.glass-chip--btn:active { transform: translateY(1px) scale(0.99); }
+.glass-chip--btn:focus-visible { outline: none; box-shadow: 0 0 0 1px var(--g-hairline), var(--g-ring); }
+.glass-chip--btn[aria-pressed="true"] {
+  background: rgba(75, 120, 238, 0.14);
+  color: var(--g-blue);
+  border-color: rgba(75, 120, 238, 0.32);
+  box-shadow: 0 0 0 1px rgba(75, 120, 238, 0.16);
+}
+@media (prefers-reduced-motion: reduce) { .glass-chip--btn, .glass-input { transition: none; } .glass-chip--btn:hover, .glass-chip--btn:active { transform: none; } }
+
+/* ═══ DARK MODE ═════════════════════════════════════════════════════════
+   Same recipe, lit from the same direction: the glass becomes translucent
+   slate instead of white, edges are faint white, and the blue gets brighter
+   so it still reads on a dark wash. Driven by <html data-theme="dark">. */
+[data-theme="dark"] .glass-root {
+  --g-blue: #7da2ff;
+  --g-blue-1: #6b94ff;
+  --g-blue-2: #8fb0ff;
+  --g-blue-soft: #16213d;
+  --g-ink: #eef2ff;
+  --g-muted: #a3b0cf;
+  --g-faint: #7886a8;
+  --g-line: #25304a;
+  --g-wash: #0a0e16;
+  --g-danger: #ff6b5e;
+
+  --g-fill: rgba(28, 36, 58, 0.52);
+  --g-fill-hover: rgba(40, 52, 82, 0.62);
+  --g-fill-press: rgba(48, 62, 98, 0.72);
+  --g-fill-panel: rgba(24, 31, 50, 0.6);
+  --g-edge: rgba(255, 255, 255, 0.12);
+  --g-hairline: rgba(125, 162, 255, 0.10);
+  --g-shadow: 0 10px 26px -16px rgba(0, 0, 0, 0.7), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --g-shadow-hover: 0 14px 30px -16px rgba(0, 0, 0, 0.8), 0 2px 5px rgba(0, 0, 0, 0.35);
+  --g-shadow-press: 0 4px 12px -10px rgba(0, 0, 0, 0.8), 0 1px 2px rgba(0, 0, 0, 0.3);
+  --g-inset: inset 0 1px 0 rgba(255, 255, 255, 0.10), inset 0 -1px 0 rgba(0, 0, 0, 0.25);
+  --g-glow: 0 0 0 1px rgba(107, 148, 255, 0.30), 0 10px 26px -10px rgba(75, 120, 238, 0.55);
+  --g-glow-hover: 0 0 0 1px rgba(107, 148, 255, 0.40), 0 14px 30px -10px rgba(75, 120, 238, 0.65);
+  --g-sheen: linear-gradient(155deg, rgba(255, 255, 255, 0.10) 0%, rgba(255, 255, 255, 0) 46%);
+  --g-ring: 0 0 0 3px rgba(125, 162, 255, 0.35);
+}
+[data-theme="dark"] .glass-panel {
+  box-shadow: 0 0 0 1px var(--g-hairline), 0 18px 40px -24px rgba(0, 0, 0, 0.8), var(--g-inset);
+}
+[data-theme="dark"] .glass-panel--accent {
+  background: linear-gradient(135deg, rgba(75, 120, 238, 0.32) 0%, rgba(24, 31, 50, 0.62) 58%);
+  border-color: rgba(255, 255, 255, 0.16);
+}
+[data-theme="dark"] .glass-opt:hover { background: rgba(255, 255, 255, 0.08); }
+[data-theme="dark"] .glass-opt:active { background: rgba(255, 255, 255, 0.14); }
+[data-theme="dark"] .glass-opt[aria-selected="true"] { background: rgba(107, 148, 255, 0.18); }
+[data-theme="dark"] .glass-input { box-shadow: 0 0 0 1px var(--g-hairline), inset 0 1px 2px rgba(0, 0, 0, 0.35); }
+[data-theme="dark"] .glass-chip--btn[aria-pressed="true"] { background: rgba(107, 148, 255, 0.20); border-color: rgba(125, 162, 255, 0.4); }
+[data-theme="dark"] .glass-btn--primary { color: #fff; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  [data-theme="dark"] .glass-root { --g-fill: rgba(24, 31, 50, 0.95); --g-fill-hover: #1d2740; --g-fill-press: #243050; --g-fill-panel: rgba(20, 27, 44, 0.97); }
+}
+@media (prefers-reduced-transparency: reduce) {
+  [data-theme="dark"] .glass-root { --g-fill: rgba(24, 31, 50, 0.96); --g-fill-hover: #1d2740; --g-fill-press: #243050; --g-fill-panel: #141b2c; }
+}
