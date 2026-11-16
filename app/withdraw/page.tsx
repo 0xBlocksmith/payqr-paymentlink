@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { SlideToConfirm } from "../../components/ui/SlideToConfirm";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
@@ -22,6 +22,8 @@ import { buildUsdcWithdraw, buildUsdcTransfer } from "../../lib/withdraw";
 import { fetchCashoutFee } from "../../lib/pricing";
 import { fetchWithdrawals } from "../../lib/history";
 import { useT } from "../../lib/i18n";
+import { toUserError } from "../../lib/errors";
+import { withdrawFailurePolicy } from "../../lib/withdrawRetry";
 
 // The p2p Cashout widget is a large dependency and only appears when the merchant
 // actually starts a fiat cash-out. Lazy-load it so it is NOT in the withdraw
@@ -62,7 +64,7 @@ export default function Withdraw() {
   const router = useRouter();
   const [done, setDone] = useState("");
   // The screen shown right after the slide: processing -> success / failed.
-  const [result, setResult] = useState<null | { status: "processing" | "success" | "error"; amount: number; dest: string; tx?: string; msg?: string }>(null);
+  const [result, setResult] = useState<null | { status: "processing" | "success" | "error" | "unknown"; amount: number; dest: string; tx?: string; msg?: string; retry?: "whole" | "forward" }>(null);
   const [wdCode, setWdCode] = useState("");          // the currency to withdraw IN
   const [otherOpts, setOtherOpts] = useState([]);    // all countries (+ live flag)
   const [otherOpen, setOtherOpen] = useState(false);
@@ -383,83 +385,91 @@ export default function Withdraw() {
     setUsdcStep("address");
   }
 
-  // Final on-chain USDC send, fired from the confirm dialog.
-  //  • self:     one tx — withdrawUSDC pays out to the merchant's own wallet.
-  //  • external: two sponsored txs — withdrawUSDC pulls the funds into the wallet,
-  //              then a USDC ERC-20 transfer forwards them to the pasted address.
-  //              (The contract can only pay out to msg.sender, so the hop through
-  //              the wallet is required.) Step 1 must fully confirm before step 2,
-  //              or the transfer would race the wallet's incoming balance.
-  async function confirmUsdcWithdraw() {
+  // Final on-chain USDC send. Two steps for an external address:
+  //   1. withdrawUSDC pulls the funds into the merchant's own wallet;
+  //   2. a USDC transfer forwards them on (the contract can only pay msg.sender).
+  // Retry rules (never repeat a money move):
+  //   • a timeout / lost connection is UNCERTAIN → no retry, tell them to check;
+  //   • once step 1 has CONFIRMED, a failed forward is retried as the forward ONLY;
+  //   • nothing confirmed and a definite failure / cancel → safe to start over.
+  const step1Ref = useRef<null | { hash: string; fwd: bigint }>(null);
+
+  async function confirmUsdcWithdraw() { return runUsdcWithdraw("whole"); }
+  async function retryForward() { return runUsdcWithdraw("forward"); }
+
+  async function runUsdcWithdraw(mode: "whole" | "forward") {
     setError("");
     setBusy("usdc");
-    const destLabel = usdcDest === "external" && extAddrValid
+    const external = usdcDest === "external" && extAddrValid;
+    const destLabel = external
       ? `${extAddrTrim.slice(0, 8)}…${extAddrTrim.slice(-6)}`
       : (address ? `${t("tx.toYourWallet")} (${address.slice(0, 6)}…${address.slice(-4)})` : t("tx.toYourWallet"));
     const amountNow = usdcSend.usdc;
     // Open the status page the moment the slide completes — not after the chain.
     setUsdcStep("result");
     setResult({ status: "processing", amount: amountNow, dest: destLabel });
-    let finalHash: string | undefined;
+    let finalHash: string | undefined = step1Ref.current?.hash;
     try {
-      // For an EXTERNAL send, snapshot the wallet's USDC balance BEFORE the
-      // withdraw so step 2 forwards exactly what step 1 actually deposited — not
-      // the gross requested amount. If the contract ever delivered less than
-      // requested (e.g. a fee), forwarding the gross figure would exceed the
-      // wallet balance and revert; forwarding the measured delta can't.
-      const balanceOfAbi = [{
-        type: "function", name: "balanceOf", stateMutability: "view",
-        inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }],
-      }] as const;
-      let balBefore = 0n;
-      if (usdcDest === "external" && extAddrValid && address) {
-        try {
-          balBefore = (await publicClient.readContract({
-            address: USDC_ADDRESS as `0x${string}`, abi: balanceOfAbi,
-            functionName: "balanceOf", args: [address as `0x${string}`],
-          } as any)) as bigint;
-        } catch { balBefore = 0n; }
-      }
+      if (mode === "whole") {
+        step1Ref.current = null;
+        // Snapshot the wallet's USDC BEFORE the withdraw so the forward sends what
+        // step 1 actually deposited (not the gross request, which would revert if
+        // the contract ever delivered less).
+        const balanceOfAbi = [{
+          type: "function", name: "balanceOf", stateMutability: "view",
+          inputs: [{ name: "a", type: "address" }], outputs: [{ type: "uint256" }],
+        }] as const;
+        const readBal = async () => (await publicClient.readContract({
+          address: USDC_ADDRESS as `0x${string}`, abi: balanceOfAbi,
+          functionName: "balanceOf", args: [address as `0x${string}`],
+        } as any)) as bigint;
+        let balBefore = 0n;
+        if (external && address) { try { balBefore = await readBal(); } catch { balBefore = 0n; } }
 
-      // Step 1 — always: pull USDC out of the contract into the merchant's wallet.
-      const { data } = buildUsdcWithdraw({ amountRaw: usdcSend.raw });
-      const hash = await sendTransaction({ to: CONTRACT_ADDRESS, data });
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
-      if (receipt.status === "reverted") throw new Error("Withdrawal failed on-chain.");
-      finalHash = hash;
+        // Step 1 — pull USDC out of the contract into the merchant's wallet.
+        const { data } = buildUsdcWithdraw({ amountRaw: usdcSend.raw });
+        const hash = await sendTransaction({ to: CONTRACT_ADDRESS, data });
+        finalHash = hash;
+        const receipt = await publicClient.waitForTransactionReceipt({ hash });
+        if (receipt.status === "reverted") throw new Error("Withdrawal failed on-chain.");
 
-      if (usdcDest === "external" && extAddrValid) {
-        // Measure what actually landed and forward only that (capped at the
-        // requested amount). Falls back to the requested amount if the read fails.
+        // Step 1 is CONFIRMED from here on. Work out what to forward and remember it,
+        // so a failed forward can be retried without withdrawing again.
         let fwd = usdcSend.raw;
-        if (address) {
+        if (external && address) {
           try {
-            const balAfter = (await publicClient.readContract({
-              address: USDC_ADDRESS as `0x${string}`, abi: balanceOfAbi,
-              functionName: "balanceOf", args: [address as `0x${string}`],
-            } as any)) as bigint;
+            const balAfter = await readBal();
             const delta = balAfter > balBefore ? balAfter - balBefore : 0n;
             if (delta > 0n) fwd = delta < usdcSend.raw ? delta : usdcSend.raw;
-          } catch { /* keep requested amount */ }
+          } catch { /* keep the requested amount */ }
         }
-        // Step 2 — forward the just-withdrawn USDC on to the external address.
-        const xfer = buildUsdcTransfer({ to: extAddrTrim as `0x${string}`, amountRaw: fwd });
+        step1Ref.current = { hash, fwd };
+      }
+
+      if (external) {
+        const s1 = step1Ref.current;
+        if (!s1) throw new Error("No confirmed withdrawal to forward.");
+        const xfer = buildUsdcTransfer({ to: extAddrTrim as `0x${string}`, amountRaw: s1.fwd });
         const xh = await sendTransaction({ to: xfer.to, data: xfer.data });
-        const xrc = await publicClient.waitForTransactionReceipt({ hash: xh });
         finalHash = xh;
+        const xrc = await publicClient.waitForTransactionReceipt({ hash: xh });
         if (xrc.status === "reverted") {
-          // The funds are safe in the merchant's own wallet — only the forward
-          // failed. Tell them plainly so they know the money isn't lost.
-          throw new Error(
-            "Your USDC was withdrawn to your wallet, but forwarding it to the address failed. The funds are safe in your wallet — you can send them again from there."
-          );
+          const e = new Error("forward reverted"); e.name = "ForwardReverted"; throw e;
         }
       }
+      step1Ref.current = null;
       setResult({ status: "success", amount: amountNow, dest: destLabel, tx: finalHash });
       setAmount(""); setExtAddr(""); setUsdcDest("self"); refetch();
-    } catch (err) {
-      console.error(err);
-      setResult({ status: "error", amount: amountNow, dest: destLabel, tx: finalHash, msg: friendlyError(err, "Withdrawal failed. Please try again.") });
+    } catch (err: any) {
+      const forwardReverted = err?.name === "ForwardReverted";
+      const ue = forwardReverted
+        ? { uncertain: false, message: t("wd.fwdFailed") }
+        : toUserError(err, { context: "withdraw", uncertainKey: "err.uncertainWithdraw", fallbackKey: "err.unknown" });
+      // Uncertain → never offer a retry. Otherwise: after step 1 only the forward
+      // may be retried; before it, nothing moved so starting over is safe.
+      const { status, retry } = withdrawFailurePolicy({ uncertain: ue.uncertain, step1Confirmed: !!step1Ref.current, external });
+      setResult({ status, amount: amountNow, dest: destLabel, tx: finalHash, msg: ue.message, retry });
+      refetch();
     } finally {
       setBusy("");
     }
@@ -808,9 +818,12 @@ export default function Withdraw() {
               {result.status === "error" && (
                 <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
               )}
+              {result.status === "unknown" && (
+                <svg viewBox="0 0 24 24" width="40" height="40" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round"><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></svg>
+              )}
             </div>
             <h2 className="wd-res-title">
-              {result.status === "processing" ? t("wd.proc.title") : result.status === "success" ? t("wd.ok.title") : t("wd.err.title")}
+              {result.status === "processing" ? t("wd.proc.title") : result.status === "success" ? t("wd.ok.title") : result.status === "unknown" ? t("wd.unk.title") : t("wd.err.title")}
             </h2>
             <div className="wd-res-amt">{result.amount.toFixed(2)} <span>USDC</span></div>
             {result.status === "processing" && <p className="wd-res-sub">{t("wd.proc.sub")}</p>}
@@ -820,7 +833,7 @@ export default function Withdraw() {
                 <p className="wd-res-hint">{t("wd.ok.hint")}</p>
               </>
             )}
-            {result.status === "error" && <p className="wd-res-sub error">{result.msg}</p>}
+            {(result.status === "error" || result.status === "unknown") && <p className={`wd-res-sub ${result.status === "error" ? "error" : ""}`}>{result.msg}</p>}
             {result.tx && (
               <a className="linklike" href={`${EXPLORER_URL}/tx/${result.tx}`} target="_blank" rel="noopener noreferrer">
                 {t("wd.viewOnExplorer")} ↗
@@ -830,7 +843,11 @@ export default function Withdraw() {
 
           {result.status !== "processing" && (
             <div className="wd-slide">
-              {result.status === "error" && (
+              {result.status === "error" && result.retry === "forward" && (
+                <button className="btn ghost" style={{ marginBottom: 10 }} disabled={!!busy}
+                  onClick={retryForward}>{t("wd.retryForward")}</button>
+              )}
+              {result.status === "error" && result.retry === "whole" && (
                 <button className="btn ghost" style={{ marginBottom: 10 }}
                   onClick={() => { setResult(null); setUsdcStep("confirm"); }}>{t("wd.tryAgain")}</button>
               )}

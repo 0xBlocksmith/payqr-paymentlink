@@ -690,6 +690,20 @@ export async function provisionLinkWallet(params: {
  *  strikes) — PR #104's getLink, NOT the pre-PR#104 order this file used to
  *  assume. Decoding this with the old field order silently reads garbage
  *  (currency as an expiry timestamp, etc.) with no type error to catch it. */
+/** True when a getLink call failed because the link does not exist (the contract
+ *  REVERTS with LinkNotFound — selector 0x3b82cbf1 — instead of returning a zero
+ *  owner). That is "not there (yet)", not a connection problem. */
+export function isLinkNotFound(e: any): boolean {
+  const seen = new Set<any>();
+  for (let x = e; x && !seen.has(x) && seen.size < 8; x = x.cause) {
+    seen.add(x);
+    if (x.data?.errorName === "LinkNotFound") return true;
+    const text = `${x.shortMessage || ""} ${x.message || ""} ${typeof x.data === "string" ? x.data : ""}`;
+    if (/LinkNotFound/.test(text) || /0x3b82cbf1/i.test(text)) return true;
+  }
+  return false;
+}
+
 export async function fetchLink(
   publicClient: any,
   linkId: Hex,

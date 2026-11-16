@@ -216,6 +216,13 @@ export function markPrefsSet(): void {
  * key), the pending-sale banner, and the country/language/onboarding prefs.
  * thirdweb's own disconnect only clears its session, not our app storage.
  */
+const KEEP_ON_LOGOUT = [
+  "payqr.theme",
+  "payqr.myLinks:",                                   // merchant's local link index (links on older contracts rely on it)
+  "payqr.customerRelay",                              // payer relay key
+  "payqr.linkOrder:", "payqr.linkClaim:", "payqr.linkAttempt:", "payqr.linkPending:", // payer in-flight link payments
+];
+
 export function clearLocalUserData(): void {
   const exact = [
     KEY, LANG_KEY, DONE_KEY,
@@ -234,10 +241,12 @@ export function clearLocalUserData(): void {
     const toRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      // Every app key (relay identities, merchant profile, ledgers, pending links,
-      // setup state, last-seen address …) — not just the ones listed above, so a
-      // new key can never be forgotten here. Only the appearance choice survives.
-      if (k && (k.startsWith("payqr.") || k.startsWith("@P2PME:")) && k !== "payqr.theme") toRemove.push(k);
+      // Every MERCHANT key (relay identities, profile, ledgers, pending state,
+      // setup, last-seen address …) so a new key can never be forgotten here.
+      // Kept on purpose: the appearance choice, the local link index, and the
+      // PAYER's own state — the pay page shares this origin, and a customer's relay
+      // key and in-flight link order must survive someone else logging out.
+      if (k && (k.startsWith("payqr.") || k.startsWith("@P2PME:")) && !KEEP_ON_LOGOUT.some((p) => k === p || k.startsWith(p))) toRemove.push(k);
     }
     toRemove.forEach((k) => localStorage.removeItem(k));
   } catch { /* ignore */ }

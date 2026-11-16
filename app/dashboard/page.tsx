@@ -23,7 +23,7 @@ import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc } from "../../lib/contract";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
 import { useHistory } from "../../components/useHistory";
-import { loadCountry, fmtFiat, saveCountry, COUNTRIES } from "../../lib/countries";
+import { loadCountry, fmtFiat, saveCountry, COUNTRIES, clearLocalUserData } from "../../lib/countries";
 import { rememberedLinks } from "../../lib/paymentLinks";
 import { computeSetup, dismissSetup, setupDismissed } from "../../lib/setup";
 import { resolveStatus } from "../../lib/status";
@@ -45,7 +45,9 @@ export default function Dashboard() {
   const [tourForce, setTourForce] = useState(false);
   // The wallet is thirdweb's own screen, exactly as shipped (no custom UI of ours).
   const detailsModal = useWalletDetailsModal();
-  const openWallet = () => detailsModal.open({ client: thirdwebClient });
+  // thirdweb's own Disconnect button signs out without going through our logout, so
+  // run the same device cleanup when it does (data wipe only — no UI of ours).
+  const openWallet = () => detailsModal.open({ client: thirdwebClient, onDisconnect: () => clearLocalUserData() });
   const [wantWallet, setWantWallet] = useState(false); // ?wallet=1 deep link
   const [toast, setToast] = useState("");       // settlement-ready banner
   const [welcome, setWelcome] = useState(false); // just registered

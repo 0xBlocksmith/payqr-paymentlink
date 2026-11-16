@@ -110,6 +110,7 @@ describe("logout wipes the session (shared-device / hijack hygiene)", () => {
     ls = store({
       "payqr.relay:0xabc": "PRIVATE-KEY", "payqr.merchantProfile:0xabc": "{}", "payqr.usdcLedger:0xabc": "[]",
       "payqr.lastAddr": "0xabc", "payqr.country": "india", "payqr.theme": "dark", "other.site": "keep",
+      "payqr.customerRelay": "PAYER-KEY", "payqr.linkOrder:0xlink": "{}", "payqr.linkClaim:42": "1", "payqr.myLinks:0xabc": "[]",
     });
     ss = store({ "payqr.stepUp": '{"addr":"0xabc","at":1}' });
     vi.stubGlobal("localStorage", ls);
@@ -118,7 +119,7 @@ describe("logout wipes the session (shared-device / hijack hygiene)", () => {
   });
   afterEach(() => vi.unstubAllGlobals());
 
-  it("removes keys, profile, ledger and 2FA marker; keeps only the theme and unrelated data", () => {
+  it("removes merchant keys, profile, ledger and 2FA marker; keeps the theme, link index, payer keys and unrelated data", () => {
     clearLocalUserData();
     expect(ls._m.has("payqr.relay:0xabc")).toBe(false);
     expect(ls._m.has("payqr.merchantProfile:0xabc")).toBe(false);
@@ -126,6 +127,11 @@ describe("logout wipes the session (shared-device / hijack hygiene)", () => {
     expect(ls._m.has("payqr.lastAddr")).toBe(false);
     expect(ss._m.size).toBe(0);
     expect(ls._m.get("payqr.theme")).toBe("dark");
+    // a payer on the same origin keeps their own relay key and in-flight link order
+    expect(ls._m.get("payqr.customerRelay")).toBe("PAYER-KEY");
+    expect(ls._m.has("payqr.linkOrder:0xlink")).toBe(true);
+    expect(ls._m.has("payqr.linkClaim:42")).toBe(true);
+    expect(ls._m.has("payqr.myLinks:0xabc")).toBe(true);
     expect(ls._m.get("other.site")).toBe("keep");
   });
 });

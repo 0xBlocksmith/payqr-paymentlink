@@ -9,8 +9,11 @@ import { PHASE_DEVELOPMENT_SERVER, PHASE_PRODUCTION_BUILD } from "next/constants
  */
 function buildId() {
   if (process.env.PAYQR_BUILD_ID) return process.env.PAYQR_BUILD_ID;
-  const ci = process.env.COMMIT_REF || process.env.GITHUB_SHA || process.env.VERCEL_GIT_COMMIT_SHA || "";
-  const id = ci ? ci.slice(0, 12) : `local-${Date.now()}`;
+  // DEPLOY_ID is unique per Netlify DEPLOY (not per commit), so redeploying the same
+  // commit with changed NEXT_PUBLIC_* env vars — baked into the bundle — still
+  // changes the build id and every client is prompted to update.
+  const ci = process.env.DEPLOY_ID || process.env.COMMIT_REF || process.env.GITHUB_SHA || process.env.VERCEL_GIT_COMMIT_SHA || "";
+  const id = ci ? ci.slice(0, 24) : `local-${Date.now()}`;
   process.env.PAYQR_BUILD_ID = id;
   return id;
 }

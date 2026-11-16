@@ -21,8 +21,23 @@ export function PullToRefresh({ onRefresh, children }: { onRefresh: () => Promis
   cb.current = onRefresh;
 
   useEffect(() => {
+    /** A drag that starts inside something that scrolls on its own, inside an open
+     *  overlay / dialog, or while the user is typing, belongs to THAT — never to a
+     *  page refresh (which on Disputes would remount a half-filled support widget). */
+    function ownsGesture(target: EventTarget | null): boolean {
+      const ae = document.activeElement as HTMLElement | null;
+      if (ae && (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA" || ae.isContentEditable)) return true;
+      for (let el = target as HTMLElement | null; el && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+        if (el.matches?.('[role="dialog"], [aria-modal="true"], .sheet, .confirm-overlay, .sm-overlay, .su-layer')) return true;
+        const cs = getComputedStyle(el);
+        if (cs.position === "fixed") return true;                       // overlays, sheets, bars
+        const oy = cs.overflowY;
+        if ((oy === "auto" || oy === "scroll") && el.scrollHeight > el.clientHeight + 1) return true;
+      }
+      return false;
+    }
     function start(e: TouchEvent) {
-      if (busyRef.current || window.scrollY > 0) { startY.current = null; return; }
+      if (busyRef.current || window.scrollY > 0 || ownsGesture(e.target)) { startY.current = null; return; }
       startY.current = e.touches[0].clientY;
     }
     function move(e: TouchEvent) {

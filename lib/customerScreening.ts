@@ -47,7 +47,6 @@
 import type { FraudEngineSigner } from "@p2pdotme/sdk/fraud-engine";
 import { SCREENING_CONFIG, SUPPORT_ORIGIN_APP } from "./p2p";
 import { getCustomerSigner } from "./customerRelayIdentity";
-import { payerTranslate, detectPayerLang } from "./payerI18n";
 
 /** True when this deployment has fraud-engine credentials configured. */
 export const SCREENING_ENABLED = Boolean(SCREENING_CONFIG);
@@ -139,15 +138,8 @@ export async function placeScreenedOrder(
   }
 
   if (screening?.approved === false) {
-    const raw = screening.message || screening.reason || "";
-    // "We could not confirm your previous payments" is the engine's answer when
-    // the customer's network/IP has been blocked after several transactions. Say
-    // that, and tell them what to do (switch network), in their own language.
-    const blocked = /previous payments?|could not confirm|ip\b|blocked/i.test(raw);
     throw new ScreeningRejected(
-      blocked
-        ? payerTranslate("pl.screenBlocked", detectPayerLang())
-        : raw || "This payment could not be approved. Please contact the merchant."
+      screening.message || screening.reason || "This payment could not be approved. Please contact the merchant."
     );
   }
   // The widget answers this with its own liveness step; a link has none. Placing

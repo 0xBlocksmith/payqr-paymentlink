@@ -6,7 +6,6 @@ import { usePublicClient } from "wagmi";
 import { Nav } from "../../../components/Nav";
 import { Splash } from "../../../components/Splash";
 import { useMerchant } from "../../../components/useMerchant";
-import { useRelayIdentity } from "../../../components/useRelayIdentity";
 import { CONTRACT_ADDRESS, LINK_ROUTER_ADDRESS, INTEGRATOR_ABI, currencyFromBytes32 } from "../../../lib/contract";
 import { toUserError, ValidationError, type UserError } from "../../../lib/errors";
 import { savePendingLink, loadPendingLink, clearPendingLink, type PendingLink } from "../../../lib/pendingLink";
@@ -16,14 +15,13 @@ import { ErrorPanel } from "../../../components/ui/ErrorPanel";
 import { SettlementNote } from "../../../components/ui/SettlementNote";
 import { useCopy } from "../../../components/useCopy";
 import { fill, fmtLockWindow } from "../../../lib/format";
-import { fetchLink } from "../../../lib/paymentLinks";
+import { fetchLink, isLinkNotFound } from "../../../lib/paymentLinks";
 import { usePriceConfig } from "../../../components/usePriceConfig";
 import { stringToHex } from "viem";
 import { useReadContract } from "wagmi";
 import { countryForCurrency, fmtFiat, COUNTRIES } from "../../../lib/countries";
 import { fetchSupportedCurrencies } from "../../../lib/p2p";
 import { fetchPriceConfig, usdcForFiat, fiatForUsdc, usdcForUsdcTarget, minimumFiat, minimumUsdc } from "../../../lib/pricing";
-import { encryptToSelf } from "../../../lib/payoutCrypto";
 import {
   buildCreateLinkCalldata,
   buildRegisterAgentCalldata,
@@ -63,7 +61,6 @@ export default function CreatePaymentLink() {
   const router = useRouter();
   const { ready, authenticated, address, isRegistered, sendBatchTransaction, signTypedData } = useMerchant();
   const { t, lang } = useT();
-  const { getIdentity } = useRelayIdentity();
   const publicClient = usePublicClient();
 
   useEffect(() => {
@@ -208,8 +205,6 @@ export default function CreatePaymentLink() {
       ? fill(t("link.paysVaries"), { fiat: fmtFiat(country, typed), usdc: (Number(usdc6) / 1e6).toFixed(2) })
       : fill(t("link.paysFixed"), { fiat: fmtFiat(country, typed), usdc: (Number(usdc6) / 1e6).toFixed(2) });
   })();
-  const [description, setDescription] = useState("");
-  const descBytes = new TextEncoder().encode(description).length;
   const [singleUse, setSingleUse] = useState(true);
   const [expiresInDays, setExpiresInDays] = useState<"" | "1" | "7" | "30">("7");
   const [busy, setBusy] = useState(false);
@@ -327,27 +322,6 @@ export default function CreatePaymentLink() {
         fixedPrice = { amount6: fixedLocal6, currency, signature };
       }
 
-      // Encrypt the description to the merchant's OWN relay key before it ever
-      // reaches calldata — LinkCreated emits encryptedConfig as a PUBLIC event
-      // field, so sending it as plaintext (the previous behavior here) made
-      // any order reference or note in the description permanently
-      // world-readable on-chain. Self-recipient, same primitive as the
-      // merchant's payout handle (lib/payoutCrypto.ts) — only the merchant's
-      // own browser (or another device after re-entering it) can decrypt it
-      // back; nothing downstream currently decrypts and shows it, but at
-      // least it's no longer plaintext meanwhile.
-      let encryptedConfig: `0x${string}` | undefined;
-      // Encrypted, the description grows past the contract's 1,024-byte limit
-      // (FieldTooLong) at roughly 250 bytes of text — about 85 characters in
-      // Hindi. Refuse it here, before the merchant signs anything.
-      if (description && new TextEncoder().encode(description).length > 250) {
-        throw new ValidationError("That description is too long — please shorten it.");
-      }
-      if (description) {
-        const identity = await getIdentity();
-        encryptedConfig = await encryptToSelf(description, identity, "Could not secure the description. Please try again.");
-      }
-
       // 1 — Mint the link's own funds-free AA wallet from the worker. Must
       // happen BEFORE createLink: registerAgent needs its address, and the
       // worker's own ordering contract requires createLink + registerAgent to
@@ -373,7 +347,6 @@ export default function CreatePaymentLink() {
             currencyCode: linkCurrency,
             maxUses: singleUse ? 1 : 0,
             expiresAt,
-            encryptedConfig,
           }),
         },
         { to: LINK_ROUTER_ADDRESS as `0x${string}`, data: registerData },
@@ -450,8 +423,10 @@ export default function CreatePaymentLink() {
       } else if (!silent) {
         setCheckMsg(t("link.notFoundYet"));
       }
-    } catch {
-      if (!silent) setCheckMsg(t("err.network"));
+    } catch (e) {
+      // getLink REVERTS (LinkNotFound) for an id that is not on chain — that is
+      // "not there yet", not a connection problem.
+      if (!silent) setCheckMsg(t(isLinkNotFound(e) ? "link.notFoundYet" : "err.network"));
     }
   }
 
@@ -585,7 +560,7 @@ ${created.url}`;
             </button>
           </div>
           <button className="linklike" style={{ margin: "10px auto 0", display: "block" }}
-            onClick={() => { setCreated(null); setAmountFiat(""); setDescription(""); setPosterDataUrl(null); }}>
+            onClick={() => { setCreated(null); setAmountFiat(""); setPosterDataUrl(null); }}>
             {t("link.another")}
           </button>
         </div>

@@ -3004,6 +3004,7 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
 .wd-res-ico { width: 96px; height: 96px; border-radius: 50%; display: grid; place-items: center; margin-bottom: 18px; position: relative; }
 .wd-res-ico.processing { background: rgba(75, 120, 238, 0.12); border: 1px solid rgba(75, 120, 238, 0.3); }
 .wd-res-ico.success { background: var(--success-soft, #e3f8ef); color: var(--success, #0f9d6f); animation: wdPop 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.3); }
+.wd-res-ico.unknown { background: var(--warn-soft, #fff4e0); color: var(--warn, #b45309); animation: wdPop 0.35s ease-out; }
 .wd-res-ico.error { background: var(--danger-soft, #fdeceb); color: var(--danger, #d92d20); animation: wdPop 0.35s ease-out; }
 .wd-res-spin { width: 44px; height: 44px; border-radius: 50%; border: 4px solid rgba(75, 120, 238, 0.22); border-top-color: #2f55d4; animation: slideSpin 0.8s linear infinite; }
 .wd-check { stroke-dasharray: 30; stroke-dashoffset: 30; animation: wdDraw 0.45s 0.2s ease-out forwards; }

@@ -737,13 +737,25 @@ export default function PosQr() {
         </ConfirmDialog>
 
         {/* Couldn't start: ErrorPanel never shows raw SDK/RPC text. */}
-        {payError && !liveWidget && !done && (
+        {payError && !liveWidget && !done && (typeof payError === "object" && payError.uncertain ? (
+          /* The send MAY have gone through (e.g. a bundler timeout throws before any
+             record exists). Offering Retry here is the double-order path, so show the
+             "checking" state instead: look at Transactions first. */
+          <div className="panel" style={{ textAlign: "center" }}>
+            <h2>{t("qr.checkingTitle")}</h2>
+            <p className="muted" style={{ margin: "8px 0 4px" }}>{t("err.uncertainOrder")}</p>
+            <div className="recv-actions" style={{ marginTop: 14 }}>
+              <button className="btn ghost" onClick={() => setPayError("")}>{t("ui.dismiss")}</button>
+              <Link className="btn" href="/transactions">{t("wd.viewTx")}</Link>
+            </div>
+          </div>
+        ) : (
           <div className="panel" style={{ textAlign: "center" }}>
             <h2>{t("qr.couldntStart")}</h2>
             <ErrorPanel error={payError} />
             <button className="btn" style={{ width: "100%" }} onClick={() => setPayError("")}>{t("ui.retry")}</button>
           </div>
-        )}
+        ))}
 
         {/* Payment received - what arrived, WHERE it is, and WHEN it is withdrawable. */}
         {done && (

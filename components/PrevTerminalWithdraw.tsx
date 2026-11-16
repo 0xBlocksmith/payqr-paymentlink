@@ -19,8 +19,7 @@
  *
  * Scope is deliberately USDC-to-own-wallet only (withdrawUSDC pays msg.sender).
  *
- * SAFETY (same rules as /withdraw): step-up verification, an explicit
- * confirmation, a synchronous lock against double submission, receipt wait with a
+ * SAFETY (same rules as /withdraw): an explicit confirmation, a synchronous lock against double submission, receipt wait with a
  * timeout that reports "unknown" rather than "failed", and NO automatic retry.
  */
 import { useEffect, useState } from "react";
