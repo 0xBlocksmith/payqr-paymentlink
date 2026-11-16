@@ -3026,7 +3026,7 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
 :root { --card-r: 20px; --card-pad: 16px; --card-gap: 12px; }
 
 .card, .pl-card, .set-card, .set-group, .dash-empty, .recent-list, .bal, .bal.glass-card,
-.strip > div, .next-avail, .hist-row, .quick-item,
+.strip > div, .next-avail, .quick-item,
 .wd-hero, .wd-amt, .wd-card, .wd-bal-box, .wd-locked, .wd-maturity, .wd-confirm-card,
 .wd-to, .wd-opt, .wd-dest-btn, .wd-payout-opt {
   border-radius: var(--card-r) !important;
@@ -3063,3 +3063,26 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
   display: flex; align-items: center; gap: 10px; padding: 14px var(--card-pad); margin-bottom: var(--card-gap);
   border-radius: var(--card-r); border: 1px solid var(--warn); background: var(--warn-soft);
 }
+
+/* Transactions list = Home's "Recent payments": ONE card, rows split by hairlines. */
+.hist-list {
+  display: block !important; padding: 0 var(--card-pad) !important; overflow: hidden;
+  border-radius: var(--card-r) !important; background: var(--gl-fill) !important;
+  border: 1px solid var(--gl-edge) !important; box-shadow: var(--gl-shadow) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(170%); backdrop-filter: blur(18px) saturate(170%);
+}
+.hist-row-wrap { border-bottom: 1px solid var(--border) !important; }
+.hist-row-wrap:last-child { border-bottom: 0 !important; }
+.hist-row, .hist-row:hover {
+  background: transparent !important; border: 0 !important; box-shadow: none !important; border-radius: 0 !important;
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  padding: 13px 0 !important; gap: 12px;
+}
+.hist-ico { width: 40px; height: 40px; border-radius: 13px; }
+.hist-fiat, .rr-amt { font-size: 15px; font-weight: 800; letter-spacing: -0.2px; }
+.hist-crypto, .rr-sub { font-size: 12px; }
+/* the withdraw "unlocking soon" list follows the same pattern */
+.wd-locked-row { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.wd-locked-row:last-child { border-bottom: 0; }
+/* summary cards sit where Home's balance card sits */
+.screen > .bal.glass-card { margin-top: 0; }

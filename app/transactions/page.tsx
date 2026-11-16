@@ -329,16 +329,14 @@ export default function Transactions() {
         <h1 className="page-h">{t("tx.title")}</h1>
 
         {/* report summary for the chosen range */}
-        <div className="strip">
-          <div>
-            <span className="muted">{t("tx.received")} ({received.length} sale{received.length === 1 ? "" : "s"})</span>
-            <strong>{totalFiat != null ? `≈ ${fmtFiat(country, totalFiat, { decimals: 2 })}` : `${totalUsdc.toFixed(2)} USDC`}</strong>
+        {/* Same balance card as Home: one big figure, the USDC underneath. */}
+        <section className="bal glass-card" aria-label={t("tx.received")}>
+          <div className="bal-main-label">{t("tx.received")} · {received.length}</div>
+          <div className="bal-main">
+            {totalFiat != null ? `≈ ${fmtFiat(country, totalFiat, { decimals: 2 })}` : `$${totalUsdc.toFixed(2)}`}
           </div>
-          <div>
-            <span className="muted">{t("tx.inUsdc")}</span>
-            <strong>{totalUsdc.toFixed(2)}</strong>
-          </div>
-        </div>
+          <div className="bal-fiat">{totalUsdc.toFixed(2)} USDC</div>
+        </section>
 
         {nextBucket && (
           <section className="next-avail" aria-label={t("tx.nextAvail")}>

@@ -595,22 +595,25 @@ export default function Withdraw() {
             what they HAVE (account balance = everything in the contract) vs what
             they can withdraw RIGHT NOW (matured/unlocked). The gap is funds still
             in the settlement window. */}
-        <div className="wd-balances">
-          <div className="wd-bal-box">
-            <div className="wd-bal-label">{t("wd.accountBalance")}</div>
-            <div className="wd-bal-amt">${shownAccountNum.toFixed(2)}</div>
-            <div className="wd-bal-sub">
-              {shownAccountFiat != null ? `≈ ${fmtFiat(country, shownAccountFiat)} ${country.code}` : "≈ —"}
+        {/* Same balance card as Home: what can be withdrawn now, big; the
+            account total and what is still settling in the row below. */}
+        <section className="bal glass-card" aria-label={t("wd.withdrawable")}>
+          <div className="bal-main-label">{t("wd.withdrawable")}</div>
+          <div className="bal-main">${shownAvailNum.toFixed(2)} <span style={{ fontSize: 14, fontWeight: 600, color: "var(--muted)" }}>USDC</span></div>
+          <div className="bal-fiat">{shownAvailFiat != null ? `≈ ${fmtFiat(country, shownAvailFiat)} ${country.code}` : "≈ —"}</div>
+          <div className="bal-row">
+            <div className="bal-cell">
+              <div className="bal-cell-label">{t("wd.accountBalance")}</div>
+              <div className="bal-cell-amt">${shownAccountNum.toFixed(2)}</div>
+              <div className="bal-cell-hint">{shownAccountFiat != null ? `≈ ${fmtFiat(country, shownAccountFiat)}` : "≈ —"}</div>
+            </div>
+            <div className="bal-cell">
+              <div className="bal-cell-label">{t("dash2.settling")}</div>
+              <div className="bal-cell-amt">${pendingNum.toFixed(2)}</div>
+              <div className="bal-cell-hint">{t("dash2.settlingHint")}</div>
             </div>
           </div>
-          <div className="wd-bal-box">
-            <div className="wd-bal-label">{t("wd.withdrawable")}</div>
-            <div className="wd-bal-amt">${shownAvailNum.toFixed(2)}</div>
-            <div className="wd-bal-sub">
-              {shownAvailFiat != null ? `≈ ${fmtFiat(country, shownAvailFiat)} ${country.code}` : "≈ —"}
-            </div>
-          </div>
-        </div>
+        </section>
         {prevTotalNum > 0 && (
           <p className="muted" style={{ fontSize: 12.5, margin: "6px 2px 0" }}>
             {fill(t(prevBal.rows.length > 1 ? "wd.prevHintMany" : "wd.prevHintOne"), { here: accountNum.toFixed(2), prev: prevTotalNum.toFixed(2) })}
