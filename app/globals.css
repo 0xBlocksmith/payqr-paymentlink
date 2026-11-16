@@ -3017,3 +3017,105 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
 .wd-res-sub.error { color: var(--danger, #d92d20); }
 .wd-res-hint { max-width: 300px; margin: 0 0 10px; font-size: 12.5px; color: var(--faint, #8a97b3); }
 @media (prefers-reduced-motion: reduce) { .wd-res-ico, .wd-check { animation: none; stroke-dashoffset: 0; } }
+
+/* ═══ ONE design language for every page ════════════════════════════════
+   Same card surface, corner radius, padding and spacing on Home, Transactions,
+   Withdraw, Settings, Payment Links and Disputes. Older page-specific rules
+   (some with dark-theme overrides of higher specificity) are normalised here,
+   which is why the surface properties are marked !important. */
+:root { --card-r: 20px; --card-pad: 16px; --card-gap: 12px; }
+
+.card, .pl-card, .set-card, .set-group, .dash-empty, .recent-list, .bal, .bal.glass-card,
+.strip > div, .next-avail, .quick-item,
+.wd-hero, .wd-amt, .wd-card, .wd-bal-box, .wd-locked, .wd-maturity, .wd-confirm-card,
+.wd-to, .wd-opt, .wd-dest-btn, .wd-payout-opt {
+  border-radius: var(--card-r) !important;
+  background: var(--gl-fill) !important;
+  border: 1px solid var(--gl-edge) !important;
+  box-shadow: var(--gl-shadow) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  backdrop-filter: blur(18px) saturate(170%);
+}
+/* selected option keeps its brand outline */
+.wd-opt.sel, .wd-payout-opt.sel { border-color: rgba(75, 120, 238, 0.7) !important; box-shadow: 0 0 0 2px rgba(75, 120, 238, 0.25) !important; }
+
+/* panel padding */
+.strip > div, .next-avail, .wd-bal-box, .wd-card, .wd-locked, .wd-maturity, .dash-empty, .wd-hero, .wd-amt {
+  padding: var(--card-pad) !important;
+}
+/* stacked spacing */
+.strip, .wd-balances { gap: var(--card-gap); margin-top: 0; }
+.strip > div { flex: 1; }
+.hist-list { gap: var(--card-gap); }
+.wd-card, .wd-locked, .wd-maturity, .next-avail, .wd-amt, .wd-confirm-card { margin-top: var(--card-gap) !important; }
+.wd-balances + * , .strip + * { margin-top: var(--card-gap); }
+
+/* one heading style (the dashboard keeps its logo row instead) */
+.page-h, .wd-head h1, .pl-h1 {
+  margin: 4px 0 16px; text-align: center; font-size: 24px; font-weight: 700; letter-spacing: -0.3px; line-height: 1.2;
+}
+.wd-head { margin-bottom: 16px; }
+.wd-head h1, .pl-top .pl-h1 { margin: 0; }
+.pl-top { margin-bottom: 16px; }
+
+/* warning card: same shape, warning colours */
+.wd-inflight {
+  display: flex; align-items: center; gap: 10px; padding: 14px var(--card-pad); margin-bottom: var(--card-gap);
+  border-radius: var(--card-r); border: 1px solid var(--warn); background: var(--warn-soft);
+}
+
+/* Transactions list = Home's "Recent payments": ONE card, rows split by hairlines. */
+.hist-list {
+  display: block !important; padding: 0 var(--card-pad) !important; overflow: hidden;
+  border-radius: var(--card-r) !important; background: var(--gl-fill) !important;
+  border: 1px solid var(--gl-edge) !important; box-shadow: var(--gl-shadow) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(170%); backdrop-filter: blur(18px) saturate(170%);
+}
+.hist-row-wrap { border-bottom: 1px solid var(--border) !important; }
+.hist-row-wrap:last-child { border-bottom: 0 !important; }
+.hist-row, .hist-row:hover {
+  background: transparent !important; border: 0 !important; box-shadow: none !important; border-radius: 0 !important;
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  padding: 13px 0 !important; gap: 12px;
+}
+.hist-ico { width: 40px; height: 40px; border-radius: 13px; }
+.hist-fiat, .rr-amt { font-size: 15px; font-weight: 800; letter-spacing: -0.2px; }
+.hist-crypto, .rr-sub { font-size: 12px; }
+/* the withdraw "unlocking soon" list follows the same pattern */
+.wd-locked-row { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.wd-locked-row:last-child { border-bottom: 0; }
+/* summary cards sit where Home's balance card sits */
+.screen > .bal.glass-card { margin-top: 0; }
+
+/* ═══ Page headers: identical on every page ═══════════════════════════════
+   Same box (44px tall, 16px below), same size, centred; the Withdraw back
+   button sits inside the same box, so the title never moves between pages. */
+.page-h, .wd-head h1, .pl-top .pl-h1 {
+  font-size: 22px !important; font-weight: 700 !important; letter-spacing: -0.3px; line-height: 1.2; text-align: center;
+}
+.page-h { display: flex; align-items: center; justify-content: center; min-height: 44px; margin: 0 0 16px !important; }
+.wd-head { min-height: 44px; margin: 0 0 16px !important; }
+.wd-head h1, .pl-top .pl-h1 { margin: 0 !important; }
+.pl-top .pl-h1 { min-height: 44px; display: flex; align-items: center; }
+.wd-back-big { width: 44px; height: 44px; }
+
+/* ═══ Withdraw at the same scale as Home / Transactions ═══════════════════ */
+.wd-amt-field { font-size: 34px !important; }             /* = the balance figure */
+.wd-amt-sym { font-size: 17px; }
+.wd-confirm-amt, .wd-res-amt { font-size: 34px !important; }
+.wd-confirm-amt span, .wd-res-amt span { font-size: 14px !important; }
+.wd-res-ico { width: 72px !important; height: 72px !important; margin-bottom: 14px !important; }
+.wd-res-title { font-size: 18px !important; }
+.wd-pct { min-height: 40px !important; font-size: 13.5px !important; }
+.wd-dest-btn { min-height: 56px !important; }
+.wd-dest-txt b { font-size: 14px; }
+.wd-slide .btn, .wd-go { min-height: 50px !important; font-size: 15px !important; }
+.slide { height: 56px !important; }
+.slide-thumb { width: 48px !important; height: 48px !important; }
+.slide-label { font-size: 14px !important; padding-left: 48px !important; }
+
+/* ═══ Disputes & support widget fitted to the app's scale ═════════════════ */
+.widget-fit { zoom: 0.9; }
+
+/* Withdraw: Continue sits right under the input card (not pinned to the bottom). */
+.wd-continue { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 50px; margin-top: 14px; border-radius: 999px; font-size: 15px; font-weight: 700; }

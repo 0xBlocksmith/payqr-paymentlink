@@ -10,6 +10,8 @@ import { PullToRefresh } from "../../components/ui/PullToRefresh";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useReadContract, usePublicClient } from "wagmi";
+import { useQueryClient } from "@tanstack/react-query";
+import { historyQuery } from "../../components/useHistory";
 import { Nav } from "../../components/Nav";
 import { useMerchant } from "../../components/useMerchant";
 import { Splash } from "../../components/Splash";
@@ -158,44 +160,56 @@ export default function Transactions() {
   const { proxies } = useMerchantProxies(address);
   const proxyKey = (proxies ?? []).join(",");
 
+  const queryClient = useQueryClient();
+  const byTime = (a, b) => b.placedAt - a.placedAt;
+
+  // Paint INSTANTLY from the shared history cache (Home loads the same query),
+  // instead of a spinner while the subgraph is asked again.
+  useEffect(() => {
+    if (!address || !proxies) return;
+    const cached = queryClient.getQueryData(historyQuery(address, proxies).queryKey) as any[] | undefined;
+    if (cached?.length) {
+      setRows((cur) => (cur.length ? cur : cached.map((r) => ({ ...r, kind: "payment" })).sort(byTime)));
+      setLoaded(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, proxyKey]);
+
   const refresh = useCallback(async () => {
     if (!address || !proxies) return;
+    // All three sources start AT ONCE and each one updates the list the moment
+    // it answers — the list never waits for the slowest (the on-chain scan):
+    //   payments  (shared cached query — instant when Home already loaded it)
+    //   fiat withdrawals (subgraph)
+    //   USDC withdrawals (chain events + this device's ledger)
+    const replace = (kind: string, next: any[]) =>
+      setRows((cur) => [...cur.filter((r) => r.kind !== kind), ...next].sort(byTime));
+    const paymentsP = queryClient.fetchQuery(historyQuery(address, proxies)) as Promise<any[]>;
+    const withdrawalsP = proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([]);
+    const chainP = publicClient
+      ? fetchChainWithdrawals(publicClient, address).then((r) => ({ ok: true, r }), (e) => { console.error(e); return { ok: false, r: [] }; })
+      : Promise.resolve({ ok: true, r: [] });
     try {
-      // Payments (BUY orders — keyed by the merchant for POS sales, by the
-      // proxy for payment-link sales) + fiat withdrawals (SELL orders, keyed by
-      // the proxy). Merge into one timeline.
-      const [payments, withdrawals] = await Promise.all([
-        fetchHistory(address, proxies),
-        proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([]),
-      ]);
-      // USDC withdrawals create NO subgraph order, so they come from the chain's
-      // WithdrawalUSDC events merged with this device's ledger (one row per
-      // withdrawal, de-duplicated by tx hash). A failed chain read must not hide
-      // the ledger or the rest of the list — it only flags the list as possibly
-      // incomplete.
-      let chainWd = [];
-      let scanFailed = false;
-      try {
-        if (publicClient) chainWd = await fetchChainWithdrawals(publicClient, address);
-      } catch (e) { console.error(e); scanFailed = true; }
-      const usdcWd = mergeUsdcWithdrawals(chainWd, loadLedger(address));
-      const merged = [...payments.map((r) => ({ ...r, kind: "payment" })), ...withdrawals, ...usdcWd]
-        .sort((a, b) => b.placedAt - a.placedAt);
-      setRows(merged);
-      setWdScanFailed(scanFailed);
-      setLoadError(false);
-    } catch (e) {
       // fetchHistory/fetchWithdrawals throw on network AND subgraph faults so a
-      // failed poll never wipes real rows. Keep the last good list; only flag
-      // the failure so an EMPTY list can say "couldn't load" instead of the
-      // misleading "No transactions yet".
+      // failed poll never wipes real rows: keep the last good list and only flag
+      // the failure, so an EMPTY list says "couldn't load", not "no transactions".
+      const payments = await paymentsP;
+      replace("payment", payments.map((r) => ({ ...r, kind: "payment" })));
+      setLoadError(false);
+      setLoaded(true);
+      replace("withdraw", await withdrawalsP);
+    } catch (e) {
       console.error(e);
       setLoadError(true);
+    } finally {
+      setLoaded(true);
     }
-    finally { setLoaded(true); }
+    const chain = await chainP;
+    replace("usdc_withdraw", mergeUsdcWithdrawals(chain.r as any[], loadLedger(address)));
+    setWdScanFailed(!chain.ok);
     // proxyKey stands in for proxies: same content, stable identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address, proxyKey, publicClient]);
+  }, [address, proxyKey, publicClient, queryClient]);
 
   useEffect(() => {
     refresh();
@@ -326,22 +340,14 @@ export default function Transactions() {
     <PullToRefresh onRefresh={async () => { await refresh(); }}>
       <Nav back />
       <div className="screen">
-        <h1 style={{ textAlign: "center", marginBottom: 2 }}>{t("tx.title")}</h1>
-        <p className="muted" style={{ textAlign: "center", fontSize: 13, marginBottom: 14 }}>
-          {t("tx.subtitle")}
-        </p>
+        <h1 className="page-h">{t("tx.title")}</h1>
 
         {/* report summary for the chosen range */}
-        <div className="strip" style={{ marginTop: 12 }}>
-          <div>
-            <span className="muted">{t("tx.received")} ({received.length} sale{received.length === 1 ? "" : "s"})</span>
-            <strong>{totalFiat != null ? `≈ ${fmtFiat(country, totalFiat, { decimals: 2 })}` : `${totalUsdc.toFixed(2)} USDC`}</strong>
-          </div>
-          <div>
-            <span className="muted">{t("tx.inUsdc")}</span>
-            <strong>{totalUsdc.toFixed(2)}</strong>
-          </div>
-        </div>
+        {/* Same balance card as Home: the total received, in USDC only. */}
+        <section className="bal glass-card" aria-label={t("tx.received")}>
+          <div className="bal-main-label">{t("tx.received")} · {received.length}</div>
+          <div className="bal-main">${totalUsdc.toFixed(2)} <span style={{ fontSize: 14, fontWeight: 600, color: "var(--muted)" }}>USDC</span></div>
+        </section>
 
         {nextBucket && (
           <section className="next-avail" aria-label={t("tx.nextAvail")}>

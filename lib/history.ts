@@ -106,28 +106,61 @@ async function fetchPayqrOrderIds(
  */
 export async function fetchHistory(address, proxies?: string | string[]) {
   if (!address || !isAddress(address)) return [];
+  const users = addrList(address, proxies);
+  const LIMIT = 200;
+  const FIELDS = "orderId status usdcAmount placedAt completedAt transactionHash userAddress disputeStatus currency";
 
+  // The PayQR scope (which order ids belong to PayQR) and the merchant's newest
+  // orders are fetched IN PARALLEL — one round trip instead of two in a row —
+  // and the orders are then filtered to the scope. Only if that page was full
+  // AND some scoped orders are missing from it (orders from other apps crowded
+  // it) do we fall back to asking for the scoped ids explicitly, so the result
+  // is the same as the old two-step query.
+  const scopedP = fetchPayqrOrderIds(address, proxies);
+  const newestP = querySubgraph(
+    `query($users: [String!]) {
+      orders_collection(
+        first: ${LIMIT},
+        where: { userAddress_in: $users },
+        orderBy: orderId,
+        orderDirection: desc
+      ) { ${FIELDS} }
+    }`,
+    { users },
+    "fetchHistoryNewest"
+  );
   let scoped: Map<string, string> | null;
   try {
-    scoped = await fetchPayqrOrderIds(address, proxies);
+    scoped = await scopedP;
   } catch {
+    newestP.catch(() => {}); // never an unhandled rejection
     // Never fall back to an unscoped query — that would leak other apps' orders.
     throw new Error("Couldn't reach the transaction index.");
   }
-  if (!scoped || scoped.size === 0) return [];
+  if (!scoped || scoped.size === 0) { newestP.catch(() => {}); return []; }
 
-  const data = await querySubgraph(
-    `query($users: [String!], $ids: [String!]) {
-      orders_collection(
-        first: 200,
-        where: { userAddress_in: $users, orderId_in: $ids },
-        orderBy: orderId,
-        orderDirection: desc
-      ) { orderId status usdcAmount placedAt completedAt transactionHash userAddress disputeStatus currency }
-    }`,
-    { users: addrList(address, proxies), ids: [...scoped.keys()] },
-    "fetchHistory"
-  );
+  let rows: any[];
+  const newest = await newestP;
+  const all = (newest?.orders_collection || []) as any[];
+  const inScope = all.filter((o) => scoped!.has(String(o.orderId)));
+  if (all.length >= LIMIT && inScope.length < Math.min(LIMIT, scoped.size)) {
+    const data = await querySubgraph(
+      `query($users: [String!], $ids: [String!]) {
+        orders_collection(
+          first: ${LIMIT},
+          where: { userAddress_in: $users, orderId_in: $ids },
+          orderBy: orderId,
+          orderDirection: desc
+        ) { ${FIELDS} }
+      }`,
+      { users, ids: [...scoped.keys()] },
+      "fetchHistory"
+    );
+    rows = data?.orders_collection || [];
+  } else {
+    rows = inScope;
+  }
+  const data = { orders_collection: rows };
 
   return (data?.orders_collection || []).map((o) => {
     const placed = Number(o.placedAt) * 1000;

@@ -575,7 +575,7 @@ export default function Withdraw() {
         {/* In-flight withdrawal warning — a new fiat withdraw is blocked while one
             is unsettled. Explain it and offer a self-service recover. */}
         {!usdcStep && inFlight > 0 && (
-          <div className="wd-inflight" style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, border: "1px solid var(--warn-border, #e0b100)", background: "var(--warn-soft, rgba(224,177,0,.08))", marginBottom: 12 }}>
+          <div className="wd-inflight">
             <span><Icon.Clock /></span>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700 }}>{t("wd.inflightTitle")}</div>
@@ -595,25 +595,28 @@ export default function Withdraw() {
             what they HAVE (account balance = everything in the contract) vs what
             they can withdraw RIGHT NOW (matured/unlocked). The gap is funds still
             in the settlement window. */}
-        <div className="wd-balances">
-          <div className="wd-bal-box">
-            <div className="wd-bal-label">{t("wd.accountBalance")}</div>
-            <div className="wd-bal-amt">${shownAccountNum.toFixed(2)}</div>
-            <div className="wd-bal-sub">
-              {shownAccountFiat != null ? `≈ ${fmtFiat(country, shownAccountFiat)} ${country.code}` : "≈ —"}
+        {/* Same balance card as Home: what can be withdrawn now, big; the
+            account total and what is still settling in the row below. */}
+        <section className="bal glass-card" aria-label={t("wd.withdrawable")}>
+          <div className="bal-main-label">{t("wd.withdrawable")}</div>
+          <div className="bal-main">${shownAvailNum.toFixed(2)} <span style={{ fontSize: 14, fontWeight: 600, color: "var(--muted)" }}>USDC</span></div>
+          <div className="bal-fiat">{shownAvailFiat != null ? `≈ ${fmtFiat(country, shownAvailFiat)} ${country.code}` : "≈ —"}</div>
+          <div className="bal-row">
+            <div className="bal-cell">
+              <div className="bal-cell-label">{t("wd.accountBalance")}</div>
+              <div className="bal-cell-amt">${shownAccountNum.toFixed(2)}</div>
+              <div className="bal-cell-hint">{shownAccountFiat != null ? `≈ ${fmtFiat(country, shownAccountFiat)}` : "≈ —"}</div>
+            </div>
+            <div className="bal-cell">
+              <div className="bal-cell-label">{t("dash2.settling")}</div>
+              <div className="bal-cell-amt">${pendingNum.toFixed(2)}</div>
+              <div className="bal-cell-hint">{t("dash2.settlingHint")}</div>
             </div>
           </div>
-          <div className="wd-bal-box">
-            <div className="wd-bal-label">{t("wd.withdrawable")}</div>
-            <div className="wd-bal-amt">${shownAvailNum.toFixed(2)}</div>
-            <div className="wd-bal-sub">
-              {shownAvailFiat != null ? `≈ ${fmtFiat(country, shownAvailFiat)} ${country.code}` : "≈ —"}
-            </div>
-          </div>
-        </div>
+        </section>
         {prevTotalNum > 0 && (
           <p className="muted" style={{ fontSize: 12.5, margin: "6px 2px 0" }}>
-            This terminal ${accountNum.toFixed(2)} · previous terminal{prevBal.rows.length > 1 ? "s" : ""} ${prevTotalNum.toFixed(2)} (move below)
+            {fill(t(prevBal.rows.length > 1 ? "wd.prevHintMany" : "wd.prevHintOne"), { here: accountNum.toFixed(2), prev: prevTotalNum.toFixed(2) })}
           </p>
         )}
         {/* Funds still maturing → show how much and the REAL time until the next
@@ -745,13 +748,11 @@ export default function Withdraw() {
               <p className="muted" style={{ textAlign: "center", fontSize: 12, marginTop: 10 }}>{t("wd.fetchingRate")}</p>
             )}
 
-            <div className="wd-slide">
-            <button className="btn" style={{ width: "100%", marginTop: 16 }}
-              disabled={!!busy || !ready || availNum <= 0 || overBalance || (typedFiat !== "" && !rate)}
+            <button className="btn wd-continue"
+              disabled={!!busy || !ready || availNum <= 0 || overBalance || !(Number(amount) > 0) || !rate}
               onClick={() => withdraw("fiat")}>
               {busy === "fiat" ? t("wd.working") : `${t("wd.sendToBank")} ${wdCountry?.fiat}`}
             </button>
-            </div>
           </>
         )}
 
@@ -784,16 +785,15 @@ export default function Withdraw() {
               {overBalance && <p className="error">{t("wd.exceeds")}</p>}
             </div>
 
-            {error && <p className="error" style={{ textAlign: "center" }}>{error}</p>}
-            {done && <p className="success" style={{ textAlign: "center" }}>✓ {done}</p>}
-
-            <div className="wd-slide">
-            <button className="btn" style={{ width: "100%", marginTop: 16 }}
-              disabled={!!busy || !ready || availNum <= 0 || overBalance}
+            {/* Not pinned to the bottom: Continue sits directly under the input card. */}
+            <button className="btn wd-continue"
+              disabled={!!busy || !ready || availNum <= 0 || overBalance || !(Number(amount) > 0)}
               onClick={() => withdraw("usdc")}>
               {t("common.continue")}
             </button>
-            </div>
+
+            {error && <p className="error" style={{ textAlign: "center", marginTop: 10 }}>{error}</p>}
+            {done && <p className="success" style={{ textAlign: "center", marginTop: 10 }}>✓ {done}</p>}
           </>
         )}
         </>
