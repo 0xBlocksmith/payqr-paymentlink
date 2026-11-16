@@ -38,6 +38,7 @@ export default function Disputes() {
         ) : !SUPPORT_BRIDGE_URL ? (
           <p className="muted" style={{ textAlign: "center" }}>{t("ds.unavailable")}</p>
         ) : (
+          <div className="widget-fit">
           <PaymentHistoryWithSupport
             key={rev}
             signer={signer}
@@ -61,6 +62,7 @@ export default function Disputes() {
               chatEnabled: true,
             }}
           />
+          </div>
         )}
       </div>
     </PullToRefresh>

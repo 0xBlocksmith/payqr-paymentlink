@@ -10,6 +10,8 @@ import { PullToRefresh } from "../../components/ui/PullToRefresh";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useReadContract, usePublicClient } from "wagmi";
+import { useQueryClient } from "@tanstack/react-query";
+import { historyQuery } from "../../components/useHistory";
 import { Nav } from "../../components/Nav";
 import { useMerchant } from "../../components/useMerchant";
 import { Splash } from "../../components/Splash";
@@ -158,16 +160,41 @@ export default function Transactions() {
   const { proxies } = useMerchantProxies(address);
   const proxyKey = (proxies ?? []).join(",");
 
+  const queryClient = useQueryClient();
+  const byTime = (a, b) => b.placedAt - a.placedAt;
+
+  // Paint INSTANTLY from the shared history cache (Home loads the same query),
+  // instead of a spinner while the subgraph is asked again.
+  useEffect(() => {
+    if (!address || !proxies) return;
+    const cached = queryClient.getQueryData(historyQuery(address, proxies).queryKey) as any[] | undefined;
+    if (cached?.length) {
+      setRows((cur) => (cur.length ? cur : cached.map((r) => ({ ...r, kind: "payment" })).sort(byTime)));
+      setLoaded(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [address, proxyKey]);
+
   const refresh = useCallback(async () => {
     if (!address || !proxies) return;
     try {
       // Payments (BUY orders — keyed by the merchant for POS sales, by the
       // proxy for payment-link sales) + fiat withdrawals (SELL orders, keyed by
-      // the proxy). Merge into one timeline.
+      // the proxy). Payments go through the SHARED cached query, so a fresh
+      // copy from Home is reused instead of fetched twice.
       const [payments, withdrawals] = await Promise.all([
-        fetchHistory(address, proxies),
+        queryClient.fetchQuery(historyQuery(address, proxies)) as Promise<any[]>,
         proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([]),
       ]);
+      const base = [...payments.map((r) => ({ ...r, kind: "payment" })), ...withdrawals];
+      // Show these NOW. The on-chain USDC-withdrawal scan below can take several
+      // RPC round trips and used to hold the whole list back until it finished.
+      setRows((cur) => {
+        const usdcRows = cur.filter((r) => r.kind === "usdc_withdraw");
+        return [...base, ...usdcRows].sort(byTime);
+      });
+      setLoadError(false);
+      setLoaded(true);
       // USDC withdrawals create NO subgraph order, so they come from the chain's
       // WithdrawalUSDC events merged with this device's ledger (one row per
       // withdrawal, de-duplicated by tx hash). A failed chain read must not hide
@@ -179,11 +206,8 @@ export default function Transactions() {
         if (publicClient) chainWd = await fetchChainWithdrawals(publicClient, address);
       } catch (e) { console.error(e); scanFailed = true; }
       const usdcWd = mergeUsdcWithdrawals(chainWd, loadLedger(address));
-      const merged = [...payments.map((r) => ({ ...r, kind: "payment" })), ...withdrawals, ...usdcWd]
-        .sort((a, b) => b.placedAt - a.placedAt);
-      setRows(merged);
+      setRows([...base, ...usdcWd].sort(byTime));
       setWdScanFailed(scanFailed);
-      setLoadError(false);
     } catch (e) {
       // fetchHistory/fetchWithdrawals throw on network AND subgraph faults so a
       // failed poll never wipes real rows. Keep the last good list; only flag
@@ -195,7 +219,7 @@ export default function Transactions() {
     finally { setLoaded(true); }
     // proxyKey stands in for proxies: same content, stable identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address, proxyKey, publicClient]);
+  }, [address, proxyKey, publicClient, queryClient]);
 
   useEffect(() => {
     refresh();

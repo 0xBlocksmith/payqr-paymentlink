@@ -3086,3 +3086,33 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
 .wd-locked-row:last-child { border-bottom: 0; }
 /* summary cards sit where Home's balance card sits */
 .screen > .bal.glass-card { margin-top: 0; }
+
+/* ═══ Page headers: identical on every page ═══════════════════════════════
+   Same box (44px tall, 16px below), same size, centred; the Withdraw back
+   button sits inside the same box, so the title never moves between pages. */
+.page-h, .wd-head h1, .pl-top .pl-h1 {
+  font-size: 22px !important; font-weight: 700 !important; letter-spacing: -0.3px; line-height: 1.2; text-align: center;
+}
+.page-h { display: flex; align-items: center; justify-content: center; min-height: 44px; margin: 0 0 16px !important; }
+.wd-head { min-height: 44px; margin: 0 0 16px !important; }
+.wd-head h1, .pl-top .pl-h1 { margin: 0 !important; }
+.pl-top .pl-h1 { min-height: 44px; display: flex; align-items: center; }
+.wd-back-big { width: 44px; height: 44px; }
+
+/* ═══ Withdraw at the same scale as Home / Transactions ═══════════════════ */
+.wd-amt-field { font-size: 34px !important; }             /* = the balance figure */
+.wd-amt-sym { font-size: 17px; }
+.wd-confirm-amt, .wd-res-amt { font-size: 34px !important; }
+.wd-confirm-amt span, .wd-res-amt span { font-size: 14px !important; }
+.wd-res-ico { width: 72px !important; height: 72px !important; margin-bottom: 14px !important; }
+.wd-res-title { font-size: 18px !important; }
+.wd-pct { min-height: 40px !important; font-size: 13.5px !important; }
+.wd-dest-btn { min-height: 56px !important; }
+.wd-dest-txt b { font-size: 14px; }
+.wd-slide .btn, .wd-go { min-height: 50px !important; font-size: 15px !important; }
+.slide { height: 56px !important; }
+.slide-thumb { width: 48px !important; height: 48px !important; }
+.slide-label { font-size: 14px !important; padding-left: 48px !important; }
+
+/* ═══ Disputes & support widget fitted to the app's scale ═════════════════ */
+.widget-fit { zoom: 0.9; }

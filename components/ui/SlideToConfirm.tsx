@@ -14,7 +14,7 @@ export function SlideToConfirm({ label, disabled, busy, onConfirm }: {
   const [x, setX] = useState(0);
   const [drag, setDrag] = useState(false);
   const start = useRef(0);
-  const THUMB = 56;
+  const THUMB = 48;
   const max = () => Math.max(0, (track.current?.clientWidth || 0) - THUMB - 8);
   const off = disabled || busy;
 
