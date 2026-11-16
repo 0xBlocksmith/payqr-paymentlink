@@ -1,28 +1,43 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
-/** Live countdown to a unix-seconds timestamp. Owns its own 1s timer so only this
- *  tiny node re-renders each second (never the whole page). Calls `onDone` once
- *  when it reaches zero. */
+// ONE shared 1-second timer for every countdown on screen (a long history used to
+// start one timer per locked row). It runs only while at least one is mounted.
+let listeners = new Set<() => void>();
+let timer: ReturnType<typeof setInterval> | null = null;
+let nowSec = Math.floor(Date.now() / 1000);
+
+function subscribe(cb: () => void) {
+  listeners.add(cb);
+  if (!timer) {
+    nowSec = Math.floor(Date.now() / 1000);
+    timer = setInterval(() => {
+      nowSec = Math.floor(Date.now() / 1000);
+      listeners.forEach((l) => l());
+    }, 1000);
+  }
+  return () => {
+    listeners.delete(cb);
+    if (listeners.size === 0 && timer) { clearInterval(timer); timer = null; }
+  };
+}
+const getNow = () => nowSec;
+const getServerNow = () => 0;
+
+/** Live countdown to a unix-seconds timestamp. Calls `onDone` once when it
+ *  reaches zero. */
 export function Countdown({ unlock, onDone, doneLabel }: { unlock: number; onDone?: () => void; doneLabel: string }) {
-  const calc = () => Math.max(0, unlock - Math.floor(Date.now() / 1000));
-  const [left, setLeft] = useState(calc);
+  const now = useSyncExternalStore(subscribe, getNow, getServerNow);
+  const left = Math.max(0, unlock - (now || Math.floor(Date.now() / 1000)));
   const fired = useRef(false);
   const cb = useRef(onDone);
   cb.current = onDone;
 
+  useEffect(() => { fired.current = false; }, [unlock]);
   useEffect(() => {
-    fired.current = false;
-    setLeft(calc());
-    const id = setInterval(() => {
-      const l = calc();
-      setLeft(l);
-      if (l === 0 && !fired.current) { fired.current = true; clearInterval(id); cb.current?.(); }
-    }, 1000);
-    return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unlock]);
+    if (left === 0 && now !== 0 && !fired.current) { fired.current = true; cb.current?.(); }
+  }, [left, now]);
 
   if (left === 0) return <span className="cd cd-done">{doneLabel}</span>;
   const d = Math.floor(left / 86400);

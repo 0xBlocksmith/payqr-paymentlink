@@ -5,7 +5,7 @@ import { SlideToConfirm } from "../../components/ui/SlideToConfirm";
 import dynamic from "next/dynamic";
 import { useRouter } from "next/navigation";
 import { EXPLORER_URL } from "../../lib/chain";
-import { fill } from "../../lib/format";
+import { fill, fmtRemaining } from "../../lib/format";
 import { encodeFunctionData } from "viem";
 import { useReadContract, usePublicClient } from "wagmi";
 import { Nav } from "../../components/Nav";
@@ -24,6 +24,8 @@ import { fetchWithdrawals } from "../../lib/history";
 import { useT } from "../../lib/i18n";
 import { toUserError } from "../../lib/errors";
 import { withdrawFailurePolicy } from "../../lib/withdrawRetry";
+import { validateDestination, DESTINATION_PROBLEM_KEY, groupAddress } from "../../lib/destination";
+import { ledgerBegin, ledgerUpdate, ledgerRemove } from "../../lib/usdcWithdrawals";
 
 // The p2p Cashout widget is a large dependency and only appears when the merchant
 // actually starts a fiat cash-out. Lazy-load it so it is NOT in the withdraw
@@ -31,19 +33,8 @@ import { withdrawFailurePolicy } from "../../lib/withdrawRetry";
 // widget's code is fetched on demand when `cashout` becomes non-null.
 const CashoutWidget = dynamic(
   () => import("../../components/CashoutWidget").then((m) => m.CashoutWidget),
-  { ssr: false, loading: () => <p className="muted" style={{ textAlign: "center" }}>Loading cash-out…</p> }
+  { ssr: false, loading: () => <p className="muted" style={{ textAlign: "center" }}>…</p> }
 );
-
-// Always in DAYS (never seconds/minutes/hours) — the real prod settlement
-// window is 30 days; this build's shortened ~10 min test window is a contract
-// setting, not something this display should reveal. Round UP so any time
-// still remaining reads as at least "1 day", never "0 days" (which would
-// look identical to "ready").
-function fmtRemaining(secs) {
-  if (secs <= 0) return "ready";
-  const days = Math.max(1, Math.ceil(secs / 86400));
-  return `${days} day${days === 1 ? "" : "s"}`;
-}
 
 // Fiat cash-out (the UPI / bank offramp, in local currency) is HIDDEN: the only
 // withdrawal offered is USDC to the merchant's wallet. Flip to true to bring the
@@ -55,7 +46,7 @@ const FIAT_WITHDRAW_ENABLED = false;
 export default function Withdraw() {
   const { ready, address, sendTransaction } = useMerchant();
   const publicClient = usePublicClient();
-  const { t } = useT();
+  const { t, lang } = useT();
 
   const [country, setCountry] = useState(null);
   const [amount, setAmount] = useState("");
@@ -89,7 +80,11 @@ export default function Withdraw() {
   // A valid EVM address is 0x + 40 hex. Trim + validate so a stray space or a
   // truncated paste can't send USDC into a dead address.
   const extAddrTrim = extAddr.trim();
-  const extAddrValid = /^0x[0-9a-fA-F]{40}$/.test(extAddrTrim);
+  // Checksum, zero address, the USDC token and our own contracts are refused — a
+  // bare 0x… regex accepts all of them, and every one burns the funds.
+  const destCheck = validateDestination(extAddrTrim);
+  const extAddrValid = destCheck.ok;
+  const [destChecked, setDestChecked] = useState(false);   // "I checked the full address"
   // Which destination the merchant is withdrawing to: chosen FIRST, before any
   // currency/UPI UI is shown, so we don't ask USDC-bound questions about local
   // currency (and vice versa). null = not yet chosen.
@@ -189,7 +184,7 @@ export default function Withdraw() {
   //  3) Otherwise (not owner, still active), show a clear "needs support" message.
   async function recoverInFlight() {
     setError(""); setDone("");
-    if (!proxyAddr) return setError("Still loading — try again in a moment.");
+    if (!proxyAddr) return setError(t("wd.msg.loading"));
     setBusy("recover");
     try {
       // Recovery calls reconcile on the CURRENT contract, so only its own
@@ -198,13 +193,13 @@ export default function Withdraw() {
         (r) => (r.integrator || "").toLowerCase() === CONTRACT_ADDRESS.toLowerCase()
       );
       const latest = rows?.[0]; // newest-first
-      if (!latest?.orderId) throw new Error("Couldn't find the withdrawal to recover.");
+      if (!latest?.orderId) throw new Error(t("wd.msg.recoverFail"));
       const orderId = BigInt(latest.orderId);
 
       // 1) permissionless reconcile
       try {
         await sendAndWait("reconcileWithdrawal", [orderId]);
-        setDone(`Recovered withdrawal #${latest.orderId}. You can withdraw again.`);
+        setDone(fill(t("wd.msg.recovered"), { id: latest.orderId }));
         refetch(); refetchMerchant();
         return;
       } catch (reconErr) {
@@ -217,7 +212,7 @@ export default function Withdraw() {
             // ALWAYS unfreeze, even if abort failed, so we never leave frozen.
             await sendAndWait("unfreezeMerchant", [address]);
           }
-          setDone(`Admin-recovered withdrawal #${latest.orderId}. Funds returned to your balance (re-locked for the settlement window shown below); you can withdraw again once they mature.`);
+          setDone(fill(t("wd.msg.adminRecovered"), { id: latest.orderId }));
           refetch(); refetchMerchant();
           return;
         }
@@ -225,8 +220,7 @@ export default function Withdraw() {
       }
     } catch (err: any) {
       setError(
-        friendlyError(err,
-          "This withdrawal is still active on-chain and couldn't be recovered automatically. It can only be released by the payment partner or by support — please contact support with the order number.")
+        friendlyError(err, t("wd.msg.stuck"))
       );
     } finally { setBusy(""); }
   }
@@ -335,9 +329,7 @@ export default function Withdraw() {
     // USDC principal. MAX is safe (it uses the on-chain USDC balance directly,
     // no rate), and the USDC path never divides by the rate.
     if (kind === "fiat" && !isMax && rate?.untrusted) {
-      return setError(
-        "Live exchange rate unavailable right now — clear the amount to withdraw the maximum, or withdraw as USDC."
-      );
+      return setError(t("wd.msg.rateUnavailable"));
     }
     const maxUsdc = kind === "fiat" ? maxFiatUsdc : availNum;
     const sendUsdc = isMax ? maxUsdc : usdcNum;
@@ -347,20 +339,18 @@ export default function Withdraw() {
     if (sendUsdc <= 0) {
       return setError(
         isMax && kind === "fiat" && availNum > 0
-          ? `Balance too small to cash out — the ${cashoutFee.fee.toFixed(2)} USDC network fee would consume it. You can still withdraw it as USDC.`
-          : "Enter an amount greater than zero."
+          ? fill(t("wd.msg.tooSmall"), { fee: cashoutFee.fee.toFixed(2) })
+          : t("wd.enterAmount")
       );
     }
-    if (sendUsdc > availNum + 1e-9) return setError("Amount exceeds your available balance.");
+    if (sendUsdc > availNum + 1e-9) return setError(t("wd.exceeds"));
     // Sub-threshold fiat cash-outs pay a fixed fee ON TOP of the principal, and
     // the contract deducts BOTH from the balance at delivery. A typed amount
     // that fits the balance but not amount+fee would place fine, then wedge
     // in-flight when the delivery top-up reverts — block it up front.
     if (kind === "fiat" && !isMax && cashoutFee.fee > 0 && sendUsdc <= cashoutFee.threshold
         && sendUsdc + cashoutFee.fee > availNum + 1e-9) {
-      return setError(
-        `Small withdrawals add a ${cashoutFee.fee.toFixed(2)} USDC network fee, and this amount plus the fee exceeds your balance. Clear the amount to withdraw the maximum (the fee is reserved automatically), or enter less.`
-      );
+      return setError(fill(t("wd.msg.smallFee"), { fee: cashoutFee.fee.toFixed(2) }));
     }
 
     // Use the exact on-chain `available` bigint only for a TRUE full-balance MAX
@@ -393,6 +383,7 @@ export default function Withdraw() {
   //   • once step 1 has CONFIRMED, a failed forward is retried as the forward ONLY;
   //   • nothing confirmed and a definite failure / cancel → safe to start over.
   const step1Ref = useRef<null | { hash: string; fwd: bigint }>(null);
+  const recRef = useRef<string | null>(null);   // this withdrawal's ledger record (Transactions history)
 
   async function confirmUsdcWithdraw() { return runUsdcWithdraw("whole"); }
   async function retryForward() { return runUsdcWithdraw("forward"); }
@@ -412,6 +403,7 @@ export default function Withdraw() {
     try {
       if (mode === "whole") {
         step1Ref.current = null;
+        if (address) recRef.current = ledgerBegin(address, { amount: usdcSend.raw.toString(), destination: external ? extAddrTrim : null });
         // Snapshot the wallet's USDC BEFORE the withdraw so the forward sends what
         // step 1 actually deposited (not the gross request, which would revert if
         // the contract ever delivered less).
@@ -430,6 +422,7 @@ export default function Withdraw() {
         const { data } = buildUsdcWithdraw({ amountRaw: usdcSend.raw });
         const hash = await sendTransaction({ to: CONTRACT_ADDRESS, data });
         finalHash = hash;
+        if (address && recRef.current) ledgerUpdate(address, recRef.current, { step1Hash: hash });
         const receipt = await publicClient.waitForTransactionReceipt({ hash });
         if (receipt.status === "reverted") throw new Error("Withdrawal failed on-chain.");
 
@@ -444,6 +437,7 @@ export default function Withdraw() {
           } catch { /* keep the requested amount */ }
         }
         step1Ref.current = { hash, fwd };
+        if (address && recRef.current && !external) ledgerUpdate(address, recRef.current, { status: "withdrawn" });
       }
 
       if (external) {
@@ -452,22 +446,31 @@ export default function Withdraw() {
         const xfer = buildUsdcTransfer({ to: extAddrTrim as `0x${string}`, amountRaw: s1.fwd });
         const xh = await sendTransaction({ to: xfer.to, data: xfer.data });
         finalHash = xh;
+        if (address && recRef.current) ledgerUpdate(address, recRef.current, { step2Hash: xh });
         const xrc = await publicClient.waitForTransactionReceipt({ hash: xh });
         if (xrc.status === "reverted") {
           const e = new Error("forward reverted"); e.name = "ForwardReverted"; throw e;
         }
       }
+      if (address && recRef.current) ledgerUpdate(address, recRef.current, { status: "withdrawn" });
       step1Ref.current = null;
       setResult({ status: "success", amount: amountNow, dest: destLabel, tx: finalHash });
       setAmount(""); setExtAddr(""); setUsdcDest("self"); refetch();
     } catch (err: any) {
       const forwardReverted = err?.name === "ForwardReverted";
       const ue = forwardReverted
-        ? { uncertain: false, message: t("wd.fwdFailed") }
+        ? { kind: "contract", uncertain: false, message: t("wd.fwdFailed") }
         : toUserError(err, { context: "withdraw", uncertainKey: "err.uncertainWithdraw", fallbackKey: "err.unknown" });
       // Uncertain → never offer a retry. Otherwise: after step 1 only the forward
       // may be retried; before it, nothing moved so starting over is safe.
       const { status, retry } = withdrawFailurePolicy({ uncertain: ue.uncertain, step1Confirmed: !!step1Ref.current, external });
+      // History: a cancel before anything was sent leaves no trace; a USDC-in-wallet
+      // forward failure is "partial"; a definite failure is "failed"; an uncertain
+      // outcome stays "processing" until the chain scan confirms it.
+      if (address && recRef.current) {
+        if (ue.kind === "cancelled" && !finalHash) ledgerRemove(address, recRef.current);
+        else if (!ue.uncertain) ledgerUpdate(address, recRef.current, { status: step1Ref.current && external ? "partial" : "failed" });
+      }
       setResult({ status, amount: amountNow, dest: destLabel, tx: finalHash, msg: ue.message, retry });
       refetch();
     } finally {
@@ -489,7 +492,7 @@ export default function Withdraw() {
           isHome={cashout.isHome}
           encPayout={(info?.[0] as string) || ""}
           currency={{ code: cashout.code, flag: wdCountry?.flag, fiat: wdCountry?.fiat, symbol: wdCountry?.symbol }}
-          onComplete={() => { setCashout(null); setDone(`Withdrawal in ${wdCountry?.fiat} completed.`); setAmount(""); refetch(); }}
+          onComplete={() => { setCashout(null); setDone(fill(t("wd.msg.cashoutDone"), { fiat: wdCountry?.fiat })); setAmount(""); refetch(); }}
           onCancelled={() => { setCashout(null); refetch(); }}
           onClose={() => { setCashout(null); refetch(); }}
           onError={(m) => setError(m)}
@@ -547,8 +550,8 @@ export default function Withdraw() {
                 <input className="input" style={{ marginTop: 10, fontFamily: "monospace" }}
                   placeholder="0x…" value={extAddr} autoComplete="off" spellCheck={false}
                   onChange={(e) => setExtAddr(e.target.value)} />
-                {extAddrTrim !== "" && !extAddrValid && (
-                  <p className="error" style={{ marginTop: 6 }}>{t("wd.usdcBadAddress")}</p>
+                {extAddrTrim !== "" && "problem" in destCheck && (
+                  <p className="error" role="alert" style={{ marginTop: 6 }}>{t(DESTINATION_PROBLEM_KEY[destCheck.problem])}</p>
                 )}
                 <p className="wallet-hint" style={{ marginTop: 8 }}>{t("wd.usdcExternalNote")}</p>
               </>
@@ -562,7 +565,7 @@ export default function Withdraw() {
             <div className="wd-slide">
             <button className="btn" style={{ width: "100%", marginTop: 16 }}
               disabled={!address || !!busy || (usdcDest === "external" && !extAddrValid)}
-              onClick={() => setUsdcStep("confirm")}>
+              onClick={() => { setDestChecked(false); setUsdcStep("confirm"); }}>
               {t("common.continue")}
             </button>
             </div>
@@ -618,7 +621,7 @@ export default function Withdraw() {
         {pendingNum > 0 && (
           <div className="wd-maturity">
             {fmtUsdc(pending)} USDC {t("wd.settlingNote")}
-            {nextUnlockSecs > 0 ? ` · ${t("wd.maturityNote")} (${fmtRemaining(nextUnlockSecs)})` : ""}
+            {nextUnlockSecs > 0 ? ` · ${t("wd.maturityNote")} (${fmtRemaining(nextUnlockSecs, lang)})` : ""}
           </div>
         )}
 
@@ -630,7 +633,7 @@ export default function Withdraw() {
               return (
                 <div key={i} className="wd-locked-row">
                   <span>{fmtUsdc(b.amount)} USDC</span>
-                  <span className="badge locked">in {fmtRemaining(secs)}</span>
+                  <span className="badge locked">{fmtRemaining(secs, lang) || t("dash3.availableNow")}</span>
                 </div>
               );
             })}
@@ -765,12 +768,12 @@ export default function Withdraw() {
             <div className="wd-amt">
               <div className="wd-amt-in">
                 <input className="wd-amt-field" type="number" inputMode="decimal" min="0" step="0.01"
-                  aria-label="Withdraw to wallet" placeholder="0.00" value={amount}
+                  aria-label={t("wd.toWallet")} placeholder="0.00" value={amount}
                   onChange={(e) => { setAmount(e.target.value); setMaxSelected(false); }} />
                 <span className="wd-amt-sym">USDC</span>
               </div>
-              <div className="wd-amt-sub">Withdraw to wallet</div>
-              <div className="wd-pcts" role="group" aria-label="Withdraw to wallet">
+              <div className="wd-amt-sub">{t("wd.toWallet")}</div>
+              <div className="wd-pcts" role="group" aria-label={t("wd.toWallet")}>
                 {[25, 50, 100].map((p) => (
                   <button key={p} type="button" className="wd-pct"
                     onClick={() => { setAmount((availNum * p / 100).toFixed(2)); setMaxSelected(p === 100); setError(""); }}>
@@ -867,6 +870,16 @@ export default function Withdraw() {
             <h1>{t("wd.usdcConfirmTitle")}</h1>
           </div>
           <div className="wd-confirm-amt">{usdcSend.usdc.toFixed(2)} <span>USDC</span></div>
+          {usdcDest === "external" && extAddrValid && (
+            <>
+              <div className="confirm-row" style={{ border: 0, padding: "0 4px" }}><span>{t("dest.fullAddress")}</span></div>
+              <div className="addr-full" data-testid="full-destination">{groupAddress(extAddrTrim)}</div>
+              <label className="addr-check">
+                <input type="checkbox" checked={destChecked} onChange={(e) => setDestChecked(e.target.checked)} />
+                <span>{t("dest.confirmCheck")}</span>
+              </label>
+            </>
+          )}
           <div className="wd-confirm-card">
             <div className="confirm-row">
               <span>{t("wd.confirmFrom")}</span>
@@ -892,7 +905,7 @@ export default function Withdraw() {
           </p>
           {error && <p className="error" style={{ textAlign: "center", marginTop: 8 }}>{error}</p>}
           <div className="wd-slide">
-            <SlideToConfirm label={t("wd.usdcConfirmCta")} busy={busy === "usdc"} disabled={!!busy}
+            <SlideToConfirm label={t("wd.usdcConfirmCta")} busy={busy === "usdc"} disabled={!!busy || (usdcDest === "external" && !destChecked)}
               onConfirm={confirmUsdcWithdraw} />
           </div>
         </div>

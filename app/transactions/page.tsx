@@ -9,7 +9,7 @@ import { Countdown } from "../../components/ui/Countdown";
 import { PullToRefresh } from "../../components/ui/PullToRefresh";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useReadContract } from "wagmi";
+import { useReadContract, usePublicClient } from "wagmi";
 import { Nav } from "../../components/Nav";
 import { useMerchant } from "../../components/useMerchant";
 import { Splash } from "../../components/Splash";
@@ -20,6 +20,8 @@ import { loadCountry, fmtFiat } from "../../lib/countries";
 import { loadMerchantProfile } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
 import { useT } from "../../lib/i18n";
+import { mergeUsdcWithdrawals, fetchChainWithdrawals, loadLedger } from "../../lib/usdcWithdrawals";
+import { EXPLORER_URL } from "../../lib/chain";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { decryptPayout } from "../../lib/payoutCrypto";
 import { useRelayIdentity } from "../../components/useRelayIdentity";
@@ -119,6 +121,10 @@ export default function Transactions() {
   const [range, setRange] = useState("all"); // today | week | month | all
   const [rangeOpen, setRangeOpen] = useState(false);
   const [q, setQ] = useState("");
+  const publicClient = usePublicClient();
+  const [wdScanFailed, setWdScanFailed] = useState(false); // the on-chain USDC-withdrawal scan failed: list may be incomplete
+  const PAGE = 50;
+  const [shown, setShown] = useState(PAGE);                  // rows rendered; a long history is paged
 
   useEffect(() => { setCountry(loadCountry()); }, []);
   useEffect(() => {
@@ -162,9 +168,21 @@ export default function Transactions() {
         fetchHistory(address, proxies),
         proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([]),
       ]);
-      const merged = [...payments.map((r) => ({ ...r, kind: "payment" })), ...withdrawals]
+      // USDC withdrawals create NO subgraph order, so they come from the chain's
+      // WithdrawalUSDC events merged with this device's ledger (one row per
+      // withdrawal, de-duplicated by tx hash). A failed chain read must not hide
+      // the ledger or the rest of the list — it only flags the list as possibly
+      // incomplete.
+      let chainWd = [];
+      let scanFailed = false;
+      try {
+        if (publicClient) chainWd = await fetchChainWithdrawals(publicClient, address);
+      } catch (e) { console.error(e); scanFailed = true; }
+      const usdcWd = mergeUsdcWithdrawals(chainWd, loadLedger(address));
+      const merged = [...payments.map((r) => ({ ...r, kind: "payment" })), ...withdrawals, ...usdcWd]
         .sort((a, b) => b.placedAt - a.placedAt);
       setRows(merged);
+      setWdScanFailed(scanFailed);
       setLoadError(false);
     } catch (e) {
       // fetchHistory/fetchWithdrawals throw on network AND subgraph faults so a
@@ -177,7 +195,7 @@ export default function Transactions() {
     finally { setLoaded(true); }
     // proxyKey stands in for proxies: same content, stable identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address, proxyKey]);
+  }, [address, proxyKey, publicClient]);
 
   useEffect(() => {
     refresh();
@@ -205,10 +223,11 @@ export default function Transactions() {
 
   const filtered = useMemo(() => {
     let list = items;
-    if (filter === "withdraw") list = list.filter((t) => t.kind === "withdraw");
-    else if (filter === "settled") list = list.filter((t) => t.kind !== "withdraw" && t.status === "settled");
-    else if (filter === "settling") list = list.filter((t) => t.kind !== "withdraw" && t.status === "matching");
-    else if (filter === "cancelled") list = list.filter((t) => t.kind !== "withdraw" && t.status === "cancelled");
+    const isWd = (t) => t.kind === "withdraw" || t.kind === "usdc_withdraw";
+    if (filter === "withdraw") list = list.filter(isWd);
+    else if (filter === "settled") list = list.filter((t) => !isWd(t) && t.status === "settled");
+    else if (filter === "settling") list = list.filter((t) => !isWd(t) && t.status === "matching");
+    else if (filter === "cancelled") list = list.filter((t) => !isWd(t) && t.status === "cancelled");
     if (q.trim()) {
       const needle = q.trim().toLowerCase();
       list = list.filter((t) => `#${t.orderId}`.includes(needle) || fmtUsdc(t.amount).includes(needle));
@@ -404,31 +423,36 @@ export default function Transactions() {
           </div>
         ) : (
           <div className="hist-list">
-            {filtered.map((tx) => {
+            {filtered.slice(0, shown).map((tx) => {
               const usdc = Number(tx.amount) / 1e6;
               const fiat = rate && country ? usdc * rate.rate : null;
-              const isWithdraw = tx.kind === "withdraw";
+              const isFiatWd = tx.kind === "withdraw";
+              const isUsdcWd = tx.kind === "usdc_withdraw";
+              const isWithdraw = isFiatWd || isUsdcWd;
               const settled = tx.status === "settled";
               const cancelled = tx.status === "cancelled";
+              // ONE status vocabulary (lib/status.ts) for sales AND withdrawals.
+              const st = resolveStatus(
+                { status: tx.status, kind: isWithdraw ? "withdraw" : "sale", completedAt: tx.completedAt },
+                lockSecs, nowSec
+              );
               // money OUT (withdrawal) vs money IN (payment)
-              const cls = isWithdraw ? "out" : settled ? "ok" : cancelled ? "bad" : "wait";
-              const stateKey = isWithdraw ? "tx.withdrew"
-                : settled ? "tx.received" : cancelled ? "dash.cancelled" : "tx.locked";
+              const cls = isWithdraw ? (st.tone === "danger" ? "bad" : "out") : settled ? "ok" : cancelled ? "bad" : "wait";
+              const to = isUsdcWd
+                ? (tx.destination ? fill(t("tx.toAddress"), { addr: `${tx.destination.slice(0, 6)}…${tx.destination.slice(-4)}` }) : t("tx.toYourWallet"))
+                : country.fiat;
               const sub = isWithdraw
-                ? `${fmtUsdc(tx.amount)} USDC → ${country.fiat} · #${tx.orderId}`
+                ? `${fmtUsdc(tx.amount)} USDC → ${to}${isUsdcWd ? "" : ` · #${tx.orderId}`}`
                 : `${fmtUsdc(tx.amount)} USDC · #${tx.orderId}`;
               // Tapping a row opens the IN-APP receipt (not Basescan). Rows without
               // a receipt link yet (no tx hash) render as a plain, non-clickable row.
-              const href = receiptHref(tx);
+              // A USDC withdrawal is not an order: no receipt page, it links to the explorer.
+              const href = isUsdcWd ? "" : receiptHref(tx);
               // Same status the dashboard shows: "Received · Available on <date>"
               // plus a live countdown while it is still settling.
-              const st = isWithdraw ? null
-                : resolveStatus({ status: tx.status, kind: "sale", completedAt: tx.completedAt }, lockSecs, nowSec);
-              const when = st?.unlockAt ? fmtDay(st.unlockAt, lang, (lockSecs ?? 0) < 3 * 86400) : "";
-              const footLabel = st
-                ? (st.key === "received_locked" && when ? fill(t("status.receivedOn"), { date: when })
-                  : st.key === "received_locked" ? t("status.receivedSettling") : t(st.labelKey))
-                : t(stateKey);
+              const when = st.unlockAt ? fmtDay(st.unlockAt, lang, (lockSecs ?? 0) < 3 * 86400) : "";
+              const footLabel = st.key === "received_locked" && when ? fill(t("status.receivedOn"), { date: when })
+                : st.key === "received_locked" ? t("status.receivedSettling") : t(st.labelKey);
               const inner = (
                 <>
                   <span className={`hist-ico ${cls}`}>
@@ -446,10 +470,10 @@ export default function Transactions() {
                       <span className="hist-time">{timeAgo(tx.createdAt)}</span>
                     </div>
                     <div className="hist-crypto">{sub}</div>
-                    <div className={`rr-foot st-${st ? st.tone : "info"}`}>
+                    <div className={`rr-foot st-${st.tone}`} title={st.estimated ? t("status.estimated") : undefined}>
                       <i aria-hidden="true" /><span className="rr-lbl">{footLabel}</span>
                     </div>
-                    {st?.unlockAt ? (
+                    {st.unlockAt && !isWithdraw ? (
                       <div className="hist-cd"><Countdown unlock={st.unlockAt} doneLabel={t("dash3.availableNow")} /></div>
                     ) : null}
                   </div>
@@ -462,6 +486,10 @@ export default function Transactions() {
               ) : (
                 <div className="hist-row hist-row-static">
                   {inner}
+                  {isUsdcWd && tx.txHash && (
+                    <a className="hist-explorer" href={`${EXPLORER_URL}/tx/${tx.txHash}`} target="_blank" rel="noopener noreferrer"
+                       aria-label={t("wd.viewOnExplorer")}>↗</a>
+                  )}
                 </div>
               );
               // Dispute Manager chip: payment rows only (a withdrawal isn't a
@@ -502,6 +530,15 @@ export default function Transactions() {
               );
             })}
           </div>
+        )}
+
+        {filtered.length > shown && (
+          <button className="btn ghost" style={{ width: "100%", marginTop: 12 }} onClick={() => setShown((n) => n + PAGE)}>
+            {fill(t("tx.showMore"), { n: filtered.length - shown })}
+          </button>
+        )}
+        {loaded && wdScanFailed && (
+          <p className="muted tiny" style={{ textAlign: "center", marginTop: 8 }}>{t("tx.wdScanFailed")}</p>
         )}
 
         {items.length > 0 && (
