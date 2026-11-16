@@ -750,7 +750,7 @@ export default function Withdraw() {
 
             <div className="wd-slide">
             <button className="btn" style={{ width: "100%", marginTop: 16 }}
-              disabled={!!busy || !ready || availNum <= 0 || overBalance || (typedFiat !== "" && !rate)}
+              disabled={!!busy || !ready || availNum <= 0 || overBalance || !(Number(amount) > 0) || !rate}
               onClick={() => withdraw("fiat")}>
               {busy === "fiat" ? t("wd.working") : `${t("wd.sendToBank")} ${wdCountry?.fiat}`}
             </button>
@@ -792,7 +792,7 @@ export default function Withdraw() {
 
             <div className="wd-slide">
             <button className="btn" style={{ width: "100%", marginTop: 16 }}
-              disabled={!!busy || !ready || availNum <= 0 || overBalance}
+              disabled={!!busy || !ready || availNum <= 0 || overBalance || !(Number(amount) > 0)}
               onClick={() => withdraw("usdc")}>
               {t("common.continue")}
             </button>
