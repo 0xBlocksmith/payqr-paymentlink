@@ -3017,3 +3017,49 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
 .wd-res-sub.error { color: var(--danger, #d92d20); }
 .wd-res-hint { max-width: 300px; margin: 0 0 10px; font-size: 12.5px; color: var(--faint, #8a97b3); }
 @media (prefers-reduced-motion: reduce) { .wd-res-ico, .wd-check { animation: none; stroke-dashoffset: 0; } }
+
+/* ═══ ONE design language for every page ════════════════════════════════
+   Same card surface, corner radius, padding and spacing on Home, Transactions,
+   Withdraw, Settings, Payment Links and Disputes. Older page-specific rules
+   (some with dark-theme overrides of higher specificity) are normalised here,
+   which is why the surface properties are marked !important. */
+:root { --card-r: 20px; --card-pad: 16px; --card-gap: 12px; }
+
+.card, .pl-card, .set-card, .set-group, .dash-empty, .recent-list, .bal, .bal.glass-card,
+.strip > div, .next-avail, .hist-row, .quick-item,
+.wd-hero, .wd-amt, .wd-card, .wd-bal-box, .wd-locked, .wd-maturity, .wd-confirm-card,
+.wd-to, .wd-opt, .wd-dest-btn, .wd-payout-opt {
+  border-radius: var(--card-r) !important;
+  background: var(--gl-fill) !important;
+  border: 1px solid var(--gl-edge) !important;
+  box-shadow: var(--gl-shadow) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(170%);
+  backdrop-filter: blur(18px) saturate(170%);
+}
+/* selected option keeps its brand outline */
+.wd-opt.sel, .wd-payout-opt.sel { border-color: rgba(75, 120, 238, 0.7) !important; box-shadow: 0 0 0 2px rgba(75, 120, 238, 0.25) !important; }
+
+/* panel padding */
+.strip > div, .next-avail, .wd-bal-box, .wd-card, .wd-locked, .wd-maturity, .dash-empty, .wd-hero, .wd-amt {
+  padding: var(--card-pad) !important;
+}
+/* stacked spacing */
+.strip, .wd-balances { gap: var(--card-gap); margin-top: 0; }
+.strip > div { flex: 1; }
+.hist-list { gap: var(--card-gap); }
+.wd-card, .wd-locked, .wd-maturity, .next-avail, .wd-amt, .wd-confirm-card { margin-top: var(--card-gap) !important; }
+.wd-balances + * , .strip + * { margin-top: var(--card-gap); }
+
+/* one heading style (the dashboard keeps its logo row instead) */
+.page-h, .wd-head h1, .pl-h1 {
+  margin: 4px 0 16px; text-align: center; font-size: 24px; font-weight: 700; letter-spacing: -0.3px; line-height: 1.2;
+}
+.wd-head { margin-bottom: 16px; }
+.wd-head h1, .pl-top .pl-h1 { margin: 0; }
+.pl-top { margin-bottom: 16px; }
+
+/* warning card: same shape, warning colours */
+.wd-inflight {
+  display: flex; align-items: center; gap: 10px; padding: 14px var(--card-pad); margin-bottom: var(--card-gap);
+  border-radius: var(--card-r); border: 1px solid var(--warn); background: var(--warn-soft);
+}

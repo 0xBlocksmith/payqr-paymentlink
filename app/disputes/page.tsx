@@ -32,7 +32,7 @@ export default function Disputes() {
     <PullToRefresh onRefresh={async () => { setRev((r) => r + 1); await new Promise((r) => setTimeout(r, 700)); }}>
       <Nav back />
       <div className="screen">
-        <h1 style={{ textAlign: "center", marginBottom: 14 }}>{t("nav.disputes")}</h1>
+        <h1 className="page-h">{t("nav.disputes")}</h1>
         {!ready || !signer || !supportSigner || !proxies ? (
           <p className="muted" style={{ textAlign: "center" }}>{t("ds.loading")}</p>
         ) : !SUPPORT_BRIDGE_URL ? (

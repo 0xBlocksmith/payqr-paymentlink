@@ -326,13 +326,10 @@ export default function Transactions() {
     <PullToRefresh onRefresh={async () => { await refresh(); }}>
       <Nav back />
       <div className="screen">
-        <h1 style={{ textAlign: "center", marginBottom: 2 }}>{t("tx.title")}</h1>
-        <p className="muted" style={{ textAlign: "center", fontSize: 13, marginBottom: 14 }}>
-          {t("tx.subtitle")}
-        </p>
+        <h1 className="page-h">{t("tx.title")}</h1>
 
         {/* report summary for the chosen range */}
-        <div className="strip" style={{ marginTop: 12 }}>
+        <div className="strip">
           <div>
             <span className="muted">{t("tx.received")} ({received.length} sale{received.length === 1 ? "" : "s"})</span>
             <strong>{totalFiat != null ? `≈ ${fmtFiat(country, totalFiat, { decimals: 2 })}` : `${totalUsdc.toFixed(2)} USDC`}</strong>

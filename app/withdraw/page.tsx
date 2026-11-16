@@ -575,7 +575,7 @@ export default function Withdraw() {
         {/* In-flight withdrawal warning — a new fiat withdraw is blocked while one
             is unsettled. Explain it and offer a self-service recover. */}
         {!usdcStep && inFlight > 0 && (
-          <div className="wd-inflight" style={{ display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", borderRadius: 12, border: "1px solid var(--warn-border, #e0b100)", background: "var(--warn-soft, rgba(224,177,0,.08))", marginBottom: 12 }}>
+          <div className="wd-inflight">
             <span><Icon.Clock /></span>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 700 }}>{t("wd.inflightTitle")}</div>
@@ -613,7 +613,7 @@ export default function Withdraw() {
         </div>
         {prevTotalNum > 0 && (
           <p className="muted" style={{ fontSize: 12.5, margin: "6px 2px 0" }}>
-            This terminal ${accountNum.toFixed(2)} · previous terminal{prevBal.rows.length > 1 ? "s" : ""} ${prevTotalNum.toFixed(2)} (move below)
+            {fill(t(prevBal.rows.length > 1 ? "wd.prevHintMany" : "wd.prevHintOne"), { here: accountNum.toFixed(2), prev: prevTotalNum.toFixed(2) })}
           </p>
         )}
         {/* Funds still maturing → show how much and the REAL time until the next

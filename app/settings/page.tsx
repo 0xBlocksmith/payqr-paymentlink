@@ -150,7 +150,7 @@ export default function Settings() {
     <>
       <Nav back />
       <div className="screen">
-        <h1 style={{ textAlign: "center", marginBottom: 14 }}>{t("set.title")}</h1>
+        <h1 className="page-h">{t("set.title")}</h1>
 
         {/* profile card */}
         <div className="set-card">
