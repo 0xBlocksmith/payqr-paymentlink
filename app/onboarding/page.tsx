@@ -34,11 +34,8 @@ const CC: Record<string, string> = { india: "in", brazil: "br", argentina: "ar",
  *   2. What does your business do? — SEMI-OPEN: tap a suggestion or type your own.
  * Then registerMerchant on-chain (gas-free).
  *
- * The payout handle (UPI/PIX/CBU) is intentionally NOT collected here. It is
- * client-side ENCRYPTED before it touches the chain and needs its own per-country
- * validation, and the contract only requires it at withdrawal — so it is added
- * from Settings (the dashboard checklist points there). Registration sends EMPTY
- * payout bytes: a placeholder sentinel would defeat the contract's withdrawal gate.
+ * No payout handle (UPI/PIX/CBU) is collected anywhere any more. The contract
+ * still takes the field, so registration sends EMPTY payout bytes ("0x").
  */
 export default function Onboarding() {
   const router = useRouter();
@@ -247,7 +244,6 @@ export default function Onboarding() {
 
             <div className="ob-notes">
               <SettlementNote currency={country.code} />
-              <span>{fill(t("ob.shop.note"), { payout: country.payoutLabel })}</span>
               <span>{t("ob.shop.lock")}</span>
             </div>
 

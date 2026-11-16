@@ -28,7 +28,6 @@ export function SetupChecklist({
     switch (id) {
       case "learn": return <button className="btn small ghost" onClick={onOpenTour}>{t("setup.learn.cta")}</button>;
       case "register": return <Link className="btn small" href="/onboarding">{t("setup.register.cta")}</Link>;
-      case "payout": return <Link className="btn small" href="/settings">{t("setup.payout.cta")}</Link>;
       case "first": return (
         <span style={{ display: "inline-flex", gap: 8, flexWrap: "wrap" }}>
           <Link className="btn small" href="/qr">{t("setup.first.qr")}</Link>

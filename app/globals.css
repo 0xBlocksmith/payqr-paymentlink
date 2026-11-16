@@ -2432,7 +2432,7 @@ body {
 }
 
 .page-in { animation: pageIn 0.28s cubic-bezier(0.2, 0.7, 0.2, 1); }
-@keyframes pageIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes pageIn { from { opacity: 0; } to { opacity: 1; } }
 
 .fnav {
   --fn-item: 52px;
@@ -2901,3 +2901,80 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
 .nav-lite:not(:has(.nav-logo)) { height: 0; padding: 0; overflow: visible; }
 .nav-back-float { position: absolute; left: 16px; top: 18px; margin: 0; transform: none; z-index: 45; width: 40px; height: 40px; }
 .nav-back-float { background: var(--gl-fill); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border: 1px solid var(--gl-edge); box-shadow: var(--gl-shadow); }
+
+/* ═══ Settlement clarity ═════════════════════════════════════════════════ */
+.info-btn {
+  display: inline-grid; place-items: center; width: 18px; height: 18px; margin-left: 6px; padding: 0; vertical-align: 1px;
+  border-radius: 50%; border: 1px solid var(--muted); background: transparent; color: var(--muted);
+  font: italic 700 11px/1 Georgia, serif; cursor: pointer;
+}
+.info-btn[aria-expanded="true"] { background: rgba(75, 120, 238, 0.16); color: #2f55d4; border-color: #2f55d4; }
+.info-pop {
+  margin-top: 12px; padding: 12px 14px; border-radius: 16px; font-size: 12.5px; line-height: 1.5; color: var(--text);
+  background: rgba(75, 120, 238, 0.08); border: 1px solid rgba(75, 120, 238, 0.22);
+}
+.info-pop p { margin: 4px 0 0; color: var(--muted); }
+.settle-list { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 4px; }
+.settle-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 0; }
+.settle-row + .settle-row { border-top: 1px dashed var(--border); }
+.settle-l { display: flex; flex-direction: column; min-width: 0; }
+.settle-amt { font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+.settle-date { font-size: 11.5px; color: var(--muted); }
+.cd {
+  flex: none; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 13px; padding: 5px 10px; border-radius: 999px;
+  color: #2f55d4; background: rgba(75, 120, 238, 0.12); border: 1px solid rgba(75, 120, 238, 0.28);
+}
+.cd-done { color: var(--success); background: var(--success-soft); border-color: transparent; }
+[data-theme="dark"] .cd { color: #b8ccff; }
+
+/* Recent payments: amount first, status a quiet secondary line at the bottom */
+.rr-foot { display: flex; align-items: center; gap: 6px; margin-top: 4px; font-size: 11.5px; font-weight: 600; color: var(--muted); background: none !important; padding: 0 !important; }
+.rr-foot i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.rr-foot.st-success { color: var(--success); }
+.rr-foot.st-warn, .rr-foot.st-info { color: var(--warn, #b45309); }
+.rr-foot.st-danger { color: var(--danger, #d92d20); }
+.recent-row { align-items: flex-start; }
+.rr-mid { min-width: 0; }
+
+/* ═══ 2FA as a page ═════════════════════════════════════════════════════ */
+.screen[hidden] { display: none; }
+.su-page { display: flex; flex-direction: column; }
+.su-hero { text-align: center; padding: 18px 8px 26px; }
+.su-hero h1 { margin: 14px 0 6px; font-size: 24px; letter-spacing: -0.3px; }
+.su-ico { display: inline-grid; place-items: center; width: 64px; height: 64px; border-radius: 22px; color: #2f55d4;
+  background: var(--gl-fill); border: 1px solid var(--gl-edge); box-shadow: var(--gl-shadow); }
+.su-sub { margin: 0 auto; max-width: 300px; font-size: 14px; line-height: 1.5; color: var(--muted); }
+.su-status { min-height: 24px; margin-top: 16px; text-align: center; font-size: 13.5px; color: var(--muted); }
+.su-resend { text-align: center; margin-top: 4px; font-size: 13.5px; }
+.su-layer { position: fixed; inset: 0; z-index: 1000; overflow-y: auto; background: var(--bg); }
+
+.otp { display: flex; justify-content: center; gap: 8px; }
+.otp-box {
+  width: 46px; height: 56px; box-sizing: border-box; text-align: center; font: inherit; font-size: 24px; font-weight: 700;
+  border-radius: 16px; color: var(--text); background: var(--gl-fill); border: 1px solid var(--gl-edge);
+  box-shadow: 0 0 0 1px var(--gl-line), inset 0 1px 2px rgba(29, 60, 140, 0.05); outline: none;
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+.otp-box:focus { border-color: rgba(75, 120, 238, 0.7); box-shadow: 0 0 0 3px rgba(75, 120, 238, 0.22); }
+.otp-box:disabled { opacity: 0.6; }
+.otp.bad .otp-box { border-color: rgba(217, 45, 32, 0.6); animation: otpShake 0.3s; }
+@keyframes otpShake { 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+@media (max-width: 360px) { .otp-box { width: 40px; height: 52px; } }
+
+/* confirm as a page */
+.wd-confirm-amt { text-align: center; font-size: 46px; font-weight: 800; letter-spacing: -1px; margin: 8px 0 18px; font-variant-numeric: tabular-nums; }
+.wd-confirm-amt span { font-size: 18px; font-weight: 700; color: var(--muted); }
+.wd-confirm-card { padding: 4px 16px; border-radius: 22px; background: var(--gl-fill); border: 1px solid var(--gl-edge); box-shadow: var(--gl-shadow); }
+.wd-confirm-card .confirm-row { padding: 14px 0; }
+.wd-confirm-card .confirm-row + .confirm-row { border-top: 1px solid var(--border); }
+
+/* withdraw heading line with a big back button */
+.wd-head { position: relative; display: flex; align-items: center; justify-content: center; min-height: 48px; margin-bottom: 14px; }
+.wd-head h1 { margin: 0; text-align: center; }
+.wd-back-big {
+  position: absolute; left: 0; top: 50%; transform: translateY(-50%); width: 48px; height: 48px; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer; color: var(--text);
+  background: var(--gl-fill); border: 1px solid var(--gl-edge); box-shadow: var(--gl-shadow);
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+}
+.wd-back-big:active { transform: translateY(-50%) scale(0.95); }

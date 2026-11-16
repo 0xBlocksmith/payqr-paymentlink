@@ -34,9 +34,9 @@ export default function Disputes() {
       <div className="screen">
         <h1 style={{ textAlign: "center", marginBottom: 14 }}>{t("nav.disputes")}</h1>
         {!ready || !signer || !supportSigner || !proxies ? (
-          <p className="muted" style={{ textAlign: "center" }}>Loading…</p>
+          <p className="muted" style={{ textAlign: "center" }}>{t("ds.loading")}</p>
         ) : !SUPPORT_BRIDGE_URL ? (
-          <p className="muted" style={{ textAlign: "center" }}>Support isn’t available yet.</p>
+          <p className="muted" style={{ textAlign: "center" }}>{t("ds.unavailable")}</p>
         ) : (
           <PaymentHistoryWithSupport
             key={rev}

@@ -15,7 +15,7 @@ import { ConnectionBanner } from "../../components/ConnectionBanner";
 import { SetupChecklist } from "../../components/SetupChecklist";
 import { Skeleton, LoadingState } from "../../components/ui/LoadingState";
 import { ErrorPanel } from "../../components/ui/ErrorPanel";
-import { SettlementNote } from "../../components/ui/SettlementNote";
+import { Countdown } from "../../components/ui/Countdown";
 import { useRegisteredCurrency } from "../../components/useRegisteredCurrency";
 import { useLockPeriod } from "../../components/useLockPeriod";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, fmtUsdc } from "../../lib/contract";
@@ -26,7 +26,7 @@ import { loadCountry, fmtFiat, saveCountry, COUNTRIES } from "../../lib/countrie
 import { rememberedLinks } from "../../lib/paymentLinks";
 import { computeSetup, dismissSetup, setupDismissed } from "../../lib/setup";
 import { resolveStatus } from "../../lib/status";
-import { fill, fmtAgo, fmtDay } from "../../lib/format";
+import { fill, fmtAgo, fmtDay, fmtLockWindow } from "../../lib/format";
 import { useT } from "../../lib/i18n";
 import { usePrevBalances } from "../../components/usePrevBalances";
 import { useMerchantProxies } from "../../components/useMerchantProxies";
@@ -86,7 +86,7 @@ export default function Dashboard() {
   // Settlement buckets — each received sale is locked for the currency's
   // settlement window before it's withdrawable. The REAL unlock times come from
   // here (not from a hardcoded period).
-  const { data: buckets } = useReadContract({
+  const { data: buckets, refetch: refetchBuckets } = useReadContract({
     address: CONTRACT_ADDRESS,
     abi: INTEGRATOR_ABI,
     functionName: "getMerchantBuckets",
@@ -163,12 +163,8 @@ export default function Dashboard() {
     prevAvail.current = cur;
   }, [available, balance, rate, country, t]);
 
-  // Soonest still-locked bucket → the real unlock time and how much unlocks then.
+  // Still-locked buckets: each one gets its own countdown row.
   const lockedBuckets = ((buckets as any[]) || []).filter((b) => b.amount > 0n && Number(b.unlockTimestamp) > now);
-  const nextBucket = lockedBuckets.length
-    ? lockedBuckets.reduce((a, b) => (Number(b.unlockTimestamp) < Number(a.unlockTimestamp) ? b : a))
-    : null;
-  const nextUnlock = nextBucket ? Number(nextBucket.unlockTimestamp) : null;
 
   const recent = rows.slice(0, 4);
 
@@ -208,6 +204,7 @@ export default function Dashboard() {
   const queryClient = useQueryClient();
   // Hide-balances toggle (remembered on this device).
   const [hidden, setHidden] = useState(false);
+  const [infoOpen, setInfoOpen] = useState(false);
   useEffect(() => { try { setHidden(localStorage.getItem("payqr.hideBal") === "1"); } catch {} }, []);
   const toggleHidden = () => setHidden((h) => { const n = !h; try { localStorage.setItem("payqr.hideBal", n ? "1" : "0"); } catch {} return n; });
 
@@ -248,7 +245,7 @@ export default function Dashboard() {
         <div className="bal-wrap">
         <section className="bal glass-card" aria-label={t("wd.accountBalance")}>
           <button className="bal-eye" onClick={toggleHidden} aria-pressed={hidden}
-            aria-label={hidden ? "Show balances" : "Hide balances"}>
+            aria-label={hidden ? t("dash3.showBal") : t("dash3.hideBal")}>
             {hidden ? (
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3l18 18M10.6 6.1A9.8 9.8 0 0 1 12 6c6 0 10 6 10 6a17 17 0 0 1-3.2 3.8M6.5 7.6C3.9 9.4 2 12 2 12s4 6 10 6c1.6 0 3-.4 4.3-1M9.9 9.9a3 3 0 0 0 4.2 4.2" /></svg>
             ) : (
@@ -269,7 +266,11 @@ export default function Dashboard() {
 
           <div className="bal-row">
             <div className="bal-cell">
-              <div className="bal-cell-label">{t("dash2.settling")}</div>
+              <div className="bal-cell-label">
+                {t("dash2.settling")}
+                <button type="button" className="info-btn" aria-expanded={infoOpen} aria-label={t("dash3.infoLabel")}
+                  onClick={() => setInfoOpen((o) => !o)}>i</button>
+              </div>
               <div className="bal-cell-amt">{balanceLoaded ? mask(`$${settlingUsdc.toFixed(2)}`) : <Skeleton w={70} h={18} />}</div>
               <div className="bal-cell-hint">{t("dash2.settlingHint")}</div>
             </div>
@@ -280,20 +281,36 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Settling funds: the REAL date the next tranche unlocks. */}
-          {balanceLoaded && settlingUsdc > 0 && (
-            <div className="bal-next">
-              {nextBucket && nextUnlock
-                ? fill(t("dash2.nextUnlock"), {
-                    amount: fmtUsdc(nextBucket.amount),
-                    date: fmtDay(nextUnlock, lang, nextUnlock - now < 3 * 86400),
-                  })
-                : fill(t("dash2.settleNote"), { amount: settlingUsdc.toFixed(2) })}
+          {infoOpen && (
+            <div className="info-pop" role="note">
+              <b>{t("dash3.infoTitle")}</b>
+              <p>{lockSecs && fmtLockWindow(lockSecs, lang)
+                ? fill(t("dash3.infoBody"), { window: fmtLockWindow(lockSecs, lang) })
+                : t("dash3.infoBodyNoWin")}</p>
             </div>
           )}
-          {/* No funds settling yet: say how long a payment will take to unlock. */}
-          {balanceLoaded && settlingUsdc === 0 && regCode && (
-            <SettlementNote currency={regCode} className="bal-sn" />
+
+          {/* One countdown per settling payment. Each timer is its own tiny
+              component; when it reaches zero the balance is re-read and the
+              amount moves into Available. */}
+          {balanceLoaded && lockedBuckets.length > 0 && (
+            <div className="settle-list" aria-label={t("dash3.settlingList")}>
+              {[...lockedBuckets]
+                .sort((x, y) => Number(x.unlockTimestamp) - Number(y.unlockTimestamp))
+                .map((b, i) => {
+                  const unlock = Number(b.unlockTimestamp);
+                  return (
+                    <div key={`${unlock}-${i}`} className="settle-row">
+                      <div className="settle-l">
+                        <span className="settle-amt">{mask(`$${fmtUsdc(b.amount)}`)}</span>
+                        <span className="settle-date">{fill(t("dash3.availableOnDate"), { date: fmtDay(unlock, lang, unlock - now < 3 * 86400) })}</span>
+                      </div>
+                      <Countdown unlock={unlock} doneLabel={t("dash3.availableNow")}
+                        onDone={() => { refetchBalance(); refetchBuckets(); }} />
+                    </div>
+                  );
+                })}
+            </div>
           )}
         </section>
         </div>
@@ -390,10 +407,10 @@ export default function Dashboard() {
                     <div className="rr-sub">
                       {fmtUsdc(tx.amount)} USDC · #{tx.orderId} · {fmtAgo(new Date(tx.createdAt).getTime(), lang)}
                     </div>
+                    <div className={`rr-foot st-${st.tone}`} title={st.estimated ? t("status.estimated") : undefined}>
+                      <i aria-hidden="true" />{label}
+                    </div>
                   </div>
-                  <span className={`st-badge st-${st.tone}`} title={st.estimated ? t("status.estimated") : undefined}>
-                    {label}
-                  </span>
                 </div>
               );
             })}

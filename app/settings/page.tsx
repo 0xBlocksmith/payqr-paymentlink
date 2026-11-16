@@ -11,7 +11,6 @@ import { useMerchant } from "../../components/useMerchant";
 import { Splash } from "../../components/Splash";
 import { useSmartAccount } from "../../components/useSmartAccount";
 import { APP_VERSION } from "../../lib/version";
-import { useRelayIdentity } from "../../components/useRelayIdentity";
 import { Icon } from "../../components/Icons";
 import { CONTRACT_ADDRESS, INTEGRATOR_ABI, currencyFromBytes32 } from "../../lib/contract";
 import { toUserError, type UserError } from "../../lib/errors";
@@ -21,8 +20,6 @@ import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { ErrorPanel } from "../../components/ui/ErrorPanel";
 import { LoadingState } from "../../components/ui/LoadingState";
 import { SettlementNote } from "../../components/ui/SettlementNote";
-import { payoutIsSet } from "../../lib/setup";
-import { encryptPayout, decryptPayout, PAYOUT_PLACEHOLDER } from "../../lib/payoutCrypto";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import {
   COUNTRIES, LANGUAGES, VE_BANKS, loadCountry, clearLocalUserData, fmtSymbolCode,
@@ -70,7 +67,6 @@ export default function Settings() {
 
   useEffect(() => { setCountry(loadCountry()); }, []);
 
-  const { getIdentity } = useRelayIdentity();
   const { data: info, refetch: refetchInfo } = useReadContract({
     address: CONTRACT_ADDRESS, abi: INTEGRATOR_ABI, functionName: "getMerchantInfo",
     args: [address], query: { enabled: !!address, staleTime: STATIC_STALE_MS },
@@ -88,44 +84,17 @@ export default function Settings() {
   const regCode = currencyFromBytes32(info?.[2] as string);
   const payCountry = COUNTRIES.find((c) => c.code === regCode) || country;
 
-  // Decrypt the payout handle client-side for display. null = can't decrypt on
-  // this device (different/absent relay key) — the UI then shows a neutral
-  // "•••• (saved)" instead of the raw ciphertext.
-  const [payoutId, setPayoutId] = useState<string | null>(null);
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!encPayout || encPayout === "0x") { if (alive) setPayoutId(null); return; }
-      try {
-        const id = await getIdentity();
-        const plain = await decryptPayout(encPayout, id);
-        // The onboarding sentinel round-trips like a real handle — treat it as
-        // "not set yet", never display it as the merchant's saved payout ID.
-        if (alive) setPayoutId(plain === PAYOUT_PLACEHOLDER ? null : plain);
-      } catch { if (alive) setPayoutId(null); }
-    })();
-    return () => { alive = false; };
-  }, [encPayout, getIdentity]);
 
-  // ── Edit profile (shop name + payout handle) via updateProfile ──
+  // ── Edit profile (shop name + sector) via updateProfile ──
   const [editing, setEditing] = useState(false);
   const [edShop, setEdShop] = useState("");
-  const [edPayout, setEdPayout] = useState("");
   const [edSector, setEdSector] = useState("");
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMsg, setProfileMsg] = useState("");            // validation text (ours)
   const [saveErr, setSaveErr] = useState<UserError | null>(null); // a failed/uncertain save
 
-  // Pago Móvil is three fields packed as "phone|Cédula/RIF|bank code".
-  const splitPm = (v: string) => [...v.split("|"), "", "", ""].slice(0, 3);
-  const pm = splitPm(editing ? edPayout : payoutId || "");
-  function setPm(i: number, v: string) {
-    const next = [...pm];
-    next[i] = v.replace(/\|/g, "").trim();
-    setEdPayout(next.join("|"));
-  }
   function startEdit() {
-    setEdShop(shopName); setEdPayout(payoutId || ""); setEdSector(businessSector);
+    setEdShop(shopName); setEdSector(businessSector);
     setProfileMsg(""); setSaveErr(null); setSavedOk(false); setEditing(true);
   }
   async function saveProfile() {
@@ -140,20 +109,16 @@ export default function Settings() {
     // non-Latin characters is longer than it looks.
     if (new TextEncoder().encode(edSector.trim()).length > 31)
       return setProfileMsg(t("set.errSectorLong"));
-    if (!edPayout.trim()) return setProfileMsg(t("set.errPayoutRequired").replace("{label}", payCountry.payoutLabel));
-    if (payCountry.validatePayout && !payCountry.validatePayout(edPayout.trim())) {
-      return setProfileMsg(t("set.errPayoutInvalid").replace("{label}", payCountry.payoutLabel).replace("{example}", payCountry.payoutPlaceholder));
-    }
     if (!sendTransaction) return setProfileMsg(t("set.walletConnecting"));
     setSaveErr(null);
     // Guarded: a double tap can't send two updates. The receipt wait has a
     // timeout and an unknown outcome is reported as such (never "failed", never
     // an invitation to press Save again blindly).
     const r = await saver.run(async () => {
-      // Encrypt the new handle to the merchant's own relay key before it goes
-      // on-chain (contract stores opaque `bytes`, never plaintext).
-      const identity = await getIdentity();
-      const encNew = await encryptPayout(edPayout.trim(), identity);
+      // The payout handle is no longer collected. updateProfile still takes the
+      // field, so resend whatever is already stored (empty "0x" when none) — the
+      // same empty value registration pushes.
+      const encNew = (encPayout && encPayout !== "0x" ? encPayout : "0x") as `0x${string}`;
       const data = encodeFunctionData({
         abi: INTEGRATOR_ABI, functionName: "updateProfile",
         args: [encNew, edShop.trim(), stringToHex(edSector.trim(), { size: 32 })],
@@ -213,30 +178,6 @@ export default function Settings() {
               <label htmlFor="set-sector" className="set-k" style={{ display: "block", marginTop: 10 }}>{t("set.sector")}</label>
               <input id="set-sector" className="input" value={edSector} onChange={(e) => setEdSector(e.target.value)}
                 placeholder={t("set.sectorPlaceholder")} maxLength={31} />
-              {payCountry.code === "VEN" ? (
-                <>
-                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>Pago Móvil</label>
-                  <label className="set-k" style={{ display: "block", marginTop: 6 }}>Teléfono</label>
-                  <input className="input" inputMode="tel" placeholder="04141234567"
-                    value={pm[0]} onChange={(e) => setPm(0, e.target.value)} />
-                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>Cédula o RIF</label>
-                  <input className="input" placeholder="V12345678"
-                    value={pm[1]} onChange={(e) => setPm(1, e.target.value)} />
-                  <label className="set-k" style={{ display: "block", marginTop: 10 }}>Banco</label>
-                  <select className="input"
-                    value={VE_BANKS.some((b) => b.code === pm[2]) ? pm[2] : ""}
-                    onChange={(e) => setPm(2, e.target.value)}>
-                    <option value="">Selecciona tu banco</option>
-                    {VE_BANKS.map((b) => <option key={b.code} value={b.code}>{b.code} · {b.name}</option>)}
-                  </select>
-                </>
-              ) : (
-                <>
-                  <label htmlFor="set-payout" className="set-k" style={{ display: "block", marginTop: 10 }}>{payCountry.payoutLabel}</label>
-                  <input id="set-payout" className="input" value={edPayout} autoComplete="off" spellCheck={false}
-                    onChange={(e) => setEdPayout(e.target.value)} placeholder={payCountry.payoutPlaceholder} />
-                </>
-              )}
               <p className="tiny" style={{ color: "var(--muted)", margin: "8px 0 0" }}>
                 {t("set.currencyLocked").replace("{currency}", payCountry.code)}
               </p>
@@ -257,35 +198,6 @@ export default function Settings() {
                   successful save (it used to be set inside the edit form, which
                   closed in the same moment, so "Saved" was never seen). */}
               {savedOk && <div className="ui-ok" role="status">{t("set.saved")}</div>}
-              {payCountry.code === "VEN" && payoutId ? (
-                <>
-                  {[["Teléfono", pm[0]], ["Cédula o RIF", pm[1]],
-                    ["Banco", VE_BANKS.find((b) => b.code === pm[2]) ? `${pm[2]} · ${VE_BANKS.find((b) => b.code === pm[2]).name}` : pm[2]],
-                  ].map(([k, v]) => (
-                    <div className="set-item" key={k}>
-                      <span className="set-k">{k}</span>
-                      <span className="set-v">{v || "—"}</span>
-                    </div>
-                  ))}
-                </>
-              ) : (
-              <div className="set-item">
-                <span className="set-k">{payCountry.code === "VEN" ? "Pago Móvil" : payCountry.payoutLabel}</span>
-                {/* payoutId is decrypted client-side. A saved blob we can't decrypt
-                    on this device shows a neutral "saved" marker, never ciphertext. */}
-                <span className="set-v">
-                  {payoutId || (payoutIsSet(encPayout) ? t("set.payoutSaved") : "—")}
-                </span>
-              </div>
-              )}
-              {/* No payout handle yet: say plainly that withdrawals need it, and
-                  put the fix one tap away (it used to be a bare "—"). */}
-              {info && !payoutIsSet(encPayout) && (
-                <div className="ui-err ui-err-warn" role="status">
-                  <div className="ui-err-msg">{fill(t("set.payoutRequired"), { label: payCountry.payoutLabel })}</div>
-                  <div className="ui-err-actions"><button className="btn small" onClick={startEdit}>{t("setup.payout.cta")}</button></div>
-                </div>
-              )}
             </>
           )}
 

@@ -5,11 +5,10 @@
  * Steps (in order). A step is "done" only from real signals, never assumed:
  *   learn     the merchant has seen how PayQR works (tour flag)
  *   register  registered on-chain (here or on a previous contract)
- *   payout    a payout handle is saved (non-empty on-chain blob)
  *   first     they have created a first sale or payment link
  *   track     at least one payment has been received
  */
-export type SetupStepId = "learn" | "register" | "payout" | "first" | "track";
+export type SetupStepId = "learn" | "register" | "first" | "track";
 
 export interface SetupSignals {
   tourSeen: boolean;
@@ -31,7 +30,6 @@ export function computeSetup(s: SetupSignals): { steps: SetupStep[]; doneCount: 
   const steps: SetupStep[] = [
     { id: "learn", done: s.tourSeen },
     { id: "register", done: s.registered === true },
-    { id: "payout", done: s.registered === true && payoutIsSet(s.payoutBlob) },
     { id: "first", done: s.hasFirstSaleOrLink },
     { id: "track", done: s.receivedCount > 0 },
   ];

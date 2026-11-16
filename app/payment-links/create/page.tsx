@@ -237,8 +237,8 @@ export default function CreatePaymentLink() {
         <Nav back backHref="/payment-links" />
         <div className="screen">
           <div className="card">
-            <div className="label">Payment Links</div>
-            <div className="sub">This feature isn't configured on this deployment yet.</div>
+            <div className="label">{t("pl.title")}</div>
+            <div className="sub">{t("plx.notConfigured")}</div>
           </div>
         </div>
       </>
@@ -270,8 +270,8 @@ export default function CreatePaymentLink() {
       let fixedLocal6: bigint | null = null;
       if (amountMode === "fixed") {
         const typed = Number(amountFiat);
-        if (!typed || typed <= 0) throw new ValidationError("Enter a valid amount.");
-        if (!cfg) throw new ValidationError("Could not price this amount right now. Try again shortly.");
+        if (!typed || typed <= 0) throw new ValidationError(t("plx.badAmount"));
+        if (!cfg) throw new ValidationError(t("plx.cantPrice"));
         // usdcForUsdcTarget inverts the small-order fee so "5 USDC" charges the
         // customer five, not five plus a fee. A local amount is priced again at
         // payment time; today's USDC here only checks it against the cap.
@@ -284,7 +284,7 @@ export default function CreatePaymentLink() {
           );
         }
         const usdc6 = amountUnit === "usdc" ? usdcForUsdcTarget(typed, cfg) : usdcForFiat(typed, cfg);
-        if (usdc6 <= 0n) throw new ValidationError("That amount is too small.");
+        if (usdc6 <= 0n) throw new ValidationError(t("plx.tooSmall"));
         if (amountUnit === "usdc") amountUsdc6 = usdc6;
         // Asked now, not trusted from the page's first load: a local price sent
         // to a relayer that can't keep it would leave the link pay-anything.
@@ -314,7 +314,7 @@ export default function CreatePaymentLink() {
       const linkId = computeLinkId(address as `0x${string}`, salt);
 
       if (!signTypedData || !sendBatchTransaction) {
-        throw new ValidationError("Wallet isn't ready yet. Please try again in a moment.");
+        throw new ValidationError(t("plx.walletNotReady"));
       }
 
       // Signed before the link exists — the signature only names the id — and

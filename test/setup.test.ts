@@ -11,18 +11,13 @@ describe("computeSetup", () => {
     expect(r.complete).toBe(false);
   });
 
-  it("payout cannot count as done before registering", () => {
-    const r = computeSetup({ ...base, registered: false, payoutBlob: "0xabcd" });
-    expect(r.steps.find((s) => s.id === "payout")!.done).toBe(false);
-  });
-
   it("unknown registration (still loading) is not 'registered'", () => {
     expect(computeSetup({ ...base, registered: undefined }).steps.find((s) => s.id === "register")!.done).toBe(false);
   });
 
   it("walks to the next outstanding step", () => {
     const r = computeSetup({ ...base, tourSeen: true, registered: true });
-    expect(r.next).toBe("payout");
+    expect(r.next).toBe("first");
     expect(r.doneCount).toBe(2);
   });
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { SlideToConfirm } from "../../components/ui/SlideToConfirm";
 import dynamic from "next/dynamic";
 import { encodeFunctionData } from "viem";
 import { useReadContract, usePublicClient } from "wagmi";
@@ -51,7 +52,7 @@ export default function Withdraw() {
   const { ready, address, sendTransaction } = useMerchant();
   const publicClient = usePublicClient();
   const { t } = useT();
-  const { requireStepUp, stepUpModal } = useStepUp();
+  const { requireStepUp, stepUpView, stepUpOpen } = useStepUp();
 
   const [country, setCountry] = useState(null);
   const [amount, setAmount] = useState("");
@@ -367,7 +368,7 @@ export default function Withdraw() {
     // handle (once), encrypts it, and runs the full offramp lifecycle. We no
     // longer ask for the handle here — the widget owns that single input.
     if (kind === "fiat") {
-      if (!(await requireStepUp())) return setError("Verification is required to withdraw.");
+      if (!(await requireStepUp())) return setError(t("su.verifyFirst"));
       setCashout({ defaultAmountUsdc: raw, code: wdCode, isHome });
       return;
     }
@@ -388,7 +389,7 @@ export default function Withdraw() {
   //              or the transfer would race the wallet's incoming balance.
   async function confirmUsdcWithdraw() {
     setError("");
-    if (!(await requireStepUp())) return setError("Verification is required to withdraw.");
+    if (!(await requireStepUp())) return setError(t("su.verifyFirst"));
     setBusy("usdc");
     try {
       // For an EXTERNAL send, snapshot the wallet's USDC balance BEFORE the
@@ -481,17 +482,22 @@ export default function Withdraw() {
           onError={(m) => setError(m)}
         />
       )}
-      <div className="screen">
-        <h1 style={{ textAlign: "center", marginBottom: 14 }}>{t("nav.withdraw")}</h1>
+      <div className="screen" hidden={stepUpOpen || usdcStep === "confirm"}>
+        <div className="wd-head">
+          {usdcStep === "address" && (
+            <button type="button" className="wd-back-big" aria-label={t("common.back")} disabled={!!busy}
+              onClick={() => { setUsdcStep(null); setError(""); }}>
+              <Icon.Back width="22" height="22" />
+            </button>
+          )}
+          <h1>{t("nav.withdraw")}</h1>
+        </div>
         {/* USDC WITHDRAW — STEP 2: choose WHERE the USDC goes. Either keep it in
             the merchant's OWN connected wallet (the contract pays out to
             msg.sender), or forward it to a pasted external address (two sponsored
             steps: withdrawUSDC into the wallet, then an ERC-20 transfer on to it). */}
         {usdcStep === "address" && (
           <div className="wd-usdc-step">
-            <button className="wallet-back" onClick={() => { setUsdcStep(null); setError(""); }}>
-              <Icon.Back width="16" height="16" /> {t("wd.usdcTitle")}
-            </button>
             <div className="wd-usdc-amt">
               <span className="wd-usdc-amt-val">{usdcSend.usdc.toFixed(2)} USDC</span>
               <span className="wd-usdc-amt-sub">{t("wd.usdcChooseDest")}</span>
@@ -741,11 +747,7 @@ export default function Withdraw() {
               <button className="wallet-back" onClick={() => setDestChoice(null)}>
                 <Icon.Back width="16" height="16" /> {t("wd.usdcTitle")}
               </button>
-            ) : (
-              /* No chooser to go back to when fiat is hidden — keep the title as
-                 a plain heading so the form still says what it does. */
-              <div className="wd-dest-head">{t("wd.usdcTitle")}</div>
-            )}
+            ) : null}
 
             <div className="wd-amt">
               <div className="wd-amt-in">
@@ -782,15 +784,24 @@ export default function Withdraw() {
         )}
       </div>
 
-      {/* USDC WITHDRAW — STEP 3: final confirm dialog before the on-chain send. */}
-      {usdcStep === "confirm" && (
-        <div className="confirm-overlay" onClick={() => busy ? null : setUsdcStep("address")}>
-          <div className="confirm-sheet" onClick={(e) => e.stopPropagation()}>
-            <div className="confirm-h">{t("wd.usdcConfirmTitle")}</div>
-            <div className="confirm-amt">{usdcSend.usdc.toFixed(2)} USDC</div>
-            <p className="confirm-sub">
-              {usdcDest === "external" ? t("wd.usdcConfirmBodyExt") : t("wd.usdcConfirmBody")}
-            </p>
+      {/* 2FA: a full PAGE with one-time-code boxes (never a popup). */}
+      {stepUpOpen && <div className="screen">{stepUpView}</div>}
+
+      {/* USDC WITHDRAW — STEP 3: review + confirm, as a page. */}
+      {usdcStep === "confirm" && !stepUpOpen && (
+        <div className="screen wd-confirm">
+          <div className="wd-head">
+            <button type="button" className="wd-back-big" aria-label={t("common.back")} disabled={!!busy} onClick={() => setUsdcStep("address")}>
+              <Icon.Back width="22" height="22" />
+            </button>
+            <h1>{t("wd.usdcConfirmTitle")}</h1>
+          </div>
+          <div className="wd-confirm-amt">{usdcSend.usdc.toFixed(2)} <span>USDC</span></div>
+          <div className="wd-confirm-card">
+            <div className="confirm-row">
+              <span>{t("wd.confirmFrom")}</span>
+              <b>PayQR</b>
+            </div>
             <div className="confirm-row">
               <span>{t("wd.destAddress")}</span>
               <b style={{ fontFamily: "monospace" }}>
@@ -805,19 +816,17 @@ export default function Withdraw() {
                 <b>{t("wd.usdcTwoSteps")}</b>
               </div>
             )}
-            {error && <p className="error" style={{ textAlign: "center", marginTop: 8 }}>{error}</p>}
-            <div className="confirm-actions">
-              <button className="btn ghost" disabled={!!busy} onClick={() => setUsdcStep("address")}>
-                {t("common.cancel")}
-              </button>
-              <button className="btn" disabled={!!busy} onClick={confirmUsdcWithdraw}>
-                {busy === "usdc" ? t("wd.working") : t("wd.usdcConfirmCta")}
-              </button>
-            </div>
+          </div>
+          <p className="confirm-sub" style={{ textAlign: "center" }}>
+            {usdcDest === "external" ? t("wd.usdcConfirmBodyExt") : t("wd.usdcConfirmBody")}
+          </p>
+          {error && <p className="error" style={{ textAlign: "center", marginTop: 8 }}>{error}</p>}
+          <div className="wd-slide">
+            <SlideToConfirm label={t("wd.usdcConfirmCta")} busy={busy === "usdc"} disabled={!!busy}
+              onConfirm={confirmUsdcWithdraw} />
           </div>
         </div>
       )}
-      {stepUpModal}
     </>
   );
 }

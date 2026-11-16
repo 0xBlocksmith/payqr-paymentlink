@@ -37,7 +37,7 @@ export function FloatingNav() {
   if (!usePillVisible()) return null;
   const active = items.findIndex((i) => path === i.href || path.startsWith(i.href + "/"));
   return (
-    <nav className="fnav" aria-label="Main">
+    <nav className="fnav" aria-label={t("dash3.mainNav")}>
       {active >= 0 && (
         <span className="fnav-glow" style={{ transform: `translateX(${active * 100}%)` }} aria-hidden="true" />
       )}
