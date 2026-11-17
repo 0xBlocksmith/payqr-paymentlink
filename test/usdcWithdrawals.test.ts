@@ -94,7 +94,7 @@ describe("fetchChainWithdrawals gap handling", () => {
     return Object.assign(c, {
       getBlockNumber: async () => c.latest,
       getBlock: async () => ({ timestamp: 1n }),
-      getContractEvents: async ({ fromBlock, toBlock }: any) => {
+      getContractEvents: async ({ fromBlock, toBlock }: { fromBlock: bigint; toBlock: bigint }) => {
         c.calls++;
         if (toBlock - fromBlock + 1n > limit) throw new Error("block range limit exceeded");
         return [];
