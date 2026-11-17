@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mergeUsdcWithdrawals, ledgerBegin, ledgerUpdate, loadLedger, type ChainWithdrawal, type WdRecord } from "../lib/usdcWithdrawals";
 
 const M = "0xAbC0000000000000000000000000000000000001";
@@ -113,5 +113,56 @@ describe("fetchChainWithdrawals gap handling", () => {
     c.calls = 0;
     await fetchChainWithdrawals(c, m, { backfill: true });
     expect(c.calls).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("transfer history (alchemy_getAssetTransfers)", () => {
+  const M2 = "0x00000000000000000000000000000000000000aa";
+  const USDC = "0x00000000000000000000000000000000000000cc";
+  const ts = (s: number) => new Date(s * 1000).toISOString();
+  const tr = (hash: string, from: string, to: string, value: bigint, s: number) =>
+    ({ hash, from, to, blockNum: "0x10", rawContract: { value: "0x" + value.toString(16) }, metadata: { blockTimestamp: ts(s) } });
+
+  it("finds withdrawals from our integrators and pairs the forward", async () => {
+    vi.resetModules();
+    vi.stubEnv("NEXT_PUBLIC_CONTRACT_ADDRESS", "0x00000000000000000000000000000000000000c1");
+    vi.stubEnv("NEXT_PUBLIC_USDC_ADDRESS", USDC);
+    const C1 = "0x00000000000000000000000000000000000000c1";
+    const ext = "0x00000000000000000000000000000000000000e1";
+    const calls: any[] = [];
+    vi.stubGlobal("fetch", async (_u: string, init: any) => {
+      const p = JSON.parse(init.body).params[0];
+      calls.push(p);
+      const transfers = p.toAddress
+        ? [tr("0xw1", C1, M2, 5_000_000n, 1000), tr("0xpay", "0x0000000000000000000000000000000000000077", M2, 9n, 1100), tr("0xw2", C1, M2, 7_000_000n, 2000)]
+        : [tr("0xf1", M2, ext, 5_000_000n, 1010)];
+      return { ok: true, json: async () => ({ result: { transfers } }) } as any;
+    });
+    const mod = await import("../lib/usdcWithdrawals");
+    const rows = await mod.fetchTransferHistory(M2, "https://base-mainnet.g.alchemy.com/v2/k");
+    expect(calls).toHaveLength(2);
+    expect(calls[0].fromBlock).toBe("0x0");
+    expect(rows.map((r) => r.txHash).sort()).toEqual(["0xw1", "0xw2"]);
+    const w1 = rows.find((r) => r.txHash === "0xw1")!;
+    expect(w1.fwdTo).toBe(ext);
+    expect(rows.find((r) => r.txHash === "0xw2")!.fwdTo).toBeNull();
+    const merged = mod.mergeUsdcWithdrawals(rows, []);
+    expect(merged.find((r) => r.txHash === "0xw1")!.destination).toBe(ext);
+    await expect(mod.fetchTransferHistory(M2, "https://mainnet.base.org")).rejects.toThrow(mod.TransferHistoryUnsupported);
+    vi.unstubAllGlobals(); vi.unstubAllEnvs();
+  });
+
+  it("a multi-terminal sweep in one tx stays one row per terminal", () => {
+    const chain = [
+      { txHash: "0xs", amount: "1", blockNumber: "1", ts: 10 },
+      { txHash: "0xs", amount: "2", blockNumber: "1", ts: 10 },
+    ];
+    const ledger = [
+      { id: "a", amount: "1", destination: null, status: "withdrawn" as const, step1Hash: "0xs", createdAt: 1 },
+      { id: "b", amount: "2", destination: null, status: "withdrawn" as const, step1Hash: "0xs", createdAt: 1 },
+    ];
+    const rows = mergeUsdcWithdrawals(chain, ledger);
+    expect(rows.map((r) => r.amount).sort()).toEqual(["1", "2"]);
+    expect(new Set(rows.map((r) => r.orderId)).size).toBe(2);
   });
 });

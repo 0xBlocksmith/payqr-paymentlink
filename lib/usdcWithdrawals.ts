@@ -19,6 +19,8 @@
  * records. Nothing here retries a write.
  */
 import { INTEGRATOR_ABI, ALL_CONTRACT_ADDRESSES } from "./contract";
+import { USDC_ADDRESS, DIAMOND_ADDRESS } from "./p2p";
+import { RPC_URL } from "./chain";
 
 export type WdStatus = "processing" | "withdrawn" | "partial" | "failed";
 
@@ -39,6 +41,11 @@ export interface ChainWithdrawal {
   amount: string;                 // raw
   blockNumber: string;
   ts: number | null;              // unix s
+  /** Integrator the USDC came from (transfer history only); one tx can sweep several. */
+  from?: string | null;
+  /** The forward of this withdrawal to an external address, when one was found on-chain. */
+  fwdHash?: string | null;
+  fwdTo?: string | null;
 }
 
 export interface WithdrawalRow {
@@ -56,86 +63,98 @@ export interface WithdrawalRow {
 
 const lc = (s?: string | null) => (s ? s.toLowerCase() : "");
 
-/**
- * Merge ledger + chain into display rows. Pure and deterministic.
- *  - same step-1 hash → one row (chain confirms; ledger supplies destination/step state)
- *  - a ledger row with status "processing" whose step-1 is confirmed on-chain
- *    and which has no external hop is "withdrawn"
- *  - chain-only rows (another device / cleared storage) → "withdrawn" to own wallet
- */
 /** A send that timed out before any hash existed is given this long to show up on-chain. */
 export const STALE_PROCESSING_MS = 60 * 60 * 1000;
 /** How far a chain event may sit from a hashless ledger record's start time to be treated as the same send. */
 const ADOPT_WINDOW_S = 30 * 60;
 
+/**
+ * Merge ledger + chain into display rows. Pure and deterministic.
+ *  - a ledger record and the chain withdrawal with the same step-1 hash are ONE
+ *    row (one tx sweeping several terminals has one chain entry per terminal and
+ *    is matched by amount)
+ *  - a ledger row "processing" whose step 1 is confirmed and which has no
+ *    external hop pending is "withdrawn"; a confirmed forward also settles it
+ *  - chain-only rows (another device / cleared storage) are "withdrawn", with the
+ *    destination when the forward was found on-chain
+ *  - a send that timed out before its hash was recorded adopts the matching
+ *    chain withdrawal; with none after a complete read and an hour, it "failed"
+ */
 export function mergeUsdcWithdrawals(
   chain: ChainWithdrawal[], ledger: WdRecord[],
   opts: { scanComplete?: boolean; now?: number } = {},
 ): WithdrawalRow[] {
-  const rows = new Map<string, WithdrawalRow>();
-  const chainBy = new Map(chain.map((c) => [lc(c.txHash), c]));
   const now = opts.now ?? Date.now();
+  const used = new Set<number>();                 // chain indexes already matched
+  const match = new Map<string, number>();        // ledger id -> chain index
 
-  // Chain events no ledger record claims by hash: candidates for a send that
-  // timed out before its hash was recorded (otherwise it shows as two rows).
-  const claimed = new Set(ledger.filter((r) => r.step1Hash).map((r) => lc(r.step1Hash)));
-  const free = chain.filter((c) => !claimed.has(lc(c.txHash)) && c.ts != null);
-  const adopted = new Map<string, ChainWithdrawal>(); // ledger id -> chain event
-  const taken = new Set<string>();
+  // 1. by hash (amount breaks ties inside a multi-terminal sweep)
+  for (const r of ledger) {
+    if (!r.step1Hash) continue;
+    const same = chain.map((c, i) => ({ c, i })).filter(({ c, i }) => !used.has(i) && lc(c.txHash) === lc(r.step1Hash));
+    const hit = same.find(({ c }) => c.amount === r.amount) ?? same[0];
+    if (hit) { used.add(hit.i); match.set(r.id, hit.i); }
+  }
+  // 2. hashless "processing" records adopt an unclaimed chain withdrawal of the same amount
+  const claimedHashes = new Set(ledger.filter((r) => r.step1Hash).map((r) => lc(r.step1Hash)));
+  const adopted = new Set<string>();
   for (const r of [...ledger].sort((a, b) => a.createdAt - b.createdAt)) {
     if (r.step1Hash || r.status !== "processing") continue;
     const start = Math.floor(r.createdAt / 1000);
-    const hit = free.find((c) => !taken.has(lc(c.txHash)) && c.amount === r.amount
-      && (c.ts as number) >= start - 60 && (c.ts as number) <= start + ADOPT_WINDOW_S);
-    if (hit) { adopted.set(r.id, hit); taken.add(lc(hit.txHash)); }
+    const i = chain.findIndex((c, k) => !used.has(k) && !claimedHashes.has(lc(c.txHash)) && c.ts != null
+      && c.amount === r.amount && c.ts >= start - 60 && c.ts <= start + ADOPT_WINDOW_S);
+    if (i >= 0) { used.add(i); match.set(r.id, i); adopted.add(r.id); }
   }
 
-  for (const r0 of ledger) {
-    const hit = adopted.get(r0.id);
-    const r = hit ? { ...r0, step1Hash: hit.txHash } : r0;
-    const key = r.step1Hash ? lc(r.step1Hash) : `local:${r.id}`;
-    const c = r.step1Hash ? chainBy.get(lc(r.step1Hash)) : undefined;
+  const rows: WithdrawalRow[] = [];
+  const ids = new Set<string>();
+  const uniq = (base: string) => { let id = base, n = 2; while (ids.has(id)) id = `${base}-${n++}`; ids.add(id); return id; };
+
+  for (const r of ledger) {
+    const ci = match.get(r.id);
+    const c = ci != null ? chain[ci] : undefined;
+    const step1 = r.step1Hash || c?.txHash || null;
+    const step2 = r.step2Hash || c?.fwdHash || null;
+    const destination = r.destination ?? c?.fwdTo ?? null;
     let status = r.status;
-    // Never confirmed and no matching chain event after a full scan: it did not go through.
-    if (!r.step1Hash && status === "processing" && opts.scanComplete !== false && now - r.createdAt > STALE_PROCESSING_MS) status = "failed";
-    // On-chain confirmation settles an ambiguous "processing" — but only when
-    // there is no second hop still pending.
-    if (c && status === "processing" && !r.destination) status = "withdrawn";
-    // Adopted external send: step 1 landed, no forward was ever recorded, so the USDC sits in the wallet.
-    else if (hit && status === "processing" && r.destination && !r.step2Hash) status = "partial";
+    // Never confirmed and no matching chain withdrawal after a complete read: it did not go through.
+    if (!step1 && status === "processing" && opts.scanComplete !== false && now - r.createdAt > STALE_PROCESSING_MS) status = "failed";
+    if (c && (status === "processing" || status === "partial")) {
+      if (!r.destination || c.fwdHash) status = "withdrawn";       // nothing left to forward / forward confirmed
+      else if (adopted.has(r.id) && !r.step2Hash) status = "partial"; // landed, never forwarded
+    }
     const ts = c?.ts ?? Math.floor(r.createdAt / 1000);
-    rows.set(key, {
-      orderId: `usdc-${r.step1Hash || r.id}`,
+    rows.push({
+      orderId: uniq(`usdc-${step1 || r.id}`),
       kind: "usdc_withdraw",
       amount: r.amount,
       status,
-      txHash: r.step1Hash || null,
-      step2Hash: r.step2Hash || null,
-      destination: r.destination,
+      txHash: step1,
+      step2Hash: step2,
+      destination,
       createdAt: new Date(ts * 1000).toISOString(),
       placedAt: ts,
       integrator: null,
     });
   }
 
-  for (const c of chain) {
-    const key = lc(c.txHash);
-    if (rows.has(key)) continue;
+  chain.forEach((c, i) => {
+    if (used.has(i)) return;
     const ts = c.ts ?? 0;
-    rows.set(key, {
-      orderId: `usdc-${c.txHash}`,
+    rows.push({
+      orderId: uniq(`usdc-${c.txHash}`),
       kind: "usdc_withdraw",
       amount: c.amount,
       status: "withdrawn",
       txHash: c.txHash,
-      step2Hash: null,
-      destination: null,
+      step2Hash: c.fwdHash ?? null,
+      destination: c.fwdTo ?? null,
       createdAt: new Date(ts * 1000).toISOString(),
       placedAt: ts,
       integrator: null,
     });
-  }
-  return [...rows.values()].sort((a, b) => b.placedAt - a.placedAt);
+  });
+  return rows.sort((a, b) => b.placedAt - a.placedAt);
 }
 
 // ─── Ledger (per device, per merchant) ───────────────────────────────────
@@ -327,4 +346,102 @@ export async function fetchChainWithdrawals(
   const lastBlock = from <= latest ? latest : BigInt(prior!.lastBlock);
   saveScan(merchant, { lastBlock: String(lastBlock), events, gaps: merged, chunk: String(learned) });
   return events;
+}
+
+// ─── Transfer history (Alchemy) ──────────────────────────────────────────
+//
+// eth_getLogs needs a block range and the app's Alchemy key caps that range, so
+// a full history by log scan costs thousands of calls. Alchemy's
+// alchemy_getAssetTransfers is indexed by ADDRESS instead: two paged calls on
+// the same RPC URL return every USDC transfer into and out of the merchant's
+// wallet, with no block range. A withdrawal is USDC moving from one of our
+// integrators to the merchant; its forward is the next transfer of the same
+// amount out to an external address. Non-Alchemy RPCs fall back to the scan.
+
+/** Thrown when the configured RPC is not an Alchemy endpoint: use fetchChainWithdrawals instead. */
+export class TransferHistoryUnsupported extends Error {
+  constructor() { super("RPC does not support alchemy_getAssetTransfers"); this.name = "TransferHistoryUnsupported"; }
+}
+
+export function transferHistorySupported(url: string | undefined = RPC_URL): boolean {
+  return !!url && /\.alchemy(api)?\.(com|io)\//i.test(url);
+}
+
+/** A forward is accepted this long after its withdrawal (both txs run back to back from the app). */
+const FWD_WINDOW_S = 30 * 60;
+const MAX_PAGES = 10;
+
+interface AlchemyTransfer {
+  hash: string; from: string; to: string | null; blockNum: string;
+  rawContract?: { value?: string | null };
+  metadata?: { blockTimestamp?: string };
+}
+
+async function assetTransfers(url: string, filter: Record<string, unknown>): Promise<AlchemyTransfer[]> {
+  const out: AlchemyTransfer[] = [];
+  let pageKey: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 1, method: "alchemy_getAssetTransfers",
+        params: [{
+          fromBlock: "0x0", toBlock: "latest", category: ["erc20"],
+          contractAddresses: [USDC_ADDRESS], withMetadata: true, excludeZeroValue: true,
+          order: "desc", maxCount: "0x3e8", ...filter, ...(pageKey ? { pageKey } : {}),
+        }],
+      }),
+    });
+    if (!res.ok) throw new Error(`alchemy_getAssetTransfers HTTP ${res.status}`);
+    const body = await res.json();
+    if (body.error) throw new Error(`alchemy_getAssetTransfers: ${body.error.message ?? "error"}`);
+    out.push(...(body.result?.transfers ?? []));
+    pageKey = body.result?.pageKey;
+    if (!pageKey) break;
+  }
+  return out;
+}
+
+const rawOf = (t: AlchemyTransfer) => { try { return BigInt(t.rawContract?.value ?? "0x0").toString(); } catch { return "0"; } };
+const tsOf = (t: AlchemyTransfer) => { const ms = Date.parse(t.metadata?.blockTimestamp ?? ""); return Number.isFinite(ms) ? Math.floor(ms / 1000) : null; };
+
+/**
+ * Every USDC withdrawal for `merchant` (merchant = the wallet the integrator pays
+ * out to), with its external forward when one exists. Two indexed calls, no
+ * block scan. Throws TransferHistoryUnsupported on a non-Alchemy RPC.
+ */
+export async function fetchTransferHistory(merchant: string, url: string | undefined = RPC_URL): Promise<ChainWithdrawal[]> {
+  if (!url || !transferHistorySupported(url)) throw new TransferHistoryUnsupported();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(USDC_ADDRESS)) throw new Error("NEXT_PUBLIC_USDC_ADDRESS is not set");
+  const contracts = new Set(ALL_CONTRACT_ADDRESSES.map(lc));
+  const [ins, outs] = await Promise.all([
+    assetTransfers(url, { toAddress: merchant }),
+    assetTransfers(url, { fromAddress: merchant }),
+  ]);
+
+  const wds: ChainWithdrawal[] = ins
+    .filter((t) => contracts.has(lc(t.from)))
+    .map((t) => ({
+      txHash: t.hash, amount: rawOf(t), blockNumber: String(BigInt(t.blockNum)), ts: tsOf(t),
+      from: t.from, fwdHash: null, fwdTo: null,
+    }));
+
+  // Forwards: out to an address that is not one of ours (an integrator or the P2P diamond).
+  const ours = new Set([...contracts, lc(DIAMOND_ADDRESS), lc(merchant)]);
+  const fwds = outs
+    .filter((t) => t.to && !ours.has(lc(t.to)))
+    .map((t) => ({ hash: t.hash, to: t.to as string, amount: rawOf(t), ts: tsOf(t) }));
+  const taken = new Set<number>();
+  for (const w of [...wds].sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0))) {
+    if (w.ts == null) continue;
+    let best = -1;
+    fwds.forEach((f, i) => {
+      if (taken.has(i) || f.ts == null || f.amount !== w.amount) return;
+      if (f.ts < w.ts! || f.ts > w.ts! + FWD_WINDOW_S) return;
+      if (best < 0 || (f.ts as number) < (fwds[best].ts as number)) best = i;
+    });
+    if (best >= 0) { taken.add(best); w.fwdHash = fwds[best].hash; w.fwdTo = fwds[best].to; }
+  }
+  return wds;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { useLockPeriod } from "../../components/useLockPeriod";
 import { useRegisteredCurrency } from "../../components/useRegisteredCurrency";
 import { fill, fmtDay } from "../../lib/format";
@@ -22,7 +22,7 @@ import { loadCountry, fmtFiat } from "../../lib/countries";
 import { loadMerchantProfile } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
 import { useT } from "../../lib/i18n";
-import { mergeUsdcWithdrawals, fetchChainWithdrawals, loadLedger, scanIncomplete } from "../../lib/usdcWithdrawals";
+import { mergeUsdcWithdrawals, fetchChainWithdrawals, loadLedger, scanIncomplete, fetchTransferHistory, transferHistorySupported } from "../../lib/usdcWithdrawals";
 import { EXPLORER_URL } from "../../lib/chain";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { decryptPayout } from "../../lib/payoutCrypto";
@@ -175,6 +175,11 @@ export default function Transactions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, proxyKey]);
 
+  const histAt = useRef(0);                 // last successful transfer-history read (ms)
+  const lastChain = useRef<any[]>([]);      // last good on-chain USDC withdrawal list
+  const lastChainOk = useRef(true);
+  // A different merchant must not inherit the previous one's chain rows.
+  useEffect(() => { histAt.current = 0; lastChain.current = []; lastChainOk.current = true; }, [address]);
   const refresh = useCallback(async (backfill = false) => {
     if (!address || !proxies) return;
     // All three sources start AT ONCE and each one updates the list the moment
@@ -188,9 +193,19 @@ export default function Transactions() {
     // Settled up front so a rejection is never left unhandled if payments fail first.
     const withdrawalsP = (proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([] as any[])).then(
       (r: any[]) => ({ r }), (error: unknown) => ({ error }));
-    const chainP = publicClient
-      ? fetchChainWithdrawals(publicClient, address, { backfill }).then((r) => ({ ok: true, r }), (e) => { console.error(e); return { ok: false, r: [] }; })
-      : Promise.resolve({ ok: true, r: [] });
+    // USDC withdrawals: Alchemy's address-indexed transfer history (two calls, no
+    // block range). Other RPCs fall back to the bounded log scan.
+    // The timer re-reads it at most once a minute; open and pull-to-refresh always do.
+    const viaHistory = transferHistorySupported();
+    const histDue = backfill || Date.now() - histAt.current >= 60_000;
+    const chainP = viaHistory
+      ? histDue
+        ? fetchTransferHistory(address).then((r) => { histAt.current = Date.now(); return { ok: true, r }; },
+            (e) => { console.error(e); return { ok: false, r: null }; })
+        : Promise.resolve({ ok: lastChainOk.current, r: null })
+      : publicClient
+        ? fetchChainWithdrawals(publicClient, address, { backfill }).then((r) => ({ ok: true, r }), (e) => { console.error(e); return { ok: false, r: null }; })
+        : Promise.resolve({ ok: true, r: [] });
     try {
       // fetchHistory/fetchWithdrawals throw on network AND subgraph faults so a
       // failed poll never wipes real rows: keep the last good list and only flag
@@ -208,9 +223,12 @@ export default function Transactions() {
     } finally {
       setLoaded(true);
     }
-    const chain = await chainP;
-    const incomplete = !chain.ok || scanIncomplete(address);
-    replace("usdc_withdraw", mergeUsdcWithdrawals(chain.r as any[], loadLedger(address), { scanComplete: !incomplete }));
+    const chain: { ok: boolean; r: any[] | null } = await chainP;
+    // A failed or skipped read keeps the last good chain list instead of dropping its rows.
+    if (chain.r) lastChain.current = chain.r;
+    lastChainOk.current = chain.ok;
+    const incomplete = !chain.ok || (!viaHistory && scanIncomplete(address));
+    replace("usdc_withdraw", mergeUsdcWithdrawals(lastChain.current, loadLedger(address), { scanComplete: !incomplete }));
     setWdScanFailed(incomplete);
     // proxyKey stands in for proxies: same content, stable identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
