@@ -175,7 +175,7 @@ export default function Transactions() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, proxyKey]);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (backfill = false) => {
     if (!address || !proxies) return;
     // All three sources start AT ONCE and each one updates the list the moment
     // it answers — the list never waits for the slowest (the on-chain scan):
@@ -189,7 +189,7 @@ export default function Transactions() {
     const withdrawalsP = (proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([] as any[])).then(
       (r: any[]) => ({ r }), (error: unknown) => ({ error }));
     const chainP = publicClient
-      ? fetchChainWithdrawals(publicClient, address).then((r) => ({ ok: true, r }), (e) => { console.error(e); return { ok: false, r: [] }; })
+      ? fetchChainWithdrawals(publicClient, address, { backfill }).then((r) => ({ ok: true, r }), (e) => { console.error(e); return { ok: false, r: [] }; })
       : Promise.resolve({ ok: true, r: [] });
     try {
       // fetchHistory/fetchWithdrawals throw on network AND subgraph faults so a
@@ -217,8 +217,8 @@ export default function Transactions() {
   }, [address, proxyKey, publicClient, queryClient]);
 
   useEffect(() => {
-    refresh();
-    const t = setInterval(refresh, 15000);
+    refresh(true); // open: also work on unread block ranges
+    const t = setInterval(() => refresh(false), 15000); // timer: new blocks only
     return () => clearInterval(t);
   }, [refresh]);
 
@@ -342,7 +342,7 @@ export default function Transactions() {
   if (!country) return <><Nav back /><div className="screen"><p className="muted" style={{ textAlign: "center" }}>{t("common.loading")}</p></div></>;
 
   return (
-    <PullToRefresh onRefresh={async () => { await refresh(); }}>
+    <PullToRefresh onRefresh={async () => { await refresh(true); }}>
       <Nav back />
       <div className="screen">
         <h1 className="page-h">{t("tx.title")}</h1>

@@ -101,6 +101,8 @@ export function mergeUsdcWithdrawals(
     // On-chain confirmation settles an ambiguous "processing" — but only when
     // there is no second hop still pending.
     if (c && status === "processing" && !r.destination) status = "withdrawn";
+    // Adopted external send: step 1 landed, no forward was ever recorded, so the USDC sits in the wallet.
+    else if (hit && status === "processing" && r.destination && !r.step2Hash) status = "partial";
     const ts = c?.ts ?? Math.floor(r.createdAt / 1000);
     rows.set(key, {
       orderId: `usdc-${r.step1Hash || r.id}`,
@@ -180,15 +182,25 @@ const START_CHUNK = 1_000_000n;
 const MIN_CHUNK = 10n;
 const MAX_REQUESTS = 60;
 
+/** A block range of ONE contract that has not been read yet. */
+interface Gap { a: string; lo: string; hi: string }
+
 interface ScanState {
   lastBlock: string;
   events: ChainWithdrawal[];
-  /** Block ranges [lo, hi] a scan could not cover (range-limited RPC / request budget). Backfilled on later opens. */
-  gaps?: [string, string][];
+  /** Unread ranges (range-limited RPC / request budget), per contract so progress is kept. Backfilled on open / pull-to-refresh. */
+  gaps?: Gap[];
+  /** Largest log range the RPC accepted last time; the next scan starts there instead of re-halving. */
+  chunk?: string;
 }
 
 function loadScan(m: string): ScanState | null {
-  try { return JSON.parse(localStorage.getItem(scanKey(m)) || "null"); } catch { return null; }
+  try {
+    const st = JSON.parse(localStorage.getItem(scanKey(m)) || "null");
+    // Older builds stored gaps as [lo, hi] pairs without a contract: drop them, a fresh lookback is cheap to redo.
+    if (st && Array.isArray(st.gaps)) st.gaps = st.gaps.filter((g: any) => g && typeof g === "object" && !Array.isArray(g) && g.a);
+    return st;
+  } catch { return null; }
 }
 function saveScan(m: string, s: ScanState) {
   try { localStorage.setItem(scanKey(m), JSON.stringify(s)); } catch { /* ignore */ }
@@ -208,29 +220,40 @@ const isRangeError = (e: any) =>
  * Returns every known `WithdrawalUSDC` for `merchant` across all PayQR
  * contracts. Throws only when the very first chain read fails (so the caller can
  * keep showing the ledger and mark the list as possibly incomplete). A
- * range-limited RPC degrades to a bounded backward scan instead of failing.
+ * range-limited RPC degrades to a bounded newest-first scan; what could not be
+ * read is remembered PER CONTRACT as a gap.
+ *
+ * `backfill` (page open / pull-to-refresh) also works on the stored gaps. The
+ * 15-second timer passes false and reads only new blocks, so a range-limited
+ * key is not hit with a full request budget on every tick.
  */
-export async function fetchChainWithdrawals(publicClient: any, merchant: string): Promise<ChainWithdrawal[]> {
+export async function fetchChainWithdrawals(
+  publicClient: any, merchant: string, opts: { backfill?: boolean } = {},
+): Promise<ChainWithdrawal[]> {
   const prior = loadScan(merchant);
   const latest: bigint = await publicClient.getBlockNumber();
   const floor = latest > LOOKBACK_BLOCKS ? latest - LOOKBACK_BLOCKS : 0n;
   const from0 = prior ? BigInt(prior.lastBlock) + 1n : floor;
   const from = from0 > floor ? from0 : floor;
 
-  // Ranges to read: the new blocks first, then ranges earlier opens could not finish.
-  const ranges: [bigint, bigint][] = [];
-  if (from <= latest) ranges.push([from, latest]);
-  let old = (prior?.gaps ?? [])
-    .map(([a, b]) => [BigInt(a) > floor ? BigInt(a) : floor, BigInt(b)] as [bigint, bigint])
-    .filter(([a, b]) => a <= b);
-  if (old.length > 3) {
-    old = [[old.reduce((m, g) => (g[0] < m ? g[0] : m), old[0][0]), old.reduce((m, g) => (g[1] > m ? g[1] : m), old[0][1])]];
+  const keptGaps: Gap[] = [];          // gaps not worked on this call
+  const work: { a: string; lo: bigint; hi: bigint }[] = [];
+  if (from <= latest) for (const a of ALL_CONTRACT_ADDRESSES) work.push({ a, lo: from, hi: latest });
+  for (const g of prior?.gaps ?? []) {
+    const lo = BigInt(g.lo) > floor ? BigInt(g.lo) : floor;
+    const hi = BigInt(g.hi);
+    if (lo > hi) continue;
+    if (opts.backfill) work.push({ a: g.a, lo, hi }); else keptGaps.push({ a: g.a, lo: String(lo), hi: String(hi) });
   }
-  ranges.push(...old);
-  if (!ranges.length) return prior?.events ?? [];
+  if (!work.length) return prior?.events ?? [];
+  // newest ranges first; the new-blocks range of the current contract leads
+  work.sort((x, y) => (x.hi === y.hi ? 0 : x.hi > y.hi ? -1 : 1));
 
   const found: ChainWithdrawal[] = [];
   const budget = { left: MAX_REQUESTS };
+  let chunk0 = prior?.chunk ? BigInt(prior.chunk) : START_CHUNK;
+  if (chunk0 < MIN_CHUNK) chunk0 = MIN_CHUNK;
+  let learned = chunk0;
 
   const read = async (address: string, fromBlock: bigint, toBlock: bigint) =>
     publicClient.getContractEvents({
@@ -241,7 +264,7 @@ export async function fetchChainWithdrawals(publicClient: any, merchant: string)
   /** Reads [lo0, hi] newest-first. Returns the highest block NOT read (budget ran out), or null when done. */
   const scan = async (address: string, lo0: bigint, hi: bigint): Promise<bigint | null> => {
     let to = hi;
-    let chunk = hi - lo0 + 1n < START_CHUNK ? hi - lo0 + 1n : START_CHUNK;
+    let chunk = learned < hi - lo0 + 1n ? learned : hi - lo0 + 1n;
     while (to >= lo0) {
       if (budget.left <= 0) return to;
       const lo = to - chunk + 1n > lo0 ? to - chunk + 1n : lo0;
@@ -257,7 +280,11 @@ export async function fetchChainWithdrawals(publicClient: any, merchant: string)
         if (lo === lo0) break;
         to = lo - 1n;
       } catch (err) {
-        if (chunk > MIN_CHUNK && isRangeError(err)) { chunk = chunk / 2n > MIN_CHUNK ? chunk / 2n : MIN_CHUNK; continue; }
+        if (chunk > MIN_CHUNK && isRangeError(err)) {
+          chunk = chunk / 2n > MIN_CHUNK ? chunk / 2n : MIN_CHUNK;
+          if (chunk < learned) learned = chunk;
+          continue;
+        }
         // A previous (older) contract may not carry the event: skip it quietly;
         // but a failure on the CURRENT contract must surface.
         if (address !== ALL_CONTRACT_ADDRESSES[0]) return null;
@@ -267,15 +294,19 @@ export async function fetchChainWithdrawals(publicClient: any, merchant: string)
     return null;
   };
 
-  const gaps: [string, string][] = [];
-  for (const [lo, hi] of ranges) {
-    let remaining: bigint | null = null;
-    for (const address of ALL_CONTRACT_ADDRESSES) {
-      const r = await scan(address, lo, hi);
-      if (r !== null && (remaining === null || r > remaining)) remaining = r;
-    }
-    // Everything above `remaining` was read for every contract; keep the rest as a gap.
-    if (remaining !== null) gaps.push([String(lo), String(remaining)]);
+  const gaps: Gap[] = [...keptGaps];
+  for (const w of work) {
+    const rem = await scan(w.a, w.lo, w.hi);
+    if (rem !== null) gaps.push({ a: w.a, lo: String(w.lo), hi: String(rem) });
+  }
+  // Bound the stored list: more than 3 gaps for one contract collapse into their span.
+  const merged: Gap[] = [];
+  for (const a of new Set(gaps.map((g) => g.a))) {
+    const mine = gaps.filter((g) => g.a === a);
+    if (mine.length <= 3) { merged.push(...mine); continue; }
+    const lo = mine.reduce((m, g) => (BigInt(g.lo) < m ? BigInt(g.lo) : m), BigInt(mine[0].lo));
+    const hi = mine.reduce((m, g) => (BigInt(g.hi) > m ? BigInt(g.hi) : m), BigInt(mine[0].hi));
+    merged.push({ a, lo: String(lo), hi: String(hi) });
   }
 
   // Timestamps, once per unique block.
@@ -294,6 +325,6 @@ export async function fetchChainWithdrawals(publicClient: any, merchant: string)
   for (const e of [...(prior?.events ?? []), ...found]) all.set(lc(e.txHash), { ...all.get(lc(e.txHash)), ...e });
   const events = [...all.values()];
   const lastBlock = from <= latest ? latest : BigInt(prior!.lastBlock);
-  saveScan(merchant, { lastBlock: String(lastBlock), events, gaps });
+  saveScan(merchant, { lastBlock: String(lastBlock), events, gaps: merged, chunk: String(learned) });
   return events;
 }

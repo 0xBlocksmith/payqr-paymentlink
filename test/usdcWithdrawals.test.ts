@@ -85,3 +85,33 @@ describe("hashless 'processing' ledger rows", () => {
     expect(mergeUsdcWithdrawals([], [rec], { now: t0 + 60_000 })[0].status).toBe("processing");
   });
 });
+
+describe("fetchChainWithdrawals gap handling", () => {
+  const store: Record<string, string> = {};
+  (globalThis as any).localStorage = { getItem: (k: string) => store[k] ?? null, setItem: (k: string, v: string) => { store[k] = v; } };
+  const mk = (latest: bigint, limit: bigint) => {
+    const c: { calls: number; latest: bigint } = { calls: 0, latest };
+    return Object.assign(c, {
+      getBlockNumber: async () => c.latest,
+      getBlock: async () => ({ timestamp: 1n }),
+      getContractEvents: async ({ fromBlock, toBlock }: any) => {
+        c.calls++;
+        if (toBlock - fromBlock + 1n > limit) throw new Error("block range limit exceeded");
+        return [];
+      },
+    });
+  };
+  it("timer ticks read only new blocks; backfill makes per-contract progress", async () => {
+    const { fetchChainWithdrawals, scanIncomplete } = await import("../lib/usdcWithdrawals");
+    const m = "0xAbC0000000000000000000000000000000000009";
+    const c = mk(5_000_000n, 10n);
+    await fetchChainWithdrawals(c, m, { backfill: true });
+    expect(scanIncomplete(m)).toBe(true);
+    c.latest += 8n; c.calls = 0;
+    await fetchChainWithdrawals(c, m, { backfill: false });
+    expect(c.calls).toBeLessThanOrEqual(3); // new blocks only, no 60-call backfill
+    c.calls = 0;
+    await fetchChainWithdrawals(c, m, { backfill: true });
+    expect(c.calls).toBeLessThanOrEqual(60);
+  });
+});
