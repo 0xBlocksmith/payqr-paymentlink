@@ -63,14 +63,41 @@ const lc = (s?: string | null) => (s ? s.toLowerCase() : "");
  *    and which has no external hop is "withdrawn"
  *  - chain-only rows (another device / cleared storage) → "withdrawn" to own wallet
  */
-export function mergeUsdcWithdrawals(chain: ChainWithdrawal[], ledger: WdRecord[]): WithdrawalRow[] {
+/** A send that timed out before any hash existed is given this long to show up on-chain. */
+export const STALE_PROCESSING_MS = 60 * 60 * 1000;
+/** How far a chain event may sit from a hashless ledger record's start time to be treated as the same send. */
+const ADOPT_WINDOW_S = 30 * 60;
+
+export function mergeUsdcWithdrawals(
+  chain: ChainWithdrawal[], ledger: WdRecord[],
+  opts: { scanComplete?: boolean; now?: number } = {},
+): WithdrawalRow[] {
   const rows = new Map<string, WithdrawalRow>();
   const chainBy = new Map(chain.map((c) => [lc(c.txHash), c]));
+  const now = opts.now ?? Date.now();
 
-  for (const r of ledger) {
+  // Chain events no ledger record claims by hash: candidates for a send that
+  // timed out before its hash was recorded (otherwise it shows as two rows).
+  const claimed = new Set(ledger.filter((r) => r.step1Hash).map((r) => lc(r.step1Hash)));
+  const free = chain.filter((c) => !claimed.has(lc(c.txHash)) && c.ts != null);
+  const adopted = new Map<string, ChainWithdrawal>(); // ledger id -> chain event
+  const taken = new Set<string>();
+  for (const r of [...ledger].sort((a, b) => a.createdAt - b.createdAt)) {
+    if (r.step1Hash || r.status !== "processing") continue;
+    const start = Math.floor(r.createdAt / 1000);
+    const hit = free.find((c) => !taken.has(lc(c.txHash)) && c.amount === r.amount
+      && (c.ts as number) >= start - 60 && (c.ts as number) <= start + ADOPT_WINDOW_S);
+    if (hit) { adopted.set(r.id, hit); taken.add(lc(hit.txHash)); }
+  }
+
+  for (const r0 of ledger) {
+    const hit = adopted.get(r0.id);
+    const r = hit ? { ...r0, step1Hash: hit.txHash } : r0;
     const key = r.step1Hash ? lc(r.step1Hash) : `local:${r.id}`;
     const c = r.step1Hash ? chainBy.get(lc(r.step1Hash)) : undefined;
     let status = r.status;
+    // Never confirmed and no matching chain event after a full scan: it did not go through.
+    if (!r.step1Hash && status === "processing" && opts.scanComplete !== false && now - r.createdAt > STALE_PROCESSING_MS) status = "failed";
     // On-chain confirmation settles an ambiguous "processing" — but only when
     // there is no second hop still pending.
     if (c && status === "processing" && !r.destination) status = "withdrawn";
@@ -153,13 +180,24 @@ const START_CHUNK = 1_000_000n;
 const MIN_CHUNK = 10n;
 const MAX_REQUESTS = 60;
 
-interface ScanState { lastBlock: string; events: ChainWithdrawal[] }
+interface ScanState {
+  lastBlock: string;
+  events: ChainWithdrawal[];
+  /** Block ranges [lo, hi] a scan could not cover (range-limited RPC / request budget). Backfilled on later opens. */
+  gaps?: [string, string][];
+}
 
 function loadScan(m: string): ScanState | null {
   try { return JSON.parse(localStorage.getItem(scanKey(m)) || "null"); } catch { return null; }
 }
 function saveScan(m: string, s: ScanState) {
   try { localStorage.setItem(scanKey(m), JSON.stringify(s)); } catch { /* ignore */ }
+}
+
+/** True when the last scan left block ranges unread, so the list may be missing withdrawals. */
+export function scanIncomplete(merchant?: string | null): boolean {
+  if (!merchant) return false;
+  return (loadScan(merchant)?.gaps?.length ?? 0) > 0;
 }
 
 const isRangeError = (e: any) =>
@@ -178,10 +216,21 @@ export async function fetchChainWithdrawals(publicClient: any, merchant: string)
   const floor = latest > LOOKBACK_BLOCKS ? latest - LOOKBACK_BLOCKS : 0n;
   const from0 = prior ? BigInt(prior.lastBlock) + 1n : floor;
   const from = from0 > floor ? from0 : floor;
-  if (from > latest) return prior?.events ?? [];
+
+  // Ranges to read: the new blocks first, then ranges earlier opens could not finish.
+  const ranges: [bigint, bigint][] = [];
+  if (from <= latest) ranges.push([from, latest]);
+  let old = (prior?.gaps ?? [])
+    .map(([a, b]) => [BigInt(a) > floor ? BigInt(a) : floor, BigInt(b)] as [bigint, bigint])
+    .filter(([a, b]) => a <= b);
+  if (old.length > 3) {
+    old = [[old.reduce((m, g) => (g[0] < m ? g[0] : m), old[0][0]), old.reduce((m, g) => (g[1] > m ? g[1] : m), old[0][1])]];
+  }
+  ranges.push(...old);
+  if (!ranges.length) return prior?.events ?? [];
 
   const found: ChainWithdrawal[] = [];
-  let requests = 0;
+  const budget = { left: MAX_REQUESTS };
 
   const read = async (address: string, fromBlock: bigint, toBlock: bigint) =>
     publicClient.getContractEvents({
@@ -189,13 +238,15 @@ export async function fetchChainWithdrawals(publicClient: any, merchant: string)
       args: { merchant }, fromBlock, toBlock,
     } as any);
 
-  for (const address of ALL_CONTRACT_ADDRESSES) {
-    let to = latest;
-    let chunk = latest - from + 1n < START_CHUNK ? latest - from + 1n : START_CHUNK;
-    while (to >= from && requests < MAX_REQUESTS) {
-      const lo = to - chunk + 1n > from ? to - chunk + 1n : from;
+  /** Reads [lo0, hi] newest-first. Returns the highest block NOT read (budget ran out), or null when done. */
+  const scan = async (address: string, lo0: bigint, hi: bigint): Promise<bigint | null> => {
+    let to = hi;
+    let chunk = hi - lo0 + 1n < START_CHUNK ? hi - lo0 + 1n : START_CHUNK;
+    while (to >= lo0) {
+      if (budget.left <= 0) return to;
+      const lo = to - chunk + 1n > lo0 ? to - chunk + 1n : lo0;
       try {
-        requests++;
+        budget.left--;
         const evs = await read(address, lo, to);
         for (const e of evs) {
           found.push({
@@ -203,16 +254,28 @@ export async function fetchChainWithdrawals(publicClient: any, merchant: string)
             blockNumber: String(e.blockNumber), ts: null,
           });
         }
-        if (lo === from) break;
+        if (lo === lo0) break;
         to = lo - 1n;
       } catch (err) {
         if (chunk > MIN_CHUNK && isRangeError(err)) { chunk = chunk / 2n > MIN_CHUNK ? chunk / 2n : MIN_CHUNK; continue; }
-        // A previous (older) contract may not carry the event — skip it quietly;
+        // A previous (older) contract may not carry the event: skip it quietly;
         // but a failure on the CURRENT contract must surface.
-        if (address !== ALL_CONTRACT_ADDRESSES[0]) break;
+        if (address !== ALL_CONTRACT_ADDRESSES[0]) return null;
         throw err;
       }
     }
+    return null;
+  };
+
+  const gaps: [string, string][] = [];
+  for (const [lo, hi] of ranges) {
+    let remaining: bigint | null = null;
+    for (const address of ALL_CONTRACT_ADDRESSES) {
+      const r = await scan(address, lo, hi);
+      if (r !== null && (remaining === null || r > remaining)) remaining = r;
+    }
+    // Everything above `remaining` was read for every contract; keep the rest as a gap.
+    if (remaining !== null) gaps.push([String(lo), String(remaining)]);
   }
 
   // Timestamps, once per unique block.
@@ -222,7 +285,7 @@ export async function fetchChainWithdrawals(publicClient: any, merchant: string)
     try {
       const blk = await publicClient.getBlock({ blockNumber: BigInt(b) });
       tsBy.set(b, Number(blk.timestamp));
-    } catch { /* leave null → falls back to ledger time */ }
+    } catch { /* leave null -> falls back to ledger time */ }
   }));
   for (const f of found) f.ts = tsBy.get(f.blockNumber) ?? null;
 
@@ -230,6 +293,7 @@ export async function fetchChainWithdrawals(publicClient: any, merchant: string)
   const all = new Map<string, ChainWithdrawal>();
   for (const e of [...(prior?.events ?? []), ...found]) all.set(lc(e.txHash), { ...all.get(lc(e.txHash)), ...e });
   const events = [...all.values()];
-  saveScan(merchant, { lastBlock: String(latest), events });
+  const lastBlock = from <= latest ? latest : BigInt(prior!.lastBlock);
+  saveScan(merchant, { lastBlock: String(lastBlock), events, gaps });
   return events;
 }

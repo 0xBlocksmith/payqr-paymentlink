@@ -1,5 +1,6 @@
 "use client";
 
+import { createPortal } from "react-dom";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useActiveWallet, useProfiles } from "thirdweb/react";
 import { inAppWallet, preAuthenticate } from "thirdweb/wallets/in-app";
@@ -185,7 +186,9 @@ export function useStepUp() {
   ) : null;
 
   // Same page, wrapped as a full-screen layer for screens that can't swap content.
-  const modal = isOpen ? <div className="su-layer"><div className="screen">{view}</div></div> : null;
+  const modal = isOpen && typeof document !== "undefined"
+    ? createPortal(<div className="su-layer"><div className="screen">{view}</div></div>, document.body)
+    : null;
 
   return { requireStepUp, stepUpModal: modal, stepUpView: view, stepUpOpen: isOpen };
 }

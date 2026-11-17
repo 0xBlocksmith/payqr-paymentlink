@@ -22,7 +22,7 @@ import { loadCountry, fmtFiat } from "../../lib/countries";
 import { loadMerchantProfile } from "../../lib/cache";
 import { fetchUsdcRate } from "../../lib/rates";
 import { useT } from "../../lib/i18n";
-import { mergeUsdcWithdrawals, fetchChainWithdrawals, loadLedger } from "../../lib/usdcWithdrawals";
+import { mergeUsdcWithdrawals, fetchChainWithdrawals, loadLedger, scanIncomplete } from "../../lib/usdcWithdrawals";
 import { EXPLORER_URL } from "../../lib/chain";
 import { STATIC_STALE_MS } from "../../lib/cache";
 import { decryptPayout } from "../../lib/payoutCrypto";
@@ -185,7 +185,9 @@ export default function Transactions() {
     const replace = (kind: string, next: any[]) =>
       setRows((cur) => [...cur.filter((r) => r.kind !== kind), ...next].sort(byTime));
     const paymentsP = queryClient.fetchQuery(historyQuery(address, proxies)) as Promise<any[]>;
-    const withdrawalsP = proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([]);
+    // Settled up front so a rejection is never left unhandled if payments fail first.
+    const withdrawalsP = (proxies.length ? fetchWithdrawals(proxies) : Promise.resolve([] as any[])).then(
+      (r: any[]) => ({ r }), (error: unknown) => ({ error }));
     const chainP = publicClient
       ? fetchChainWithdrawals(publicClient, address).then((r) => ({ ok: true, r }), (e) => { console.error(e); return { ok: false, r: [] }; })
       : Promise.resolve({ ok: true, r: [] });
@@ -197,7 +199,9 @@ export default function Transactions() {
       replace("payment", payments.map((r) => ({ ...r, kind: "payment" })));
       setLoadError(false);
       setLoaded(true);
-      replace("withdraw", await withdrawalsP);
+      const w: any = await withdrawalsP;
+      if ("error" in w) throw w.error;
+      replace("withdraw", w.r);
     } catch (e) {
       console.error(e);
       setLoadError(true);
@@ -205,8 +209,9 @@ export default function Transactions() {
       setLoaded(true);
     }
     const chain = await chainP;
-    replace("usdc_withdraw", mergeUsdcWithdrawals(chain.r as any[], loadLedger(address)));
-    setWdScanFailed(!chain.ok);
+    const incomplete = !chain.ok || scanIncomplete(address);
+    replace("usdc_withdraw", mergeUsdcWithdrawals(chain.r as any[], loadLedger(address), { scanComplete: !incomplete }));
+    setWdScanFailed(incomplete);
     // proxyKey stands in for proxies: same content, stable identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [address, proxyKey, publicClient, queryClient]);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useId, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { useT } from "../../lib/i18n";
 
 /**
@@ -60,8 +61,10 @@ export function ConfirmDialog({
     return () => document.removeEventListener("keydown", onKey, true);
   }, [open, busy, onCancel]);
 
-  if (!open) return null;
-  return (
+  if (!open || typeof document === "undefined") return null;
+  // Portal to <body>: an ancestor with backdrop-filter would otherwise become the
+  // containing block for this position:fixed overlay and clip it.
+  return createPortal(
     <div className="confirm-overlay" onClick={() => { if (!busy) onCancel(); }}>
       <div
         ref={sheet}
@@ -88,6 +91,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

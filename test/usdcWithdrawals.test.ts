@@ -68,3 +68,20 @@ describe("ledger", () => {
     expect(loadLedger("0xAbC0000000000000000000000000000000000002")).toHaveLength(0);
   });
 });
+
+describe("hashless 'processing' ledger rows", () => {
+  const t0 = 1_700_000_000_000;
+  const rec = { id: "a", amount: "5000000", destination: "0xabc", status: "processing" as const, createdAt: t0 };
+  it("adopts a matching chain event instead of showing two rows", () => {
+    const chain = [{ txHash: "0xh", amount: "5000000", blockNumber: "1", ts: Math.floor(t0 / 1000) + 20 }];
+    const rows = mergeUsdcWithdrawals(chain, [rec], { now: t0 + 5000 });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].txHash).toBe("0xh");
+    expect(rows[0].destination).toBe("0xabc");
+  });
+  it("marks an unmatched stale row failed after a complete scan, not after an incomplete one", () => {
+    expect(mergeUsdcWithdrawals([], [rec], { now: t0 + 2 * 3600_000 })[0].status).toBe("failed");
+    expect(mergeUsdcWithdrawals([], [rec], { now: t0 + 2 * 3600_000, scanComplete: false })[0].status).toBe("processing");
+    expect(mergeUsdcWithdrawals([], [rec], { now: t0 + 60_000 })[0].status).toBe("processing");
+  });
+});

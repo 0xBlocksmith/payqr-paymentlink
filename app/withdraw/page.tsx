@@ -245,6 +245,8 @@ export default function Withdraw() {
   const prevTotalNum = Number(prevBal.total) / 1e6;
   const prevAvailNum = Number(prevBal.available) / 1e6;
   const shownAccountNum = accountNum + prevTotalNum;
+  // Same as Home: settling includes funds still maturing on previous terminals.
+  const shownPendingNum = pendingNum + Number(prevBal.pending) / 1e6;
   const shownAvailNum = availNum + prevAvailNum;
   const shownAccountFiat = rate ? shownAccountNum * rate.rate : null;
   const shownAvailFiat = rate ? shownAvailNum * rate.rate : null;
@@ -458,9 +460,12 @@ export default function Withdraw() {
       setAmount(""); setExtAddr(""); setUsdcDest("self"); refetch();
     } catch (err: any) {
       const forwardReverted = err?.name === "ForwardReverted";
-      const ue = forwardReverted
+      const base = toUserError(err, { context: "withdraw", uncertainKey: "err.uncertainWithdraw", fallbackKey: "err.unknown" });
+      // Step 1 confirmed: the USDC is already in the wallet. Say so for ANY definite
+      // forward failure (a revert, or e.g. a sponsorship error), not just a revert.
+      const ue = forwardReverted || (step1Ref.current && external && !base.uncertain && base.kind !== "cancelled")
         ? { kind: "contract", uncertain: false, message: t("wd.fwdFailed") }
-        : toUserError(err, { context: "withdraw", uncertainKey: "err.uncertainWithdraw", fallbackKey: "err.unknown" });
+        : base;
       // Uncertain → never offer a retry. Otherwise: after step 1 only the forward
       // may be retried; before it, nothing moved so starting over is safe.
       const { status, retry } = withdrawFailurePolicy({ uncertain: ue.uncertain, step1Confirmed: !!step1Ref.current, external });
@@ -609,7 +614,7 @@ export default function Withdraw() {
             </div>
             <div className="bal-cell">
               <div className="bal-cell-label">{t("dash2.settling")}</div>
-              <div className="bal-cell-amt">${pendingNum.toFixed(2)}</div>
+              <div className="bal-cell-amt">${shownPendingNum.toFixed(2)}</div>
               <div className="bal-cell-hint">{t("dash2.settlingHint")}</div>
             </div>
           </div>

@@ -3025,7 +3025,7 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
    which is why the surface properties are marked !important. */
 :root { --card-r: 20px; --card-pad: 16px; --card-gap: 12px; }
 
-.card, .pl-card, .set-card, .set-group, .dash-empty, .recent-list, .bal, .bal.glass-card,
+.card, :not(.pl-hero-main) > .pl-card, .set-card, .set-group, .dash-empty, .recent-list, .bal, .bal.glass-card,
 .strip > div, .next-avail, .quick-item,
 .wd-hero, .wd-amt, .wd-card, .wd-bal-box, .wd-locked, .wd-maturity, .wd-confirm-card,
 .wd-to, .wd-opt, .wd-dest-btn, .wd-payout-opt {
@@ -3055,8 +3055,8 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
   margin: 4px 0 16px; text-align: center; font-size: 24px; font-weight: 700; letter-spacing: -0.3px; line-height: 1.2;
 }
 .wd-head { margin-bottom: 16px; }
-.wd-head h1, .pl-top .pl-h1 { margin: 0; }
-.pl-top { margin-bottom: 16px; }
+.wd-head h1, :not(.pl-hero) > .pl-top .pl-h1 { margin: 0; }
+:not(.pl-hero) > .pl-top { margin-bottom: 16px; }
 
 /* warning card: same shape, warning colours */
 .wd-inflight {
@@ -3090,13 +3090,13 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
 /* ═══ Page headers: identical on every page ═══════════════════════════════
    Same box (44px tall, 16px below), same size, centred; the Withdraw back
    button sits inside the same box, so the title never moves between pages. */
-.page-h, .wd-head h1, .pl-top .pl-h1 {
+.page-h, .wd-head h1, :not(.pl-hero) > .pl-top .pl-h1 {
   font-size: 22px !important; font-weight: 700 !important; letter-spacing: -0.3px; line-height: 1.2; text-align: center;
 }
 .page-h { display: flex; align-items: center; justify-content: center; min-height: 44px; margin: 0 0 16px !important; }
 .wd-head { min-height: 44px; margin: 0 0 16px !important; }
-.wd-head h1, .pl-top .pl-h1 { margin: 0 !important; }
-.pl-top .pl-h1 { min-height: 44px; display: flex; align-items: center; }
+.wd-head h1, :not(.pl-hero) > .pl-top .pl-h1 { margin: 0 !important; }
+:not(.pl-hero) > .pl-top .pl-h1 { min-height: 44px; display: flex; align-items: center; }
 .wd-back-big { width: 44px; height: 44px; }
 
 /* ═══ Withdraw at the same scale as Home / Transactions ═══════════════════ */
@@ -3116,6 +3116,8 @@ body, [data-theme="dark"] body { background-image: none; background-attachment: 
 
 /* ═══ Disputes & support widget fitted to the app's scale ═════════════════ */
 .widget-fit { zoom: 0.9; }
+/* zoom shrinks text; keep rendered input text at 16px on touch so iOS does not zoom on focus (16 / 0.9). */
+@media (pointer: coarse) { .widget-fit input, .widget-fit select, .widget-fit textarea { font-size: 17.8px !important; } }
 
 /* Withdraw: Continue sits right under the input card (not pinned to the bottom). */
 .wd-continue { display: flex; align-items: center; justify-content: center; width: 100%; min-height: 50px; margin-top: 14px; border-radius: 999px; font-size: 15px; font-weight: 700; }
